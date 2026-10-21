@@ -12175,6 +12175,7 @@ void meshArgumentTests() {
     using AgcDriver::Graphics::MeshArguments;
     using AgcDriver::Graphics::ResolveMeshArguments;
     AgcDriver::Graphics::Context context{};
+    context.meshShader = true;
     context.meshLimits.maxMeshWorkGroupCount[0] = 1000;
     context.meshLimits.maxMeshWorkGroupCount[1] = 600;
     context.meshLimits.maxMeshWorkGroupTotalCount = 4000;
@@ -12236,6 +12237,37 @@ void meshArgumentTests() {
     context.meshLimits.maxMeshWorkGroupCount[2] = 0xffffffffu;
     context.meshLimits.maxMeshWorkGroupTotalCount = 0xffffffffu;
     Require(refused(0xffffffffu, 0xffffffffu), "a product of groups and instances past 64 bits is refused");
+    using AgcDriver::Graphics::MeshDrawRunsAsCompute;
+    AgcDriver::Graphics::Context computeOnly{};
+    AgcDriver::Graphics::State meshDraw{};
+    Require(!MeshDrawRunsAsCompute(computeOnly, meshDraw), "a draw without a mesh stage ran as a mesh compute pass");
+    meshDraw.stages.mesh = triangles;
+    Require(MeshDrawRunsAsCompute(computeOnly, meshDraw), "a mesh-path draw on a device without mesh shaders did not run as compute");
+    Require(!MeshDrawRunsAsCompute(context, meshDraw), "a mesh-path draw on a device with mesh shaders ran as compute");
+    computeOnly.limits.maxComputeWorkGroupCount[0] = 1000;
+    computeOnly.limits.maxComputeWorkGroupCount[1] = 600;
+    computeOnly.limits.maxComputeWorkGroupCount[2] = 3;
+    const auto computeGrid = AgcDriver::Graphics::MeshGridFor(computeOnly, 2999, 600);
+    Require(computeGrid.has_value() && computeGrid->groups == 1000 && computeGrid->instances == 600 && computeGrid->layers == 3 && computeGrid->layerStride == 1000, "a mesh draw run as compute is not held to a total group limit");
+    Require(!AgcDriver::Graphics::MeshGridFor(computeOnly, 3001, 1).has_value(), "a mesh draw run as compute past the compute Z limit was not refused");
+    AgcDriver::Graphics::Context narrow{};
+    narrow.subgroup.subgroupSize = 8;
+    ShaderRecompiler::RecompileResult program{};
+    program.variantId = 1;
+    program.meshRecordLayout = 1u << 11u;
+    program.hostSubgroupSize = 8;
+    const ShaderRecompiler::RecompileResult fragment{};
+    const std::array<AgcDriver::Graphics::CompiledShader, 2> shaders{{{ShaderRecompiler::ShaderStage::Mesh, &program, 0}, {ShaderRecompiler::ShaderStage::Fragment, &fragment, 0}}};
+    AgcDriver::Graphics::State waved{};
+    waved.stages.mesh = triangles;
+    waved.stages.vertexWaveSize = 32;
+    std::string refusal;
+    try {
+        static_cast<void>(AgcDriver::Graphics::MeshComputeStages(narrow, waved, shaders));
+    } catch (const std::exception& error) {
+        refusal = error.what();
+    }
+    Require(refusal.find("compute subgroups at least as wide as its wave") != std::string::npos, "a wave-32 mesh program ran as compute on 8-lane subgroups: " + refusal);
 }
 
 void meshLimitTests() {

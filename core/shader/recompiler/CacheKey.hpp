@@ -380,6 +380,7 @@ private:
         append(key, value.hostInterpolationFirst);
         append(key, value.shaderImageMinLod);
         append(key, value.float16Measured);
+        append(key, value.meshAsCompute);
     }
 };
 

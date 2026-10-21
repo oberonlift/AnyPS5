@@ -184,7 +184,7 @@ void Run(AgcDriver::VulkanDevice& device, const AgcDriver::Graphics::ColorTarget
     if (mesh) geometry.graphics = ShaderRecompiler::GraphicsCompileContext{0, {}, Subgroup, std::nullopt, {draw.indexAddress, draw.indexCount, draw.indexSize, draw.instanceCount}};
     geometry.useCache = false;
     auto geometryResult = ShaderRecompiler::Recompile(geometry);
-    if (mesh) {
+    if (mesh && !target.meshAsCompute) {
         for (const auto required : {ShaderRecompiler::PipelineSpecialization::MeshLayerBase, ShaderRecompiler::PipelineSpecialization::MeshLayerCount}) {
             bool found = false;
             for (std::size_t at = 5; at < geometryResult.spirv.size();) {
@@ -238,7 +238,7 @@ void Run(AgcDriver::VulkanDevice& device, const AgcDriver::Graphics::ColorTarget
     state.blend.colorWriteMask = 15;
     state.blends = {state.blend};
     state.blendConstants = {};
-    if (mesh) {
+    if (mesh && !target.meshAsCompute) {
         Require(DeclaresLayer(geometryResult.spirv), "the mesh program declares no Layer output");
         if (!executeMesh) return;
     }
@@ -473,8 +473,14 @@ int main(int argc, char** argv) {
             Run(*device, meshFieldColor, true, LayerFieldPixelCode, true);
             Check(meshFieldVolume.Data(), meshFieldColor, "mesh fragment layer input", LayerFieldBands);
         }
+        else if (target.meshAsCompute && (target.subgroupSize == 32u || target.subgroupSize == 64u)) {
+            const GuestVolume meshVolume((VolumeTarget(nullptr).bytes + 65535u) & ~std::size_t{65535u});
+            const auto meshColor = VolumeTarget(meshVolume.Data());
+            Run(*device, meshColor, true, PixelCode, false);
+            Check(meshVolume.Data(), meshColor, "mesh draw run as compute", WhiteBands);
+        }
         else if (target.mesh.has_value()) Run(*device, color, true, PixelCode, false, Vertices, false);
-        else std::puts("mesh compilation skipped, the device has no VK_EXT_mesh_shader");
+        else std::puts("mesh case skipped, the device has neither VK_EXT_mesh_shader nor 32- or 64-lane subgroups for a mesh draw run as compute");
         std::puts("layered volume draw tests passed");
         return 0;
     } catch (const std::exception& error) {
