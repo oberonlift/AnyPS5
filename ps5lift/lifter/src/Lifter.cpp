@@ -11,6 +11,7 @@
 #include <llvm/Support/raw_ostream.h>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <initializer_list>
 #include <cstddef>
@@ -214,9 +215,16 @@ public:
         auto* entry = llvm::BasicBlock::Create(Context(), "entry", _host);
         _builder.SetInsertPoint(entry);
         _state = _host->getArg(0);
-        for (int i = 0; i < PS5LIFT_GPR_COUNT; ++i) _gpr[i] = _builder.CreateAlloca(I64(), nullptr, "gpr" + std::to_string(i));
-        for (int i = 0; i < PS5LIFT_FLAG_COUNT; ++i) _flags[i] = _builder.CreateAlloca(_builder.getInt1Ty(), nullptr, "flag" + std::to_string(i));
-        for (int i = 0; i < VectorCount; ++i) _vectors[i] = _builder.CreateAlloca(Int(256), nullptr, "ymm" + std::to_string(i));
+        FindUsedRegisters();
+        for (int i = 0; i < PS5LIFT_GPR_COUNT; ++i) {
+            if (_usedGprs[i]) _gpr[i] = _builder.CreateAlloca(I64(), nullptr, "gpr" + std::to_string(i));
+        }
+        for (int i = 0; i < PS5LIFT_FLAG_COUNT; ++i) {
+            if (_usesFlags) _flags[i] = _builder.CreateAlloca(_builder.getInt1Ty(), nullptr, "flag" + std::to_string(i));
+        }
+        for (int i = 0; i < VectorCount; ++i) {
+            if (_usedVectors[i]) _vectors[i] = _builder.CreateAlloca(Int(256), nullptr, "ymm" + std::to_string(i));
+        }
         Reload();
         for (const auto leader : _function.Leaders) _blocks[leader] = llvm::BasicBlock::Create(Context(), "b_" + Hex(leader), _host);
         _builder.CreateBr(_blocks.at(_function.Entry));
@@ -255,6 +263,9 @@ private:
     llvm::AllocaInst* _flags[PS5LIFT_FLAG_COUNT]{};
     static constexpr int VectorCount = 16;
     llvm::AllocaInst* _vectors[VectorCount]{};
+    std::array<bool, PS5LIFT_GPR_COUNT> _usedGprs{};
+    std::array<bool, VectorCount> _usedVectors{};
+    bool _usesFlags = false;
     std::map<std::uint64_t, llvm::BasicBlock*> _blocks;
     const Instruction* _instruction = nullptr;
 
@@ -283,29 +294,92 @@ private:
         return offsetof(Ps5LiftState, Vector) + 32 * static_cast<std::size_t>(index);
     }
 
+    void MarkRegister(const ZydisRegister reg) {
+        if (reg == ZYDIS_REGISTER_NONE || reg == ZYDIS_REGISTER_RIP) return;
+        if (const auto vector = VectorIndex(reg); vector >= 0) _usedVectors[vector] = true;
+        if (const auto gpr = GprIndex(reg); gpr >= 0) _usedGprs[gpr] = true;
+    }
+
+    void FindUsedRegisters() {
+        _usedGprs[PS5LIFT_RSP] = true;
+        for (const auto& [address, instruction] : _function.Instructions) {
+            const auto mnemonic = instruction.Info.mnemonic;
+            if (mnemonic == ZYDIS_MNEMONIC_VZEROUPPER || mnemonic == ZYDIS_MNEMONIC_VZEROALL) _usedVectors.fill(true);
+            const auto* flags = instruction.Info.cpu_flags;
+            if (flags != nullptr && (flags->tested | flags->modified | flags->set_0 | flags->set_1 | flags->undefined) != 0) _usesFlags = true;
+            for (unsigned i = 0; i < instruction.Info.operand_count; ++i) {
+                const auto& operand = instruction.Operands[i];
+                if (operand.type == ZYDIS_OPERAND_TYPE_REGISTER) MarkRegister(operand.reg.value);
+                if (operand.type == ZYDIS_OPERAND_TYPE_MEMORY) {
+                    MarkRegister(operand.mem.base);
+                    MarkRegister(operand.mem.index);
+                }
+            }
+        }
+    }
+
+    bool CrossesCalls(const int flag) const {
+        return flag == PS5LIFT_DF || _module.Options().PreserveFlags;
+    }
+
     void Flush() {
-        for (int i = 0; i < PS5LIFT_GPR_COUNT; ++i) StateStore(_builder.CreateLoad(I64(), _gpr[i]), offsetof(Ps5LiftState, Gpr) + 8 * i);
-        for (int i = 0; i < PS5LIFT_FLAG_COUNT; ++i) StateStore(_builder.CreateZExt(_builder.CreateLoad(_builder.getInt1Ty(), _flags[i]), _builder.getInt8Ty()), offsetof(Ps5LiftState, Flags) + i);
-        for (int i = 0; i < VectorCount; ++i) StateStore(_builder.CreateLoad(Int(256), _vectors[i]), VectorOffset(i));
+        for (int i = 0; i < PS5LIFT_GPR_COUNT; ++i) {
+            if (_gpr[i]) StateStore(_builder.CreateLoad(I64(), _gpr[i]), offsetof(Ps5LiftState, Gpr) + 8 * i);
+        }
+        for (int i = 0; i < PS5LIFT_FLAG_COUNT; ++i) {
+            if (_flags[i] && CrossesCalls(i)) StateStore(_builder.CreateZExt(_builder.CreateLoad(_builder.getInt1Ty(), _flags[i]), _builder.getInt8Ty()), offsetof(Ps5LiftState, Flags) + i);
+        }
+        for (int i = 0; i < VectorCount; ++i) {
+            if (_vectors[i]) StateStore(_builder.CreateLoad(Int(256), _vectors[i]), VectorOffset(i));
+        }
     }
 
     void Reload() {
-        for (int i = 0; i < PS5LIFT_GPR_COUNT; ++i) _builder.CreateStore(StateLoad(I64(), offsetof(Ps5LiftState, Gpr) + 8 * i), _gpr[i]);
-        for (int i = 0; i < PS5LIFT_FLAG_COUNT; ++i) _builder.CreateStore(_builder.CreateTrunc(StateLoad(_builder.getInt8Ty(), offsetof(Ps5LiftState, Flags) + i), _builder.getInt1Ty()), _flags[i]);
-        for (int i = 0; i < VectorCount; ++i) _builder.CreateStore(StateLoad(Int(256), VectorOffset(i)), _vectors[i]);
+        for (int i = 0; i < PS5LIFT_GPR_COUNT; ++i) {
+            if (_gpr[i]) _builder.CreateStore(StateLoad(I64(), offsetof(Ps5LiftState, Gpr) + 8 * i), _gpr[i]);
+        }
+        for (int i = 0; i < PS5LIFT_FLAG_COUNT; ++i) {
+            if (_flags[i] && CrossesCalls(i)) _builder.CreateStore(_builder.CreateTrunc(StateLoad(_builder.getInt8Ty(), offsetof(Ps5LiftState, Flags) + i), _builder.getInt1Ty()), _flags[i]);
+            else if (_flags[i]) _builder.CreateStore(_builder.getFalse(), _flags[i]);
+        }
+        for (int i = 0; i < VectorCount; ++i) {
+            if (_vectors[i]) _builder.CreateStore(StateLoad(Int(256), VectorOffset(i)), _vectors[i]);
+        }
     }
 
     void StartDeadBlock() {
         _builder.SetInsertPoint(llvm::BasicBlock::Create(Context(), "dead", _host));
     }
 
-    llvm::Value* Gpr(const int index) { return _builder.CreateLoad(I64(), _gpr[index]); }
-    void SetGpr(const int index, llvm::Value* value) { _builder.CreateStore(value, _gpr[index]); }
-    llvm::Value* Flag(const int flag) { return _builder.CreateLoad(_builder.getInt1Ty(), _flags[flag]); }
-    void SetFlag(const int flag, llvm::Value* value) { _builder.CreateStore(value, _flags[flag]); }
+    llvm::Value* Gpr(const int index) {
+        if (_gpr[index]) return _builder.CreateLoad(I64(), _gpr[index]);
+        return StateLoad(I64(), offsetof(Ps5LiftState, Gpr) + 8 * static_cast<std::size_t>(index));
+    }
 
-    llvm::Value* Vector(const int index) { return _builder.CreateLoad(Int(256), _vectors[index]); }
-    void SetVector(const int index, llvm::Value* value) { _builder.CreateStore(value, _vectors[index]); }
+    void SetGpr(const int index, llvm::Value* value) {
+        if (_gpr[index]) _builder.CreateStore(value, _gpr[index]);
+        else StateStore(value, offsetof(Ps5LiftState, Gpr) + 8 * static_cast<std::size_t>(index));
+    }
+
+    llvm::Value* Flag(const int flag) {
+        if (_flags[flag]) return _builder.CreateLoad(_builder.getInt1Ty(), _flags[flag]);
+        return _builder.CreateTrunc(StateLoad(_builder.getInt8Ty(), offsetof(Ps5LiftState, Flags) + static_cast<std::size_t>(flag)), _builder.getInt1Ty());
+    }
+
+    void SetFlag(const int flag, llvm::Value* value) {
+        if (_flags[flag]) _builder.CreateStore(value, _flags[flag]);
+        else StateStore(_builder.CreateZExt(value, _builder.getInt8Ty()), offsetof(Ps5LiftState, Flags) + static_cast<std::size_t>(flag));
+    }
+
+    llvm::Value* Vector(const int index) {
+        if (_vectors[index]) return _builder.CreateLoad(Int(256), _vectors[index]);
+        return StateLoad(Int(256), VectorOffset(index));
+    }
+
+    void SetVector(const int index, llvm::Value* value) {
+        if (_vectors[index]) _builder.CreateStore(value, _vectors[index]);
+        else StateStore(value, VectorOffset(index));
+    }
 
     void WriteVector(const int index, llvm::Value* value, const bool zeroUpper) {
         const auto bits = value->getType()->getIntegerBitWidth();

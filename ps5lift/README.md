@@ -38,6 +38,7 @@ clang++ -O2 -Iruntime/include runtime/src/Runtime.cpp bridges.cpp guest.o -fuse-
 | `--features` | none | LLVM target features, such as `-rcpc-immo`. |
 | `--memory tso\|relaxed` | `tso` | `tso` keeps x86 ordering with acquire loads and release stores; `relaxed` uses plain accesses and is only correct for single-threaded guests. |
 | `--float exact\|fast` | `exact` | `exact` reproduces x86 NaN, min/max, DAZ and conversion results bit for bit; `fast` leaves NaN payloads to the host. |
+| `--preserve-flags` | off | Keeps the status flags across calls and returns, for hand-written assembly that relies on them. |
 | `--emit-ir file.ll` | none | Writes the optimized LLVM IR. |
 | `-O0` | optimized | Skips the LLVM optimization pipeline. |
 

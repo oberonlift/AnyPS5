@@ -20,7 +20,9 @@ eboot.bin + sce_module/*.prx
 
 ## Machine model
 
-`Ps5LiftState` ([State.h](../runtime/include/ps5lift/State.h)) holds the sixteen GPRs, the flags as bytes, the FS and GS bases, MXCSR and sixteen 256-bit vector registers. Each lifted function loads the GPRs, flags and vector registers into allocas on entry and stores them back before every call, return, dispatch and runtime helper, and reloads them after. LLVM promotes the allocas to SSA values, so registers live in host registers within a function and flags nobody reads are deleted.
+`Ps5LiftState` ([State.h](../runtime/include/ps5lift/State.h)) holds the sixteen GPRs, the flags as bytes, the FS and GS bases, MXCSR and sixteen 256-bit vector registers. Each lifted function caches the registers its instructions name (explicitly or implicitly) in allocas: it loads them on entry, stores them back before every call, return, dispatch and runtime helper, and reloads them after. Registers a function never names stay in the state, where its callees find them. LLVM promotes the allocas to SSA values, so registers live in host registers within a function and flags nobody reads are deleted.
+
+The status flags do not cross calls or returns, as the SysV ABI says; only DF does. Compiled code never reads flags its caller or callee left behind, and dropping them removes the flag and parity computations that would otherwise precede every call. `--preserve-flags` keeps them for hand-written assembly that does rely on them.
 
 Guest memory is identity mapped: the runtime maps the image at its link addresses, so a guest pointer is a host pointer and a memory operand becomes one load or store. Native libraries can read guest structures directly; x86-64 SysV and AArch64 LP64 lay out ordinary C types the same way (`long double` and `va_list` differ).
 

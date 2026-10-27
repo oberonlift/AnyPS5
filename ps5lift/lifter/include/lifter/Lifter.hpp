@@ -27,6 +27,7 @@ enum class FloatModel {
 struct LiftOptions {
     MemoryModel Memory = MemoryModel::Tso;
     FloatModel Float = FloatModel::Exact;
+    bool PreserveFlags = false;
 };
 
 struct LiftReport {
