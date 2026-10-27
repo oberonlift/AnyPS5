@@ -59,14 +59,24 @@ def lifter_features(triple, runner):
     return []
 
 
+HOST_LIBRARIES = {"threads": ("hostthread", "host_thread.c")}
+
+
 def build_guest(clang, work, name, optimization, defines=(), vectorize=False, suffix=""):
     library = work / "libhost.so"
     if not library.exists():
         run([clang, *GUEST_FLAGS, "-O2", "-fPIC", "-shared", FIXTURES / "host_stub.c", "-o", library])
+    extra = []
+    if name in HOST_LIBRARIES:
+        library_name, source = HOST_LIBRARIES[name]
+        extra_library = work / f"lib{library_name}.so"
+        if not extra_library.exists():
+            run([clang, "--target=x86_64-unknown-linux-gnu", "-O2", "-fPIC", "-shared", "-fuse-ld=lld", FIXTURES / source, "-pthread", "-o", extra_library])
+        extra = [f"-l{library_name}"]
     guest = work / f"{name}{optimization}{suffix}"
     vector_flags = [] if vectorize else ["-fno-vectorize", "-fno-slp-vectorize"]
     run([clang, optimization, *GUEST_FLAGS, *vector_flags, *defines, "-fno-pic", "-no-pie", "-Wl,--image-base=0x20000000",
-         "-Wl,--dynamic-linker=/lib64/ld-linux-x86-64.so.2", FIXTURES / f"{name}.c", f"-L{work}", "-lhost", "-o", guest])
+         "-Wl,--dynamic-linker=/lib64/ld-linux-x86-64.so.2", FIXTURES / f"{name}.c", f"-L{work}", "-lhost", *extra, "-o", guest])
     return guest
 
 
@@ -103,7 +113,7 @@ def main():
     try:
         for optimization in optimizations:
             expected = expected_for(optimization)
-            guest = build_guest(args.clang, work, args.fixture, optimization)
+            guest = build_guest(args.clang, work, args.fixture, optimization, ["-DPS5LIFT_EMULATED"] if runner else [])
             if platform.machine() == "x86_64":
                 native = run([guest], env={**os.environ, "LD_LIBRARY_PATH": str(work)}).stdout
                 failures += not compare(expected, native, f"native {optimization}")

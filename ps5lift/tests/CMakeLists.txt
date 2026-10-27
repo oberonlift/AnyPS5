@@ -11,15 +11,20 @@ else()
 endif()
 
 foreach(triple IN LISTS PS5LIFT_TEST_TRIPLES)
-    foreach(fixture basic vector float)
     string(REGEX REPLACE "-.*" "" arch ${triple})
-    add_test(NAME fixture_${fixture}_${arch}
-            COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tools/run_fixture.py
-                    --ps5lift $<TARGET_FILE:ps5lift>
-                    --clang ${CMAKE_C_COMPILER}
-                    --clangxx ${CMAKE_CXX_COMPILER}
-                    --triple ${triple}
-                    --fixture ${fixture})
+    foreach(fixture basic vector float threads)
+        set(memory_models)
+        if(fixture STREQUAL "threads")
+            set(memory_models --memory tso)
+        endif()
+        add_test(NAME fixture_${fixture}_${arch}
+                COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tools/run_fixture.py
+                        --ps5lift $<TARGET_FILE:ps5lift>
+                        --clang ${CMAKE_C_COMPILER}
+                        --clangxx ${CMAKE_CXX_COMPILER}
+                        --triple ${triple}
+                        --fixture ${fixture}
+                        ${memory_models})
     endforeach()
 endforeach()
 

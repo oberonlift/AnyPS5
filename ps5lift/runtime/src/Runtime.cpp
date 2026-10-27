@@ -23,8 +23,6 @@ constexpr std::uint64_t GuestStackSize = 8ull << 20;
 constexpr std::size_t HostStackSize = 512ull << 20;
 constexpr std::uint64_t TlsSize = 64ull << 10;
 constexpr std::uint32_t ConsoleMxcsr = 0x9fc0;
-constexpr std::uint32_t MxcsrDenormalsAreZero = 1u << 6;
-constexpr std::uint32_t MxcsrFlushToZero = 1u << 15;
 
 [[noreturn]] void Fail(const char* format, ...) __attribute__((format(printf, 1, 2)));
 
@@ -71,11 +69,21 @@ Ps5LiftFunction Lookup(const std::uint64_t target) {
     return found->Host;
 }
 
-void* RunGuest(void*) {
-    Ps5LiftState state{};
-    auto* stack = static_cast<std::uint8_t*>(MapAnonymous(GuestStackSize));
-    auto* tls = static_cast<std::uint8_t*>(MapAnonymous(TlsSize));
-    const auto threadPointer = reinterpret_cast<std::uint64_t>(tls + TlsSize / 2);
+struct GuestThread {
+    std::uint64_t Entry = 0;
+    std::uint64_t Argument = 0;
+    std::uint32_t Mxcsr = ConsoleMxcsr;
+    bool Main = false;
+    std::uint64_t Result = 0;
+    std::uint8_t* Stack = nullptr;
+    std::uint8_t* Tls = nullptr;
+    pthread_t Handle{};
+};
+
+std::uint64_t PrepareThread(GuestThread& thread, Ps5LiftState& state) {
+    thread.Stack = static_cast<std::uint8_t*>(MapAnonymous(GuestStackSize));
+    thread.Tls = static_cast<std::uint8_t*>(MapAnonymous(TlsSize));
+    const auto threadPointer = reinterpret_cast<std::uint64_t>(thread.Tls + TlsSize / 2);
     std::memcpy(reinterpret_cast<void*>(threadPointer), &threadPointer, sizeof(threadPointer));
     if (ps5lift_image.TlsMemorySize != 0) {
         const auto alignment = ps5lift_image.TlsAlignment;
@@ -84,24 +92,48 @@ void* RunGuest(void*) {
         std::memcpy(reinterpret_cast<void*>(threadPointer - offset), reinterpret_cast<const void*>(ps5lift_image.TlsAddress), ps5lift_image.TlsFileSize);
     }
     state.FsBase = threadPointer;
-    state.Mxcsr = ConsoleMxcsr;
+    state.Mxcsr = thread.Mxcsr;
     ps5lift_apply_mxcsr(&state);
+    return reinterpret_cast<std::uint64_t>(thread.Stack + GuestStackSize);
+}
 
-    auto* top = stack + GuestStackSize;
-    static constexpr char ProgramName[] = "eboot.bin";
-    top -= sizeof(ProgramName);
-    std::memcpy(top, ProgramName, sizeof(ProgramName));
-    const auto argument = reinterpret_cast<std::uint64_t>(top);
-    const std::uint64_t entryStack[] = {1, argument, 0, 0, 0, 0};
-    auto rsp = (reinterpret_cast<std::uint64_t>(top) - sizeof(entryStack)) & ~std::uint64_t{15};
-    std::memcpy(reinterpret_cast<void*>(rsp), entryStack, sizeof(entryStack));
+void* RunThread(void* argument) {
+    auto& thread = *static_cast<GuestThread*>(argument);
+    Ps5LiftState state{};
+    const auto top = PrepareThread(thread, state);
+    const auto function = Lookup(thread.Entry);
+    if (function == nullptr) Fail("the thread entry 0x%" PRIx64 " was not lifted", thread.Entry);
+
+    if (thread.Main) {
+        static constexpr char ProgramName[] = "eboot.bin";
+        const auto name = top - sizeof(ProgramName);
+        std::memcpy(reinterpret_cast<void*>(name), ProgramName, sizeof(ProgramName));
+        const std::uint64_t entryStack[] = {1, name, 0, 0, 0, 0};
+        const auto rsp = (name - sizeof(entryStack)) & ~std::uint64_t{15};
+        std::memcpy(reinterpret_cast<void*>(rsp), entryStack, sizeof(entryStack));
+        state.Gpr[PS5LIFT_RSP] = rsp;
+        function(&state);
+        std::fflush(stdout);
+        std::_Exit(static_cast<int>(state.Gpr[PS5LIFT_RAX] & 0xff));
+    }
+
+    constexpr std::uint64_t ReturnAddress = 0;
+    const auto rsp = (top & ~std::uint64_t{15}) - 8;
+    std::memcpy(reinterpret_cast<void*>(rsp), &ReturnAddress, sizeof(ReturnAddress));
     state.Gpr[PS5LIFT_RSP] = rsp;
+    state.Gpr[PS5LIFT_RDI] = thread.Argument;
+    function(&state);
+    thread.Result = state.Gpr[PS5LIFT_RAX];
+    return nullptr;
+}
 
-    const auto entry = Lookup(ps5lift_image.Entry);
-    if (entry == nullptr) Fail("the entry point 0x%" PRIx64 " was not lifted", ps5lift_image.Entry);
-    entry(&state);
-    std::fflush(stdout);
-    std::_Exit(static_cast<int>(state.Gpr[PS5LIFT_RAX] & 0xff));
+void StartThread(GuestThread& thread) {
+    pthread_attr_t attributes;
+    pthread_attr_init(&attributes);
+    pthread_attr_setstacksize(&attributes, HostStackSize);
+    const auto error = pthread_create(&thread.Handle, &attributes, RunThread, &thread);
+    pthread_attr_destroy(&attributes);
+    if (error != 0) Fail("cannot start a guest thread: %s", std::strerror(error));
 }
 
 }
@@ -109,6 +141,8 @@ void* RunGuest(void*) {
 extern "C" void ps5lift_apply_mxcsr(Ps5LiftState* state) {
     const auto mxcsr = state->Mxcsr;
 #if defined(__aarch64__)
+    constexpr std::uint32_t MxcsrDenormalsAreZero = 1u << 6;
+    constexpr std::uint32_t MxcsrFlushToZero = 1u << 15;
     constexpr std::uint64_t AlternateHandling = 1u << 1;
     constexpr std::uint64_t FlushInputs = 1u << 0;
     constexpr std::uint64_t FlushToZero = 1u << 24;
@@ -163,13 +197,32 @@ extern "C" void ps5lift_string_op(Ps5LiftState* state, const std::uint32_t opera
     if (repeat) rcx = 0;
 }
 
+extern "C" std::uint64_t ps5lift_thread_create(Ps5LiftState* parent, const std::uint64_t entry, const std::uint64_t argument) {
+    auto* thread = new GuestThread;
+    thread->Entry = entry;
+    thread->Argument = argument;
+    thread->Mxcsr = parent->Mxcsr;
+    StartThread(*thread);
+    return reinterpret_cast<std::uint64_t>(thread);
+}
+
+extern "C" std::uint64_t ps5lift_thread_join(const std::uint64_t handle) {
+    auto* thread = reinterpret_cast<GuestThread*>(handle);
+    const auto error = pthread_join(thread->Handle, nullptr);
+    if (error != 0) Fail("cannot join a guest thread: %s", std::strerror(error));
+    const auto result = thread->Result;
+    munmap(thread->Stack, GuestStackSize);
+    munmap(thread->Tls, TlsSize);
+    delete thread;
+    return result;
+}
+
 int main() {
     MapSegments(ps5lift_image);
-    pthread_attr_t attributes;
-    pthread_attr_init(&attributes);
-    pthread_attr_setstacksize(&attributes, HostStackSize);
-    pthread_t thread;
-    if (pthread_create(&thread, &attributes, RunGuest, nullptr) != 0) Fail("cannot start the guest thread");
-    pthread_join(thread, nullptr);
+    GuestThread thread;
+    thread.Entry = ps5lift_image.Entry;
+    thread.Main = true;
+    StartThread(thread);
+    pthread_join(thread.Handle, nullptr);
     return 0;
 }

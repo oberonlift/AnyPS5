@@ -1,0 +1,6 @@
+tls total = 10020000
+main tls = 5000
+atomic counter / steps = 10
+locked counter / steps = 4
+locked counter remainder = 0
+message ordering violations = 0

@@ -80,6 +80,8 @@ extern const Ps5LiftImage ps5lift_image;
 
 void ps5lift_dispatch(Ps5LiftState* state, uint64_t target);
 void ps5lift_apply_mxcsr(Ps5LiftState* state);
+uint64_t ps5lift_thread_create(Ps5LiftState* parent, uint64_t entry, uint64_t argument);
+uint64_t ps5lift_thread_join(uint64_t handle);
 void ps5lift_unsupported(Ps5LiftState* state, uint64_t address, const char* mnemonic);
 void ps5lift_trap(Ps5LiftState* state, uint64_t address);
 void ps5lift_string_op(Ps5LiftState* state, uint32_t operation, uint32_t width, uint32_t repeat);

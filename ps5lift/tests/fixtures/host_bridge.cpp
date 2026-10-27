@@ -22,3 +22,11 @@ extern "C" void ps5lift_import_host__ticks(Ps5LiftState* state) {
     clock_gettime(CLOCK_MONOTONIC, &time);
     state->Gpr[PS5LIFT_RAX] = static_cast<std::uint64_t>(time.tv_sec) * 1000000000u + static_cast<std::uint64_t>(time.tv_nsec);
 }
+
+extern "C" void ps5lift_import_host__thread__create(Ps5LiftState* state) {
+    state->Gpr[PS5LIFT_RAX] = ps5lift_thread_create(state, state->Gpr[PS5LIFT_RDI], state->Gpr[PS5LIFT_RSI]);
+}
+
+extern "C" void ps5lift_import_host__thread__join(Ps5LiftState* state) {
+    state->Gpr[PS5LIFT_RAX] = ps5lift_thread_join(state->Gpr[PS5LIFT_RDI]);
+}
