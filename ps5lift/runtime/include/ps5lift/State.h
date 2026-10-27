@@ -70,6 +70,10 @@ typedef struct Ps5LiftImage {
     const Ps5LiftFunctionEntry* Functions;
     uint64_t FunctionCount;
     uint64_t Entry;
+    uint64_t TlsAddress;
+    uint64_t TlsFileSize;
+    uint64_t TlsMemorySize;
+    uint64_t TlsAlignment;
 } Ps5LiftImage;
 
 extern const Ps5LiftImage ps5lift_image;

@@ -22,7 +22,6 @@ namespace {
 constexpr std::uint64_t GuestStackSize = 8ull << 20;
 constexpr std::size_t HostStackSize = 512ull << 20;
 constexpr std::uint64_t TlsSize = 64ull << 10;
-constexpr std::uint64_t EntryReturnAddress = 0;
 constexpr std::uint32_t ConsoleMxcsr = 0x9fc0;
 constexpr std::uint32_t MxcsrDenormalsAreZero = 1u << 6;
 constexpr std::uint32_t MxcsrFlushToZero = 1u << 15;
@@ -78,13 +77,24 @@ void* RunGuest(void*) {
     auto* tls = static_cast<std::uint8_t*>(MapAnonymous(TlsSize));
     const auto threadPointer = reinterpret_cast<std::uint64_t>(tls + TlsSize / 2);
     std::memcpy(reinterpret_cast<void*>(threadPointer), &threadPointer, sizeof(threadPointer));
+    if (ps5lift_image.TlsMemorySize != 0) {
+        const auto alignment = ps5lift_image.TlsAlignment;
+        const auto offset = (ps5lift_image.TlsMemorySize + alignment - 1) / alignment * alignment;
+        if (offset > TlsSize / 2) Fail("the static TLS block of %" PRIu64 " bytes does not fit", ps5lift_image.TlsMemorySize);
+        std::memcpy(reinterpret_cast<void*>(threadPointer - offset), reinterpret_cast<const void*>(ps5lift_image.TlsAddress), ps5lift_image.TlsFileSize);
+    }
     state.FsBase = threadPointer;
     state.Mxcsr = ConsoleMxcsr;
     ps5lift_apply_mxcsr(&state);
 
-    auto rsp = (reinterpret_cast<std::uint64_t>(stack) + GuestStackSize - 64) & ~std::uint64_t{15};
-    rsp -= 8;
-    std::memcpy(reinterpret_cast<void*>(rsp), &EntryReturnAddress, sizeof(EntryReturnAddress));
+    auto* top = stack + GuestStackSize;
+    static constexpr char ProgramName[] = "eboot.bin";
+    top -= sizeof(ProgramName);
+    std::memcpy(top, ProgramName, sizeof(ProgramName));
+    const auto argument = reinterpret_cast<std::uint64_t>(top);
+    const std::uint64_t entryStack[] = {1, argument, 0, 0, 0, 0};
+    auto rsp = (reinterpret_cast<std::uint64_t>(top) - sizeof(entryStack)) & ~std::uint64_t{15};
+    std::memcpy(reinterpret_cast<void*>(rsp), entryStack, sizeof(entryStack));
     state.Gpr[PS5LIFT_RSP] = rsp;
 
     const auto entry = Lookup(ps5lift_image.Entry);

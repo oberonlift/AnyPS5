@@ -43,6 +43,8 @@ private:
 
 bool IsConditionalJump(ZydisMnemonic mnemonic);
 std::optional<std::uint64_t> DirectTarget(const Instruction& instruction);
+std::optional<std::uint64_t> ImportTarget(const GuestImage& image, const Instruction& instruction);
+std::string BridgeSymbol(const std::string& import);
 
 std::map<std::uint64_t, GuestFunction> DiscoverFunctions(const GuestImage& image);
 

@@ -149,6 +149,7 @@ public:
     const LiftOptions& Options() const { return _options; }
     LiftReport& Report() { return _report; }
     const std::map<std::uint64_t, GuestFunction>& Functions() const { return _functions; }
+    const GuestImage& Image() const { return _image; }
 
 private:
     llvm::LLVMContext& _context;
@@ -168,7 +169,7 @@ private:
         auto* host = Guest(function.Entry);
         llvm::IRBuilder<> builder(llvm::BasicBlock::Create(_context, "entry", host));
         auto* state = host->getArg(0);
-        builder.CreateCall(Runtime("ps5lift_import_" + *function.Import, _guestType), {state});
+        builder.CreateCall(Runtime(BridgeSymbol(*function.Import), _guestType), {state});
         auto* rsp = builder.CreateConstGEP1_64(builder.getInt8Ty(), state, offsetof(Ps5LiftState, Gpr) + 8 * PS5LIFT_RSP);
         auto* load = builder.CreateLoad(builder.getInt64Ty(), rsp);
         load->setMetadata(llvm::LLVMContext::MD_tbaa, _stateTag);
@@ -181,7 +182,7 @@ private:
         auto* i32 = llvm::Type::getInt32Ty(_context);
         auto* segmentType = llvm::StructType::create(_context, {i64, i64, i64, _pointer, i32}, "Ps5LiftSegment");
         auto* functionType = llvm::StructType::create(_context, {i64, _pointer}, "Ps5LiftFunctionEntry");
-        auto* imageType = llvm::StructType::create(_context, {_pointer, i64, _pointer, i64, i64}, "Ps5LiftImage");
+        auto* imageType = llvm::StructType::create(_context, {_pointer, i64, _pointer, i64, i64, i64, i64, i64, i64}, "Ps5LiftImage");
 
         std::vector<llvm::Constant*> segments;
         for (const auto& segment : _image.Segments()) {
@@ -197,7 +198,9 @@ private:
         auto* segmentGlobal = new llvm::GlobalVariable(*_module, segmentArray->getType(), true, llvm::GlobalValue::PrivateLinkage, segmentArray, "ps5lift_segments");
         auto* functionArray = llvm::ConstantArray::get(llvm::ArrayType::get(functionType, entries.size()), entries);
         auto* functionGlobal = new llvm::GlobalVariable(*_module, functionArray->getType(), true, llvm::GlobalValue::PrivateLinkage, functionArray, "ps5lift_functions");
-        auto* image = llvm::ConstantStruct::get(imageType, {segmentGlobal, llvm::ConstantInt::get(i64, segments.size()), functionGlobal, llvm::ConstantInt::get(i64, entries.size()), llvm::ConstantInt::get(i64, _image.Entry())});
+        const auto& tls = _image.Tls();
+        auto* image = llvm::ConstantStruct::get(imageType, {segmentGlobal, llvm::ConstantInt::get(i64, segments.size()), functionGlobal, llvm::ConstantInt::get(i64, entries.size()), llvm::ConstantInt::get(i64, _image.Entry()),
+            llvm::ConstantInt::get(i64, tls.Address), llvm::ConstantInt::get(i64, tls.FileSize), llvm::ConstantInt::get(i64, tls.MemorySize), llvm::ConstantInt::get(i64, tls.Alignment)});
         new llvm::GlobalVariable(*_module, imageType, true, llvm::GlobalValue::ExternalLinkage, image, "ps5lift_image");
     }
 };
@@ -2283,7 +2286,8 @@ private:
             for (int i = 0; i < VectorCount; ++i) SetVector(i, _builder.CreateZExt(_builder.CreateTrunc(Vector(i), Int(128)), Int(256)));
             return;
         case ZYDIS_MNEMONIC_CALL: {
-            const auto target = DirectTarget(*_instruction);
+            auto target = DirectTarget(*_instruction);
+            if (!target) target = ImportTarget(_module.Image(), *_instruction);
             auto* destination = target ? nullptr : Read(0);
             Push(_builder.getInt64(_instruction->Next()));
             if (target) CallGuest(_module.Guest(*target));
@@ -2292,6 +2296,10 @@ private:
         }
         case ZYDIS_MNEMONIC_JMP: {
             const auto target = DirectTarget(*_instruction);
+            if (const auto import = target ? std::nullopt : ImportTarget(_module.Image(), *_instruction)) {
+                TailCall(*import);
+                return;
+            }
             if (target) {
                 _builder.CreateBr(Target(*target));
                 return;

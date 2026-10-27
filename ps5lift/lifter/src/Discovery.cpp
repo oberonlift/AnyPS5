@@ -27,17 +27,6 @@ bool EndsFlow(const Instruction& instruction) {
     }
 }
 
-std::string ResolveImport(const GuestImage& image, const Decoder& decoder, const std::uint64_t entry) {
-    const auto instruction = decoder.Decode(image, entry);
-    const auto& operand = instruction.Operands[0];
-    if (instruction.Info.mnemonic != ZYDIS_MNEMONIC_JMP || operand.type != ZYDIS_OPERAND_TYPE_MEMORY || operand.mem.base != ZYDIS_REGISTER_RIP || operand.mem.index != ZYDIS_REGISTER_NONE)
-        throw std::runtime_error("PLT entry at 0x" + Hex(entry) + " is not jmp [rip+slot]");
-    const auto slot = instruction.Next() + static_cast<std::uint64_t>(operand.mem.disp.value);
-    const auto found = image.ImportSlots().find(slot);
-    if (found == image.ImportSlots().end()) throw std::runtime_error("PLT entry at 0x" + Hex(entry) + " uses slot 0x" + Hex(slot) + " without a relocation");
-    return found->second;
-}
-
 const Instruction* Previous(const GuestFunction& function, const std::uint64_t address) {
     auto found = function.Instructions.find(address);
     if (found == function.Instructions.begin() || found == function.Instructions.end()) return nullptr;
@@ -128,9 +117,9 @@ GuestFunction DiscoverFunction(const GuestImage& image, const Decoder& decoder, 
     function.Entry = entry;
     const auto symbol = image.FunctionSymbols().find(entry);
     function.Name = symbol != image.FunctionSymbols().end() ? symbol->second : "sub_" + Hex(entry);
-    if (image.IsPlt(entry)) {
-        function.Import = ResolveImport(image, decoder, entry);
-        function.Name = *function.Import;
+    if (const auto import = image.Imports().find(entry); import != image.Imports().end()) {
+        function.Import = import->second;
+        function.Name = import->second;
         return function;
     }
 
@@ -145,12 +134,13 @@ GuestFunction DiscoverFunction(const GuestImage& image, const Decoder& decoder, 
             const auto target = DirectTarget(instruction);
             const auto mnemonic = instruction.Info.mnemonic;
             if (mnemonic == ZYDIS_MNEMONIC_CALL && target) callTargets.insert(*target);
+            if (mnemonic == ZYDIS_MNEMONIC_JMP && !target && ImportTarget(image, instruction)) break;
             if ((mnemonic == ZYDIS_MNEMONIC_JMP || IsConditionalJump(mnemonic)) && target && !(starts.contains(*target) && *target != entry)) {
                 function.Leaders.insert(*target);
                 pending.push_back(*target);
             }
             if (IsConditionalJump(mnemonic)) function.Leaders.insert(instruction.Next());
-            if (mnemonic == ZYDIS_MNEMONIC_JMP && !target) {
+            if (mnemonic == ZYDIS_MNEMONIC_JMP && !target && !ImportTarget(image, instruction)) {
                 const auto next = starts.upper_bound(entry);
                 auto targets = RecoverJumpTable(image, function, instruction, next == starts.end() ? ~std::uint64_t{0} : *next);
                 for (const auto destination : targets) {
@@ -220,9 +210,33 @@ std::optional<std::uint64_t> DirectTarget(const Instruction& instruction) {
     return instruction.Next() + operand.imm.value.u;
 }
 
+std::optional<std::uint64_t> ImportTarget(const GuestImage& image, const Instruction& instruction) {
+    const auto& operand = instruction.Operands[0];
+    if (operand.type != ZYDIS_OPERAND_TYPE_MEMORY || operand.mem.index != ZYDIS_REGISTER_NONE || operand.mem.segment == ZYDIS_REGISTER_FS || operand.mem.segment == ZYDIS_REGISTER_GS) return std::nullopt;
+    const auto displacement = static_cast<std::uint64_t>(operand.mem.disp.value);
+    if (operand.mem.base == ZYDIS_REGISTER_RIP) return image.ImportAt(instruction.Next() + displacement);
+    if (operand.mem.base == ZYDIS_REGISTER_NONE) return image.ImportAt(displacement);
+    return std::nullopt;
+}
+
+std::string BridgeSymbol(const std::string& import) {
+    std::string symbol = "ps5lift_import_";
+    for (const char character : import) {
+        if (character == '_') symbol += "__";
+        else if (character == '+') symbol += "_p";
+        else if (character == '-') symbol += "_m";
+        else if (character == '#') symbol += "_h";
+        else if ((character >= 'a' && character <= 'z') || (character >= 'A' && character <= 'Z') || (character >= '0' && character <= '9')) symbol += character;
+        else throw std::runtime_error("Import name " + import + " has a character a bridge symbol cannot carry");
+    }
+    return symbol;
+}
+
 std::map<std::uint64_t, GuestFunction> DiscoverFunctions(const GuestImage& image) {
     const Decoder decoder;
     std::set<std::uint64_t> starts{image.Entry()};
+    for (const auto& [address, name] : image.Imports()) starts.insert(address);
+    for (const auto address : image.CodePointers()) starts.insert(address);
     for (const auto& [address, name] : image.FunctionSymbols()) {
         if (image.IsExecutable(address)) starts.insert(address);
     }

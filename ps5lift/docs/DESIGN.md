@@ -10,7 +10,8 @@ PS5 titles suit static recompilation: retail games cannot generate code at run t
 
 ```
 eboot.bin + sce_module/*.prx
-  -> GuestImage      AnyPS5 ElfReader: segments, sections, symbols, PLT and import slots, eh_frame function starts
+  -> AnyPS5 relinker SELF unwrapping, SCE dynamic tables and modules converted to a Linux x86-64 ELF whose imports are named by NID
+  -> GuestImage      AnyPS5 ElfReader: segments, PT_TLS, the dynamic segment's symbols and relocations, applied statically; eh_frame function starts
   -> Discovery       Zydis recursive descent from every known start; call targets become new starts until a fixpoint; jump tables
   -> Lifter          one LLVM function per guest function, void guest_<address>(Ps5LiftState*)
   -> Codegen         LLVM O2, then an object file for the target triple and CPU
@@ -31,7 +32,9 @@ The guest stack is real guest memory. `call` pushes the return address, the call
 - Direct jumps inside a function are branches; jumps or fall-through to another function's start are tail calls.
 - Indirect calls and jumps go through `ps5lift_dispatch`, which looks up the target in the sorted function table. A miss stops with the address, which names a function discovery has to find.
 - Jump tables (absolute `jmp [table + index*8]`, `mov reg, [table + index*8]; jmp reg`, and clang's PIC `lea; movsxd; add; jmp`) are recovered and lifted as an LLVM `switch` that falls back to dispatch. The bound comes from the guarding `cmp` or `sub` with `ja`/`jae`; without one, entries are read while they point inside the function.
-- PLT entries become functions that call `ps5lift_import_<name>(Ps5LiftState*)` and pop the return address. For PS5 titles the name will be the NID, and the bridge calls the AnyPS5 implementation with arguments taken from rdi, rsi, rdx, rcx, r8, r9, xmm0-7 and the stack.
+- Every undefined symbol a relocation names gets a synthetic address past the image, and its slots are filled with it. Each such address is a lifted function that calls `ps5lift_import_<name>(Ps5LiftState*)` and pops the return address; `_` in the name becomes `__`, `+` `_p`, `-` `_m` and `#` `_h`. A `call` or `jmp` through a slot that holds an import is a direct call to it, and anything else that loads the slot reaches it through dispatch, so PLT stubs and PS5's `call [rip+slot]` both work. For PS5 titles the name is the NID, and the bridge calls the AnyPS5 implementation with arguments taken from rdi, rsi, rdx, rcx, r8, r9, xmm0-7 and the stack.
+- Relocation targets inside executable segments seed discovery, which is how function pointers in stripped images are found.
+- The runtime enters the image the way Linux does, with `argc`, `argv`, `envp` and `auxv` at `rsp`, so the relinker's entry stub runs unchanged. It copies `PT_TLS` below the thread pointer (x86-64 variant II) and stores the thread pointer at `fs:0`.
 
 ## Memory ordering
 
@@ -60,7 +63,7 @@ Flags are computed exactly for add, adc, sub, sbb, cmp, logic, inc, dec, neg, sh
 ## Roadmap
 
 1. **Fixtures (done).** Integer code, calls, recursion, function pointers, jump tables, 128-bit products, division, atomics and Zen 2 BMI code lift and match the native output at -O0 to -O3, for aarch64 and x86-64.
-2. **PS5 executables.** Read SELF and the PS5 dynamic sections through AnyPS5 instead of host ELF sections; load PIE images at a chosen base and apply `R_X86_64_RELATIVE`; seed discovery from relocation targets and the init and fini arrays; generate the import bridges from AnyPS5's exports by NID; lift the bundled `sce_module` files.
+2. **PS5 executables (in progress).** Done: PS5 ELFs go through AnyPS5's relinker and lift with NID imports, static relocations, relocation-target discovery and static TLS; AnyPS5's PS5-style `import` and `tls` fixtures run on x86-64 and aarch64. Remaining: generate the import bridges from AnyPS5's exports by NID, seed discovery from the init and fini arrays, TLS relocations, and lift the bundled `sce_module` files the relinker converts.
 3. **Native AnyPS5 libraries on aarch64.** Build the libraries for aarch64 and port their x86-specific parts (`UserContext`, `Fiber`, `RaiseException`, `Backtrace`, `HostCpu`, `FloatingPoint`, `AtomicBuiltins`, about 28 files) to read and write `Ps5LiftState`. Reverse bridges let native code call guest callbacks: thread entries, `atexit`, comparators, fibers and JobManager jobs.
 4. **SSE, AVX2, FMA and F16C (done).** Integer and floating-point vector instructions, scalar SSE math, FMA3 and F16C, checked against native results by `tests/fixtures/vector.c` and `tests/fixtures/float.c` under three MXCSR settings. Remaining: x87 for libc's `long double`, `dpps`, gathers and masked moves.
 5. **Exceptions.** Landing pads as dispatch entries so guest `.eh_frame` unwinding can resume inside lifted code.
