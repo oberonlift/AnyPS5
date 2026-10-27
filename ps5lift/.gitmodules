@@ -1,0 +1,6 @@
+[submodule "3rdparty/anyps5"]
+	path = 3rdparty/anyps5
+	url = https://github.com/boykopovar/anyps5
+[submodule "3rdparty/zydis"]
+	path = 3rdparty/zydis
+	url = https://github.com/zyantific/zydis

@@ -1,0 +1,10 @@
+# Known gaps
+
+- [Discovery](../lifter/src/Discovery.cpp) seeds functions from the entry point, the `.symtab` function symbols and `.eh_frame`, then follows direct calls. Stripped PS5 executables also need the targets of `R_X86_64_RELATIVE` relocations, the init and fini arrays and RIP-relative `lea` of code addresses; a function only reached through a pointer that none of these finds stops at run time in `ps5lift_dispatch`.
+- [Jump tables](../lifter/src/Discovery.cpp) without a recognised bound are read while their entries point inside the function, which can stop one entry short when the table is followed by another code pointer into the same function, or include extra entries. Extra entries only cost code size.
+- [GuestImage](../lifter/src/GuestImage.cpp) reads host ELF sections (`.plt`, `.rela.plt`, `.dynsym`). PS5 executables need the SCE dynamic segment, NID imports and SELF unwrapping, which AnyPS5 already parses.
+- [The runtime](../runtime/src/Runtime.cpp) maps the whole image read-write and does not apply relocations; images must be linked at fixed addresses. It starts the entry point with a zero return address instead of the PS5 entry contract.
+- [The lifter](../lifter/src/Lifter.cpp) supports integer, BMI1/BMI2, atomic, string and basic SSE/AVX move and bitwise instructions. Floating point, packed integer arithmetic, shuffles, x87, `pushf`/`popf`, `cpuid`, `rdtsc`, `syscall` and bit-string `bt` on memory with a register offset are reported as unsupported and stop at run time.
+- Ordered loads and stores declare their natural alignment. x86 allows unaligned accesses; on aarch64 an unaligned `LDAPR` or `STLR` that crosses a 16-byte boundary faults even with FEAT_LSE2. Vector loads and stores wider than 64 bits are not ordered.
+- Lifted calls nest on the host stack, which the runtime sizes at 512 MiB for the guest thread. Guest code that leaves a function without `ret` (longjmp, exception unwinding, fibers) is not supported yet.
+- The flags register is reconstructed on every flush; `pushf`, `lahf` and `sahf` do not read it yet.

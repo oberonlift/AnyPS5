@@ -1,0 +1,127 @@
+#!/usr/bin/env python3
+import argparse
+import difflib
+import os
+import platform
+import shutil
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
+FIXTURES = ROOT / "tests" / "fixtures"
+GUEST_FLAGS = [
+    "--target=x86_64-unknown-linux-gnu",
+    "-march=znver2",
+    "-fno-vectorize",
+    "-fno-slp-vectorize",
+    "-fno-stack-protector",
+    "-fno-builtin",
+    "-ffreestanding",
+    "-fcf-protection=none",
+    "-nostdlib",
+    "-fuse-ld=lld",
+]
+
+
+def run(command, **kwargs):
+    result = subprocess.run(command, capture_output=True, text=True, **kwargs)
+    if result.returncode != 0:
+        sys.stderr.write(f"$ {' '.join(map(str, command))}\n{result.stdout}{result.stderr}")
+        raise SystemExit(f"command failed with exit code {result.returncode}")
+    return result
+
+
+def host_triple():
+    machine = platform.machine()
+    if machine in ("aarch64", "arm64"):
+        return "aarch64-unknown-linux-gnu"
+    if machine in ("x86_64", "AMD64"):
+        return "x86_64-unknown-linux-gnu"
+    raise SystemExit(f"unsupported host {machine}")
+
+
+def runner_for(triple):
+    if triple.startswith(platform.machine()) or (triple.startswith("aarch64") and platform.machine() == "arm64"):
+        return []
+    if triple.startswith("aarch64"):
+        qemu = shutil.which("qemu-aarch64") or shutil.which("qemu-aarch64-static")
+        if qemu is None:
+            raise SystemExit("running aarch64 code on this host needs qemu-aarch64")
+        sysroot = os.environ.get("PS5LIFT_AARCH64_SYSROOT", "/usr/aarch64-linux-gnu")
+        return [qemu, "-L", sysroot]
+    raise SystemExit(f"cannot run {triple} on {platform.machine()}")
+
+
+def lifter_features(triple, runner):
+    if runner and triple.startswith("aarch64"):
+        return ["--features", "-rcpc-immo"]
+    return []
+
+
+def build_guest(clang, work, name, optimization):
+    library = work / "libhost.so"
+    if not library.exists():
+        run([clang, *GUEST_FLAGS, "-O2", "-fPIC", "-shared", FIXTURES / "host_stub.c", "-o", library])
+    guest = work / f"{name}{optimization}"
+    run([clang, *GUEST_FLAGS, optimization, "-fno-pic", "-no-pie", "-Wl,--image-base=0x20000000",
+         "-Wl,--dynamic-linker=/lib64/ld-linux-x86-64.so.2", FIXTURES / f"{name}.c", f"-L{work}", "-lhost", "-o", guest])
+    return guest
+
+
+def compare(expected, actual, label):
+    if expected == actual:
+        return True
+    sys.stderr.write(f"{label}: output differs\n")
+    sys.stderr.writelines(difflib.unified_diff(expected.splitlines(True), actual.splitlines(True), "expected", label))
+    return False
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Lift an x86-64 fixture, build it for a target and compare its output")
+    parser.add_argument("--ps5lift", required=True)
+    parser.add_argument("--clang", default="clang")
+    parser.add_argument("--clangxx", default="clang++")
+    parser.add_argument("--triple", default=host_triple())
+    parser.add_argument("--fixture", default="basic")
+    parser.add_argument("--optimization", action="append")
+    parser.add_argument("--memory", action="append", choices=["tso", "relaxed"])
+    parser.add_argument("--keep", action="store_true")
+    args = parser.parse_args()
+
+    optimizations = args.optimization or ["-O0", "-O1", "-O2", "-O3"]
+    memories = args.memory or ["tso", "relaxed"]
+    expected = (FIXTURES / f"{args.fixture}.expected").read_text()
+    runner = runner_for(args.triple)
+    work = Path(tempfile.mkdtemp(prefix="ps5lift-"))
+    failures = 0
+    try:
+        for optimization in optimizations:
+            guest = build_guest(args.clang, work, args.fixture, optimization)
+            if platform.machine() == "x86_64":
+                native = run([guest], env={**os.environ, "LD_LIBRARY_PATH": str(work)}).stdout
+                failures += not compare(expected, native, f"native {optimization}")
+            for memory in memories:
+                label = f"{args.triple} {optimization} {memory}"
+                lifted = work / f"{guest.name}-{memory}.o"
+                report = run([args.ps5lift, guest, "-o", lifted, "--triple", args.triple, "--memory", memory, *lifter_features(args.triple, runner)]).stderr
+                program = work / f"{guest.name}-{memory}"
+                run([args.clangxx, f"--target={args.triple}", "-std=c++20", "-O2", f"-I{ROOT / 'runtime' / 'include'}",
+                     ROOT / "runtime" / "src" / "Runtime.cpp", FIXTURES / "host_bridge.cpp", lifted, "-fuse-ld=lld", "-pthread", "-o", program])
+                result = subprocess.run([*runner, program], capture_output=True, text=True)
+                ok = result.returncode == 0 and compare(expected, result.stdout, label)
+                if result.returncode != 0:
+                    sys.stderr.write(f"{label}: exit code {result.returncode}\n{result.stderr}")
+                print(f"{'PASS' if ok else 'FAIL'} {label}: {report.strip()}")
+                failures += not ok
+    finally:
+        if args.keep:
+            print(f"kept {work}")
+        else:
+            shutil.rmtree(work)
+    return 1 if failures else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
