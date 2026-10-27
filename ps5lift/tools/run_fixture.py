@@ -22,6 +22,7 @@ GUEST_FLAGS = [
     "-fcf-protection=none",
     "-nostdlib",
     "-fuse-ld=lld",
+    "-DPS5LIFT_GUEST",
 ]
 
 
@@ -60,12 +61,12 @@ def lifter_features(triple, runner):
     return []
 
 
-def build_guest(clang, work, name, optimization):
+def build_guest(clang, work, name, optimization, defines=()):
     library = work / "libhost.so"
     if not library.exists():
         run([clang, *GUEST_FLAGS, "-O2", "-fPIC", "-shared", FIXTURES / "host_stub.c", "-o", library])
     guest = work / f"{name}{optimization}"
-    run([clang, *GUEST_FLAGS, optimization, "-fno-pic", "-no-pie", "-Wl,--image-base=0x20000000",
+    run([clang, optimization, *GUEST_FLAGS, *defines, "-fno-pic", "-no-pie", "-Wl,--image-base=0x20000000",
          "-Wl,--dynamic-linker=/lib64/ld-linux-x86-64.so.2", FIXTURES / f"{name}.c", f"-L{work}", "-lhost", "-o", guest])
     return guest
 

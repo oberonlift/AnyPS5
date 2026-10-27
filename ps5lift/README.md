@@ -35,3 +35,13 @@ clang++ -O2 -Iruntime/include runtime/src/Runtime.cpp bridges.cpp guest.o -fuse-
 | `-O0` | optimized | Skips the LLVM optimization pipeline. |
 
 The lifter prints how many functions and instructions it lifted and lists every unsupported instruction it found. Reaching one at run time stops the program with its address.
+
+## Benchmark
+
+`tools/bench.py` times five memory-heavy kernels (streaming, pointer chasing, struct copies, a hash table and heap sort) built natively, natively without vectorization, and lifted with each memory model, and checks that every build computes the same results:
+
+```sh
+python3 tools/bench.py --ps5lift build/lifter/ps5lift
+```
+
+`tso/relaxed` is the cost of keeping x86 ordering, `tso/native` the cost of lifting against the same code compiled natively without vectorization. On an x86-64 host the ordering is free and the numbers show the lifting overhead only; the Spark shows both. `--scale` changes the working set (16, the default, uses about 128 MiB).
