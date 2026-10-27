@@ -6,10 +6,14 @@
 #include <llvm/IR/DerivedTypes.h>
 #include <llvm/IR/IRBuilder.h>
 #include <llvm/IR/Intrinsics.h>
+#include <llvm/IR/MDBuilder.h>
 #include <llvm/IR/Verifier.h>
 #include <llvm/Support/raw_ostream.h>
 
+#include <algorithm>
 #include <cstddef>
+#include <optional>
+#include <set>
 #include <sstream>
 #include <stdexcept>
 
@@ -100,6 +104,12 @@ public:
         : _context(context), _image(image), _functions(functions), _options(options), _report(report), _module(std::make_unique<llvm::Module>("ps5lift", context)) {}
 
     std::unique_ptr<llvm::Module> Lift() {
+        llvm::MDBuilder metadata(_context);
+        auto* root = metadata.createTBAARoot("ps5lift");
+        auto* stateType = metadata.createTBAAScalarTypeNode("state", root);
+        auto* guestType = metadata.createTBAAScalarTypeNode("guest", root);
+        _stateTag = metadata.createTBAAStructTagNode(stateType, stateType, 0);
+        _guestTag = metadata.createTBAAStructTagNode(guestType, guestType, 0);
         _pointer = llvm::PointerType::get(_context, 0);
         _guestType = llvm::FunctionType::get(llvm::Type::getVoidTy(_context), {_pointer}, false);
         for (const auto& [address, function] : _functions) {
@@ -130,6 +140,8 @@ public:
     }
 
     llvm::LLVMContext& Context() { return _context; }
+    llvm::MDNode* StateTag() const { return _stateTag; }
+    llvm::MDNode* GuestTag() const { return _guestTag; }
     llvm::PointerType* Pointer() const { return _pointer; }
     llvm::FunctionType* GuestType() const { return _guestType; }
     const LiftOptions& Options() const { return _options; }
@@ -145,6 +157,8 @@ private:
     std::unique_ptr<llvm::Module> _module;
     llvm::PointerType* _pointer = nullptr;
     llvm::FunctionType* _guestType = nullptr;
+    llvm::MDNode* _stateTag = nullptr;
+    llvm::MDNode* _guestTag = nullptr;
 
     void LiftFunction(const GuestFunction& function);
 
@@ -154,7 +168,9 @@ private:
         auto* state = host->getArg(0);
         builder.CreateCall(Runtime("ps5lift_import_" + *function.Import, _guestType), {state});
         auto* rsp = builder.CreateConstGEP1_64(builder.getInt8Ty(), state, offsetof(Ps5LiftState, Gpr) + 8 * PS5LIFT_RSP);
-        builder.CreateStore(builder.CreateAdd(builder.CreateLoad(builder.getInt64Ty(), rsp), builder.getInt64(8)), rsp);
+        auto* load = builder.CreateLoad(builder.getInt64Ty(), rsp);
+        load->setMetadata(llvm::LLVMContext::MD_tbaa, _stateTag);
+        builder.CreateStore(builder.CreateAdd(load, builder.getInt64(8)), rsp)->setMetadata(llvm::LLVMContext::MD_tbaa, _stateTag);
         builder.CreateRetVoid();
     }
 
@@ -195,6 +211,7 @@ public:
         _state = _host->getArg(0);
         for (int i = 0; i < PS5LIFT_GPR_COUNT; ++i) _gpr[i] = _builder.CreateAlloca(I64(), nullptr, "gpr" + std::to_string(i));
         for (int i = 0; i < PS5LIFT_FLAG_COUNT; ++i) _flags[i] = _builder.CreateAlloca(_builder.getInt1Ty(), nullptr, "flag" + std::to_string(i));
+        for (int i = 0; i < VectorCount; ++i) _vectors[i] = _builder.CreateAlloca(Int(256), nullptr, "ymm" + std::to_string(i));
         Reload();
         for (const auto leader : _function.Leaders) _blocks[leader] = llvm::BasicBlock::Create(Context(), "b_" + Hex(leader), _host);
         _builder.CreateBr(_blocks.at(_function.Entry));
@@ -231,6 +248,8 @@ private:
     llvm::Value* _state = nullptr;
     llvm::AllocaInst* _gpr[PS5LIFT_GPR_COUNT]{};
     llvm::AllocaInst* _flags[PS5LIFT_FLAG_COUNT]{};
+    static constexpr int VectorCount = 16;
+    llvm::AllocaInst* _vectors[VectorCount]{};
     std::map<std::uint64_t, llvm::BasicBlock*> _blocks;
     const Instruction* _instruction = nullptr;
 
@@ -245,14 +264,30 @@ private:
         return _builder.CreateConstGEP1_64(_builder.getInt8Ty(), _state, offset);
     }
 
+    llvm::Value* StateLoad(llvm::Type* type, const std::size_t offset) {
+        auto* load = _builder.CreateLoad(type, StateField(offset));
+        load->setMetadata(llvm::LLVMContext::MD_tbaa, _module.StateTag());
+        return load;
+    }
+
+    void StateStore(llvm::Value* value, const std::size_t offset) {
+        _builder.CreateStore(value, StateField(offset))->setMetadata(llvm::LLVMContext::MD_tbaa, _module.StateTag());
+    }
+
+    static std::size_t VectorOffset(const int index) {
+        return offsetof(Ps5LiftState, Vector) + 32 * static_cast<std::size_t>(index);
+    }
+
     void Flush() {
-        for (int i = 0; i < PS5LIFT_GPR_COUNT; ++i) _builder.CreateStore(_builder.CreateLoad(I64(), _gpr[i]), StateField(offsetof(Ps5LiftState, Gpr) + 8 * i));
-        for (int i = 0; i < PS5LIFT_FLAG_COUNT; ++i) _builder.CreateStore(_builder.CreateZExt(_builder.CreateLoad(_builder.getInt1Ty(), _flags[i]), _builder.getInt8Ty()), StateField(offsetof(Ps5LiftState, Flags) + i));
+        for (int i = 0; i < PS5LIFT_GPR_COUNT; ++i) StateStore(_builder.CreateLoad(I64(), _gpr[i]), offsetof(Ps5LiftState, Gpr) + 8 * i);
+        for (int i = 0; i < PS5LIFT_FLAG_COUNT; ++i) StateStore(_builder.CreateZExt(_builder.CreateLoad(_builder.getInt1Ty(), _flags[i]), _builder.getInt8Ty()), offsetof(Ps5LiftState, Flags) + i);
+        for (int i = 0; i < VectorCount; ++i) StateStore(_builder.CreateLoad(Int(256), _vectors[i]), VectorOffset(i));
     }
 
     void Reload() {
-        for (int i = 0; i < PS5LIFT_GPR_COUNT; ++i) _builder.CreateStore(_builder.CreateLoad(I64(), StateField(offsetof(Ps5LiftState, Gpr) + 8 * i)), _gpr[i]);
-        for (int i = 0; i < PS5LIFT_FLAG_COUNT; ++i) _builder.CreateStore(_builder.CreateTrunc(_builder.CreateLoad(_builder.getInt8Ty(), StateField(offsetof(Ps5LiftState, Flags) + i)), _builder.getInt1Ty()), _flags[i]);
+        for (int i = 0; i < PS5LIFT_GPR_COUNT; ++i) _builder.CreateStore(StateLoad(I64(), offsetof(Ps5LiftState, Gpr) + 8 * i), _gpr[i]);
+        for (int i = 0; i < PS5LIFT_FLAG_COUNT; ++i) _builder.CreateStore(_builder.CreateTrunc(StateLoad(_builder.getInt8Ty(), offsetof(Ps5LiftState, Flags) + i), _builder.getInt1Ty()), _flags[i]);
+        for (int i = 0; i < VectorCount; ++i) _builder.CreateStore(StateLoad(Int(256), VectorOffset(i)), _vectors[i]);
     }
 
     void StartDeadBlock() {
@@ -264,14 +299,22 @@ private:
     llvm::Value* Flag(const int flag) { return _builder.CreateLoad(_builder.getInt1Ty(), _flags[flag]); }
     void SetFlag(const int flag, llvm::Value* value) { _builder.CreateStore(value, _flags[flag]); }
 
-    llvm::Value* VectorField(const int index) {
-        return StateField(offsetof(Ps5LiftState, Vector) + 32 * static_cast<std::size_t>(index));
+    llvm::Value* Vector(const int index) { return _builder.CreateLoad(Int(256), _vectors[index]); }
+    void SetVector(const int index, llvm::Value* value) { _builder.CreateStore(value, _vectors[index]); }
+
+    void WriteVector(const int index, llvm::Value* value, const bool zeroUpper) {
+        const auto bits = value->getType()->getIntegerBitWidth();
+        if (bits == 256) return SetVector(index, value);
+        auto* wide = _builder.CreateZExt(value, Int(256));
+        if (zeroUpper) return SetVector(index, wide);
+        auto* keep = llvm::ConstantInt::get(Context(), llvm::APInt::getHighBitsSet(256, 256 - bits));
+        SetVector(index, _builder.CreateOr(_builder.CreateAnd(Vector(index), keep), wide));
     }
 
     llvm::Value* ReadRegister(const ZydisRegister reg) {
         if (reg == ZYDIS_REGISTER_RIP) return _builder.getInt64(_instruction->Next());
         const auto vector = VectorIndex(reg);
-        if (vector >= 0) return _builder.CreateLoad(Int(ZydisRegisterGetWidth(ZYDIS_MACHINE_MODE_LONG_64, reg)), VectorField(vector));
+        if (vector >= 0) return _builder.CreateTrunc(Vector(vector), Int(ZydisRegisterGetWidth(ZYDIS_MACHINE_MODE_LONG_64, reg)));
         const auto index = GprIndex(reg);
         if (index < 0) throw UnsupportedInstruction(std::string("register ") + ZydisRegisterGetString(reg));
         const auto width = ZydisRegisterGetWidth(ZYDIS_MACHINE_MODE_LONG_64, reg);
@@ -284,9 +327,8 @@ private:
     void WriteRegister(const ZydisRegister reg, llvm::Value* value) {
         const auto vector = VectorIndex(reg);
         if (vector >= 0) {
-            _builder.CreateStore(value, VectorField(vector));
-            if (_instruction->Info.encoding == ZYDIS_INSTRUCTION_ENCODING_VEX && value->getType()->getIntegerBitWidth() == 128)
-                _builder.CreateStore(llvm::ConstantInt::get(Int(128), 0), _builder.CreateConstGEP1_64(_builder.getInt8Ty(), VectorField(vector), 16));
+            const bool vex = _instruction->Info.encoding == ZYDIS_INSTRUCTION_ENCODING_VEX;
+            WriteVector(vector, value, vex && value->getType()->getIntegerBitWidth() == 128);
             return;
         }
         const auto index = GprIndex(reg);
@@ -306,8 +348,8 @@ private:
         llvm::Value* address = _builder.getInt64(static_cast<std::uint64_t>(operand.mem.disp.value));
         if (operand.mem.base != ZYDIS_REGISTER_NONE) address = _builder.CreateAdd(address, ReadRegister(operand.mem.base));
         if (operand.mem.index != ZYDIS_REGISTER_NONE) address = _builder.CreateAdd(address, _builder.CreateMul(ReadRegister(operand.mem.index), _builder.getInt64(operand.mem.scale)));
-        if (applySegment && operand.mem.segment == ZYDIS_REGISTER_FS) address = _builder.CreateAdd(address, _builder.CreateLoad(I64(), StateField(offsetof(Ps5LiftState, FsBase))));
-        if (applySegment && operand.mem.segment == ZYDIS_REGISTER_GS) address = _builder.CreateAdd(address, _builder.CreateLoad(I64(), StateField(offsetof(Ps5LiftState, GsBase))));
+        if (applySegment && operand.mem.segment == ZYDIS_REGISTER_FS) address = _builder.CreateAdd(address, StateLoad(I64(), offsetof(Ps5LiftState, FsBase)));
+        if (applySegment && operand.mem.segment == ZYDIS_REGISTER_GS) address = _builder.CreateAdd(address, StateLoad(I64(), offsetof(Ps5LiftState, GsBase)));
         return address;
     }
 
@@ -318,6 +360,7 @@ private:
 
     llvm::Value* Load(llvm::Value* address, const unsigned bits, const bool ordered) {
         auto* load = _builder.CreateLoad(Int(bits), _builder.CreateIntToPtr(address, _module.Pointer()));
+        load->setMetadata(llvm::LLVMContext::MD_tbaa, _module.GuestTag());
         if (ordered) {
             load->setAtomic(llvm::AtomicOrdering::Acquire);
             load->setAlignment(llvm::Align(bits / 8));
@@ -329,6 +372,7 @@ private:
 
     void Store(llvm::Value* address, llvm::Value* value, const bool ordered) {
         auto* store = _builder.CreateStore(value, _builder.CreateIntToPtr(address, _module.Pointer()));
+        store->setMetadata(llvm::LLVMContext::MD_tbaa, _module.GuestTag());
         if (ordered) {
             store->setAtomic(llvm::AtomicOrdering::Release);
             store->setAlignment(llvm::Align(value->getType()->getIntegerBitWidth() / 8));
@@ -890,6 +934,507 @@ private:
         WriteRegister(destination.reg.value, _builder.CreateBitCast(splat, Int(width)));
     }
 
+    enum class VectorKind {
+        Add, Sub, AddSignedSaturate, AddUnsignedSaturate, SubSignedSaturate, SubUnsignedSaturate,
+        MultiplyLow, MultiplyHighSigned, MultiplyHighUnsigned, MultiplyEvenUnsigned, MultiplyEvenSigned, MultiplyAddWords,
+        MinSigned, MaxSigned, MinUnsigned, MaxUnsigned, CompareEqual, CompareGreater, Average, AndNot, Absolute,
+        ShiftLeft, ShiftRightLogical, ShiftRightArithmetic, ShiftLeftVariable, ShiftRightLogicalVariable, ShiftRightArithmeticVariable,
+        ShiftLeftBytes, ShiftRightBytes, ShuffleDwords, ShuffleLowWords, ShuffleHighWords, ShufflePairs, UnpackLow, UnpackHigh,
+        PackSignedSaturate, PackUnsignedSaturate, AlignRight, ShuffleBytes, PermuteQwords, PermuteDwords, Permute128,
+        Insert128, Extract128, BlendImmediate, BlendVariable, ZeroExtend, SignExtend, MoveMask, Extract, Insert, Test
+    };
+
+    struct VectorSpec {
+        VectorKind Kind;
+        unsigned Element;
+        unsigned Source = 0;
+    };
+
+    static std::optional<VectorSpec> VectorSpecOf(const ZydisMnemonic mnemonic) {
+        using K = VectorKind;
+#define PS5LIFT_BOTH(name) case ZYDIS_MNEMONIC_##name: case ZYDIS_MNEMONIC_V##name
+        switch (mnemonic) {
+        PS5LIFT_BOTH(PADDB): return VectorSpec{K::Add, 8};
+        PS5LIFT_BOTH(PADDW): return VectorSpec{K::Add, 16};
+        PS5LIFT_BOTH(PADDD): return VectorSpec{K::Add, 32};
+        PS5LIFT_BOTH(PADDQ): return VectorSpec{K::Add, 64};
+        PS5LIFT_BOTH(PSUBB): return VectorSpec{K::Sub, 8};
+        PS5LIFT_BOTH(PSUBW): return VectorSpec{K::Sub, 16};
+        PS5LIFT_BOTH(PSUBD): return VectorSpec{K::Sub, 32};
+        PS5LIFT_BOTH(PSUBQ): return VectorSpec{K::Sub, 64};
+        PS5LIFT_BOTH(PADDSB): return VectorSpec{K::AddSignedSaturate, 8};
+        PS5LIFT_BOTH(PADDSW): return VectorSpec{K::AddSignedSaturate, 16};
+        PS5LIFT_BOTH(PADDUSB): return VectorSpec{K::AddUnsignedSaturate, 8};
+        PS5LIFT_BOTH(PADDUSW): return VectorSpec{K::AddUnsignedSaturate, 16};
+        PS5LIFT_BOTH(PSUBSB): return VectorSpec{K::SubSignedSaturate, 8};
+        PS5LIFT_BOTH(PSUBSW): return VectorSpec{K::SubSignedSaturate, 16};
+        PS5LIFT_BOTH(PSUBUSB): return VectorSpec{K::SubUnsignedSaturate, 8};
+        PS5LIFT_BOTH(PSUBUSW): return VectorSpec{K::SubUnsignedSaturate, 16};
+        PS5LIFT_BOTH(PMULLW): return VectorSpec{K::MultiplyLow, 16};
+        PS5LIFT_BOTH(PMULLD): return VectorSpec{K::MultiplyLow, 32};
+        PS5LIFT_BOTH(PMULHW): return VectorSpec{K::MultiplyHighSigned, 16};
+        PS5LIFT_BOTH(PMULHUW): return VectorSpec{K::MultiplyHighUnsigned, 16};
+        PS5LIFT_BOTH(PMULUDQ): return VectorSpec{K::MultiplyEvenUnsigned, 64};
+        PS5LIFT_BOTH(PMULDQ): return VectorSpec{K::MultiplyEvenSigned, 64};
+        PS5LIFT_BOTH(PMADDWD): return VectorSpec{K::MultiplyAddWords, 32};
+        PS5LIFT_BOTH(PMINSB): return VectorSpec{K::MinSigned, 8};
+        PS5LIFT_BOTH(PMINSW): return VectorSpec{K::MinSigned, 16};
+        PS5LIFT_BOTH(PMINSD): return VectorSpec{K::MinSigned, 32};
+        PS5LIFT_BOTH(PMINUB): return VectorSpec{K::MinUnsigned, 8};
+        PS5LIFT_BOTH(PMINUW): return VectorSpec{K::MinUnsigned, 16};
+        PS5LIFT_BOTH(PMINUD): return VectorSpec{K::MinUnsigned, 32};
+        PS5LIFT_BOTH(PMAXSB): return VectorSpec{K::MaxSigned, 8};
+        PS5LIFT_BOTH(PMAXSW): return VectorSpec{K::MaxSigned, 16};
+        PS5LIFT_BOTH(PMAXSD): return VectorSpec{K::MaxSigned, 32};
+        PS5LIFT_BOTH(PMAXUB): return VectorSpec{K::MaxUnsigned, 8};
+        PS5LIFT_BOTH(PMAXUW): return VectorSpec{K::MaxUnsigned, 16};
+        PS5LIFT_BOTH(PMAXUD): return VectorSpec{K::MaxUnsigned, 32};
+        PS5LIFT_BOTH(PCMPEQB): return VectorSpec{K::CompareEqual, 8};
+        PS5LIFT_BOTH(PCMPEQW): return VectorSpec{K::CompareEqual, 16};
+        PS5LIFT_BOTH(PCMPEQD): return VectorSpec{K::CompareEqual, 32};
+        PS5LIFT_BOTH(PCMPEQQ): return VectorSpec{K::CompareEqual, 64};
+        PS5LIFT_BOTH(PCMPGTB): return VectorSpec{K::CompareGreater, 8};
+        PS5LIFT_BOTH(PCMPGTW): return VectorSpec{K::CompareGreater, 16};
+        PS5LIFT_BOTH(PCMPGTD): return VectorSpec{K::CompareGreater, 32};
+        PS5LIFT_BOTH(PCMPGTQ): return VectorSpec{K::CompareGreater, 64};
+        PS5LIFT_BOTH(PAVGB): return VectorSpec{K::Average, 8};
+        PS5LIFT_BOTH(PAVGW): return VectorSpec{K::Average, 16};
+        PS5LIFT_BOTH(PANDN): case ZYDIS_MNEMONIC_ANDNPS: case ZYDIS_MNEMONIC_VANDNPS: case ZYDIS_MNEMONIC_ANDNPD: case ZYDIS_MNEMONIC_VANDNPD: return VectorSpec{K::AndNot, 64};
+        PS5LIFT_BOTH(PABSB): return VectorSpec{K::Absolute, 8};
+        PS5LIFT_BOTH(PABSW): return VectorSpec{K::Absolute, 16};
+        PS5LIFT_BOTH(PABSD): return VectorSpec{K::Absolute, 32};
+        PS5LIFT_BOTH(PSLLW): return VectorSpec{K::ShiftLeft, 16};
+        PS5LIFT_BOTH(PSLLD): return VectorSpec{K::ShiftLeft, 32};
+        PS5LIFT_BOTH(PSLLQ): return VectorSpec{K::ShiftLeft, 64};
+        PS5LIFT_BOTH(PSRLW): return VectorSpec{K::ShiftRightLogical, 16};
+        PS5LIFT_BOTH(PSRLD): return VectorSpec{K::ShiftRightLogical, 32};
+        PS5LIFT_BOTH(PSRLQ): return VectorSpec{K::ShiftRightLogical, 64};
+        PS5LIFT_BOTH(PSRAW): return VectorSpec{K::ShiftRightArithmetic, 16};
+        PS5LIFT_BOTH(PSRAD): return VectorSpec{K::ShiftRightArithmetic, 32};
+        case ZYDIS_MNEMONIC_VPSLLVD: return VectorSpec{K::ShiftLeftVariable, 32};
+        case ZYDIS_MNEMONIC_VPSLLVQ: return VectorSpec{K::ShiftLeftVariable, 64};
+        case ZYDIS_MNEMONIC_VPSRLVD: return VectorSpec{K::ShiftRightLogicalVariable, 32};
+        case ZYDIS_MNEMONIC_VPSRLVQ: return VectorSpec{K::ShiftRightLogicalVariable, 64};
+        case ZYDIS_MNEMONIC_VPSRAVD: return VectorSpec{K::ShiftRightArithmeticVariable, 32};
+        PS5LIFT_BOTH(PSLLDQ): return VectorSpec{K::ShiftLeftBytes, 8};
+        PS5LIFT_BOTH(PSRLDQ): return VectorSpec{K::ShiftRightBytes, 8};
+        PS5LIFT_BOTH(PSHUFD): case ZYDIS_MNEMONIC_VPERMILPS: return VectorSpec{K::ShuffleDwords, 32};
+        PS5LIFT_BOTH(PSHUFLW): return VectorSpec{K::ShuffleLowWords, 16};
+        PS5LIFT_BOTH(PSHUFHW): return VectorSpec{K::ShuffleHighWords, 16};
+        PS5LIFT_BOTH(SHUFPS): return VectorSpec{K::ShufflePairs, 32};
+        PS5LIFT_BOTH(PUNPCKLBW): return VectorSpec{K::UnpackLow, 8};
+        PS5LIFT_BOTH(PUNPCKLWD): return VectorSpec{K::UnpackLow, 16};
+        PS5LIFT_BOTH(PUNPCKLDQ): PS5LIFT_BOTH(UNPCKLPS): return VectorSpec{K::UnpackLow, 32};
+        PS5LIFT_BOTH(PUNPCKLQDQ): PS5LIFT_BOTH(UNPCKLPD): return VectorSpec{K::UnpackLow, 64};
+        PS5LIFT_BOTH(PUNPCKHBW): return VectorSpec{K::UnpackHigh, 8};
+        PS5LIFT_BOTH(PUNPCKHWD): return VectorSpec{K::UnpackHigh, 16};
+        PS5LIFT_BOTH(PUNPCKHDQ): PS5LIFT_BOTH(UNPCKHPS): return VectorSpec{K::UnpackHigh, 32};
+        PS5LIFT_BOTH(PUNPCKHQDQ): PS5LIFT_BOTH(UNPCKHPD): return VectorSpec{K::UnpackHigh, 64};
+        PS5LIFT_BOTH(PACKSSWB): return VectorSpec{K::PackSignedSaturate, 8};
+        PS5LIFT_BOTH(PACKSSDW): return VectorSpec{K::PackSignedSaturate, 16};
+        PS5LIFT_BOTH(PACKUSWB): return VectorSpec{K::PackUnsignedSaturate, 8};
+        PS5LIFT_BOTH(PACKUSDW): return VectorSpec{K::PackUnsignedSaturate, 16};
+        PS5LIFT_BOTH(PALIGNR): return VectorSpec{K::AlignRight, 8};
+        PS5LIFT_BOTH(PSHUFB): return VectorSpec{K::ShuffleBytes, 8};
+        case ZYDIS_MNEMONIC_VPERMQ: case ZYDIS_MNEMONIC_VPERMPD: return VectorSpec{K::PermuteQwords, 64};
+        case ZYDIS_MNEMONIC_VPERMD: case ZYDIS_MNEMONIC_VPERMPS: return VectorSpec{K::PermuteDwords, 32};
+        case ZYDIS_MNEMONIC_VPERM2I128: case ZYDIS_MNEMONIC_VPERM2F128: return VectorSpec{K::Permute128, 64};
+        case ZYDIS_MNEMONIC_VINSERTI128: case ZYDIS_MNEMONIC_VINSERTF128: return VectorSpec{K::Insert128, 128};
+        case ZYDIS_MNEMONIC_VEXTRACTI128: case ZYDIS_MNEMONIC_VEXTRACTF128: return VectorSpec{K::Extract128, 128};
+        case ZYDIS_MNEMONIC_VPBLENDD: PS5LIFT_BOTH(BLENDPS): return VectorSpec{K::BlendImmediate, 32};
+        PS5LIFT_BOTH(BLENDPD): return VectorSpec{K::BlendImmediate, 64};
+        PS5LIFT_BOTH(PBLENDW): return VectorSpec{K::BlendImmediate, 16};
+        PS5LIFT_BOTH(PBLENDVB): return VectorSpec{K::BlendVariable, 8};
+        PS5LIFT_BOTH(BLENDVPS): return VectorSpec{K::BlendVariable, 32};
+        PS5LIFT_BOTH(BLENDVPD): return VectorSpec{K::BlendVariable, 64};
+        PS5LIFT_BOTH(PMOVZXBW): return VectorSpec{K::ZeroExtend, 16, 8};
+        PS5LIFT_BOTH(PMOVZXBD): return VectorSpec{K::ZeroExtend, 32, 8};
+        PS5LIFT_BOTH(PMOVZXBQ): return VectorSpec{K::ZeroExtend, 64, 8};
+        PS5LIFT_BOTH(PMOVZXWD): return VectorSpec{K::ZeroExtend, 32, 16};
+        PS5LIFT_BOTH(PMOVZXWQ): return VectorSpec{K::ZeroExtend, 64, 16};
+        PS5LIFT_BOTH(PMOVZXDQ): return VectorSpec{K::ZeroExtend, 64, 32};
+        PS5LIFT_BOTH(PMOVSXBW): return VectorSpec{K::SignExtend, 16, 8};
+        PS5LIFT_BOTH(PMOVSXBD): return VectorSpec{K::SignExtend, 32, 8};
+        PS5LIFT_BOTH(PMOVSXBQ): return VectorSpec{K::SignExtend, 64, 8};
+        PS5LIFT_BOTH(PMOVSXWD): return VectorSpec{K::SignExtend, 32, 16};
+        PS5LIFT_BOTH(PMOVSXWQ): return VectorSpec{K::SignExtend, 64, 16};
+        PS5LIFT_BOTH(PMOVSXDQ): return VectorSpec{K::SignExtend, 64, 32};
+        PS5LIFT_BOTH(PMOVMSKB): return VectorSpec{K::MoveMask, 8};
+        PS5LIFT_BOTH(MOVMSKPS): return VectorSpec{K::MoveMask, 32};
+        PS5LIFT_BOTH(MOVMSKPD): return VectorSpec{K::MoveMask, 64};
+        PS5LIFT_BOTH(PEXTRB): return VectorSpec{K::Extract, 8};
+        PS5LIFT_BOTH(PEXTRW): return VectorSpec{K::Extract, 16};
+        PS5LIFT_BOTH(PEXTRD): PS5LIFT_BOTH(EXTRACTPS): return VectorSpec{K::Extract, 32};
+        PS5LIFT_BOTH(PEXTRQ): return VectorSpec{K::Extract, 64};
+        PS5LIFT_BOTH(PINSRB): return VectorSpec{K::Insert, 8};
+        PS5LIFT_BOTH(PINSRW): return VectorSpec{K::Insert, 16};
+        PS5LIFT_BOTH(PINSRD): return VectorSpec{K::Insert, 32};
+        PS5LIFT_BOTH(PINSRQ): return VectorSpec{K::Insert, 64};
+        PS5LIFT_BOTH(PTEST): return VectorSpec{K::Test, 64};
+        default: return std::nullopt;
+        }
+#undef PS5LIFT_BOTH
+    }
+
+    llvm::Value* AsVector(llvm::Value* value, const unsigned element) {
+        const auto bits = value->getType()->getIntegerBitWidth();
+        return _builder.CreateBitCast(value, llvm::FixedVectorType::get(Int(element), bits / element));
+    }
+
+    llvm::Value* AsInteger(llvm::Value* vector) {
+        return _builder.CreateBitCast(vector, Int(vector->getType()->getPrimitiveSizeInBits().getFixedValue()));
+    }
+
+    llvm::Value* Splat(llvm::Value* vector, llvm::Value* scalar) {
+        return _builder.CreateVectorSplat(llvm::cast<llvm::FixedVectorType>(vector->getType())->getNumElements(), scalar);
+    }
+
+    llvm::Value* ShuffleWithZero(llvm::Value* a, llvm::Value* b, const std::vector<int>& mask) {
+        const auto count = static_cast<int>(mask.size());
+        std::vector<int> picked(mask.size());
+        std::vector<int> zeroed(mask.size());
+        bool anyZero = false;
+        for (int i = 0; i < count; ++i) {
+            picked[i] = mask[i] < 0 ? 0 : mask[i];
+            zeroed[i] = mask[i] < 0 ? count + i : i;
+            anyZero = anyZero || mask[i] < 0;
+        }
+        auto* result = _builder.CreateShuffleVector(a, b, picked);
+        if (!anyZero) return result;
+        return _builder.CreateShuffleVector(result, llvm::Constant::getNullValue(result->getType()), zeroed);
+    }
+
+    std::uint64_t Immediate(const int index) const {
+        const auto& operand = Operand(index);
+        if (operand.type != ZYDIS_OPERAND_TYPE_IMMEDIATE) throw UnsupportedInstruction("expected an immediate");
+        return operand.imm.value.u;
+    }
+
+    int Base(const int legacyVisible) const {
+        return _instruction->Info.operand_count_visible > legacyVisible ? 1 : 0;
+    }
+
+    llvm::Value* ShiftByCount(const VectorKind kind, llvm::Value* vector, llvm::Value* counts, const unsigned element) {
+        auto* limit = Splat(vector, llvm::ConstantInt::get(Int(element), element - 1));
+        auto* clamped = _builder.CreateBinaryIntrinsic(llvm::Intrinsic::umin, counts, limit);
+        auto* tooLarge = _builder.CreateICmpUGT(counts, limit);
+        auto* zero = llvm::Constant::getNullValue(vector->getType());
+        switch (kind) {
+        case VectorKind::ShiftLeft:
+        case VectorKind::ShiftLeftVariable:
+            return _builder.CreateSelect(tooLarge, zero, _builder.CreateShl(vector, clamped));
+        case VectorKind::ShiftRightLogical:
+        case VectorKind::ShiftRightLogicalVariable:
+            return _builder.CreateSelect(tooLarge, zero, _builder.CreateLShr(vector, clamped));
+        default:
+            return _builder.CreateAShr(vector, clamped);
+        }
+    }
+
+    llvm::Value* Saturate(llvm::Value* wide, const unsigned element, const bool isSigned) {
+        auto* type = wide->getType();
+        const auto wideBits = llvm::cast<llvm::FixedVectorType>(type)->getElementType()->getIntegerBitWidth();
+        const auto low = isSigned ? llvm::APInt::getSignedMinValue(element).sext(wideBits) : llvm::APInt::getZero(wideBits);
+        const auto high = isSigned ? llvm::APInt::getSignedMaxValue(element).sext(wideBits) : llvm::APInt::getMaxValue(element).zext(wideBits);
+        auto* clamped = _builder.CreateBinaryIntrinsic(llvm::Intrinsic::smax, wide, llvm::ConstantInt::get(type, low));
+        clamped = _builder.CreateBinaryIntrinsic(llvm::Intrinsic::smin, clamped, llvm::ConstantInt::get(type, high));
+        return _builder.CreateTrunc(clamped, llvm::FixedVectorType::get(Int(element), llvm::cast<llvm::FixedVectorType>(type)->getNumElements()));
+    }
+
+    bool EmitVector(const ZydisMnemonic mnemonic) {
+        const auto spec = VectorSpecOf(mnemonic);
+        if (!spec) return false;
+        const auto element = spec->Element;
+        const auto kind = spec->Kind;
+        using K = VectorKind;
+
+        if (kind == K::MoveMask) {
+            auto* source = Read(1);
+            auto* negative = _builder.CreateICmpSLT(AsVector(source, element), llvm::Constant::getNullValue(AsVector(source, element)->getType()));
+            auto* bits = _builder.CreateBitCast(negative, Int(source->getType()->getIntegerBitWidth() / element));
+            Write(0, _builder.CreateZExt(bits, Int(Bits(0))));
+            return true;
+        }
+        if (kind == K::Extract) {
+            auto* source = AsVector(ReadRegister(Operand(1).reg.value), element);
+            const auto count = llvm::cast<llvm::FixedVectorType>(source->getType())->getNumElements();
+            auto* value = _builder.CreateExtractElement(source, _builder.getInt64(Immediate(2) & (std::min(count, 128 / element) - 1)));
+            Write(0, _builder.CreateZExtOrTrunc(value, Int(Bits(0))));
+            return true;
+        }
+        if (kind == K::Extract128) {
+            auto* source = AsVector(ReadRegister(Operand(1).reg.value), 128);
+            Write(0, _builder.CreateExtractElement(source, _builder.getInt64(Immediate(2) & 1)));
+            return true;
+        }
+        if (kind == K::Test) {
+            auto* a = Read(0);
+            auto* b = ReadAs(1, a->getType()->getIntegerBitWidth());
+            auto* zero = llvm::ConstantInt::get(a->getType(), 0);
+            SetFlag(PS5LIFT_ZF, _builder.CreateICmpEQ(_builder.CreateAnd(a, b), zero));
+            SetFlag(PS5LIFT_CF, _builder.CreateICmpEQ(_builder.CreateAnd(_builder.CreateNot(a), b), zero));
+            for (const auto flag : {PS5LIFT_PF, PS5LIFT_AF, PS5LIFT_SF, PS5LIFT_OF}) SetFlag(flag, _builder.getFalse());
+            return true;
+        }
+
+        const auto width = Bits(0);
+        const unsigned lanes = width / 128;
+        const unsigned count = width / element;
+        const unsigned perLane = 128 / element;
+        llvm::Value* result = nullptr;
+
+        switch (kind) {
+        case K::Absolute:
+            result = _builder.CreateBinaryIntrinsic(llvm::Intrinsic::abs, AsVector(ReadAs(1, width), element), _builder.getFalse());
+            break;
+        case K::ZeroExtend:
+        case K::SignExtend: {
+            auto* source = Read(1);
+            auto* narrow = _builder.CreateZExtOrTrunc(source, Int(count * spec->Source));
+            auto* vector = AsVector(narrow, spec->Source);
+            auto* target = llvm::FixedVectorType::get(Int(element), count);
+            result = kind == K::ZeroExtend ? _builder.CreateZExt(vector, target) : _builder.CreateSExt(vector, target);
+            break;
+        }
+        case K::ShuffleDwords:
+        case K::ShuffleLowWords:
+        case K::ShuffleHighWords: {
+            auto* source = AsVector(ReadAs(1, width), element);
+            const auto control = Immediate(2);
+            std::vector<int> mask(count);
+            for (unsigned lane = 0; lane < lanes; ++lane) {
+                for (unsigned i = 0; i < perLane; ++i) {
+                    const auto base = lane * perLane;
+                    int picked = static_cast<int>(base + i);
+                    if (kind == K::ShuffleDwords) picked = static_cast<int>(base + ((control >> (2 * i)) & 3));
+                    if (kind == K::ShuffleLowWords && i < 4) picked = static_cast<int>(base + ((control >> (2 * i)) & 3));
+                    if (kind == K::ShuffleHighWords && i >= 4) picked = static_cast<int>(base + 4 + ((control >> (2 * (i - 4))) & 3));
+                    mask[base + i] = picked;
+                }
+            }
+            result = _builder.CreateShuffleVector(source, source, mask);
+            break;
+        }
+        case K::PermuteQwords: {
+            auto* source = AsVector(ReadAs(1, width), element);
+            const auto control = Immediate(2);
+            std::vector<int> mask(count);
+            for (unsigned i = 0; i < count; ++i) mask[i] = static_cast<int>((control >> (2 * i)) & 3);
+            result = _builder.CreateShuffleVector(source, source, mask);
+            break;
+        }
+        case K::ShiftLeftBytes:
+        case K::ShiftRightBytes: {
+            const int base = Base(2);
+            auto* source = AsVector(ReadAs(base, width), 8);
+            const auto amount = static_cast<int>(std::min<std::uint64_t>(Immediate(base + 1), 16));
+            std::vector<int> mask(count);
+            for (unsigned lane = 0; lane < lanes; ++lane) {
+                for (int i = 0; i < 16; ++i) {
+                    const int from = kind == K::ShiftLeftBytes ? i - amount : i + amount;
+                    mask[lane * 16 + i] = from >= 0 && from < 16 ? static_cast<int>(lane * 16) + from : -1;
+                }
+            }
+            result = ShuffleWithZero(source, source, mask);
+            break;
+        }
+        case K::ShiftLeft:
+        case K::ShiftRightLogical:
+        case K::ShiftRightArithmetic: {
+            const int base = Base(2);
+            auto* vector = AsVector(ReadAs(base, width), element);
+            llvm::Value* amount = nullptr;
+            if (Operand(base + 1).type == ZYDIS_OPERAND_TYPE_IMMEDIATE) amount = _builder.getInt64(Immediate(base + 1) & 0xff);
+            else amount = _builder.CreateTrunc(ReadAs(base + 1, 128), I64());
+            auto* clampedScalar = _builder.CreateBinaryIntrinsic(llvm::Intrinsic::umin, amount, _builder.getInt64(element));
+            result = ShiftByCount(kind, vector, Splat(vector, _builder.CreateTrunc(clampedScalar, Int(element))), element);
+            break;
+        }
+        default: {
+            const bool hasImmediate = kind == K::AlignRight || kind == K::BlendImmediate || kind == K::Permute128 || kind == K::Insert128 || kind == K::ShufflePairs || kind == K::Insert;
+            const int base = Base(hasImmediate ? 3 : (kind == K::BlendVariable ? (_instruction->Info.encoding == ZYDIS_INSTRUCTION_ENCODING_VEX ? 3 : 2) : 2));
+            auto* a = ReadAs(base, width);
+            auto* rawB = Read(base + 1);
+            auto* b = kind == K::Insert || kind == K::Insert128 ? rawB : _builder.CreateZExtOrTrunc(rawB, Int(width));
+            auto* va = AsVector(a, element);
+            auto* vb = kind == K::Insert || kind == K::Insert128 ? nullptr : AsVector(b, element);
+            switch (kind) {
+            case K::Add: result = _builder.CreateAdd(va, vb); break;
+            case K::Sub: result = _builder.CreateSub(va, vb); break;
+            case K::AddSignedSaturate: result = _builder.CreateBinaryIntrinsic(llvm::Intrinsic::sadd_sat, va, vb); break;
+            case K::AddUnsignedSaturate: result = _builder.CreateBinaryIntrinsic(llvm::Intrinsic::uadd_sat, va, vb); break;
+            case K::SubSignedSaturate: result = _builder.CreateBinaryIntrinsic(llvm::Intrinsic::ssub_sat, va, vb); break;
+            case K::SubUnsignedSaturate: result = _builder.CreateBinaryIntrinsic(llvm::Intrinsic::usub_sat, va, vb); break;
+            case K::MultiplyLow: result = _builder.CreateMul(va, vb); break;
+            case K::MinSigned: result = _builder.CreateBinaryIntrinsic(llvm::Intrinsic::smin, va, vb); break;
+            case K::MaxSigned: result = _builder.CreateBinaryIntrinsic(llvm::Intrinsic::smax, va, vb); break;
+            case K::MinUnsigned: result = _builder.CreateBinaryIntrinsic(llvm::Intrinsic::umin, va, vb); break;
+            case K::MaxUnsigned: result = _builder.CreateBinaryIntrinsic(llvm::Intrinsic::umax, va, vb); break;
+            case K::CompareEqual: result = _builder.CreateSExt(_builder.CreateICmpEQ(va, vb), va->getType()); break;
+            case K::CompareGreater: result = _builder.CreateSExt(_builder.CreateICmpSGT(va, vb), va->getType()); break;
+            case K::AndNot: result = _builder.CreateAnd(_builder.CreateNot(va), vb); break;
+            case K::MultiplyHighSigned:
+            case K::MultiplyHighUnsigned: {
+                auto* wide = llvm::FixedVectorType::get(Int(element * 2), count);
+                const bool isSigned = kind == K::MultiplyHighSigned;
+                auto* product = _builder.CreateMul(isSigned ? _builder.CreateSExt(va, wide) : _builder.CreateZExt(va, wide), isSigned ? _builder.CreateSExt(vb, wide) : _builder.CreateZExt(vb, wide));
+                result = _builder.CreateTrunc(_builder.CreateLShr(product, element), va->getType());
+                break;
+            }
+            case K::MultiplyEvenUnsigned:
+            case K::MultiplyEvenSigned: {
+                auto* shift = Splat(va, _builder.getInt64(32));
+                auto* left = kind == K::MultiplyEvenUnsigned ? _builder.CreateAnd(va, Splat(va, _builder.getInt64(0xffffffff))) : _builder.CreateAShr(_builder.CreateShl(va, shift), shift);
+                auto* right = kind == K::MultiplyEvenUnsigned ? _builder.CreateAnd(vb, Splat(vb, _builder.getInt64(0xffffffff))) : _builder.CreateAShr(_builder.CreateShl(vb, shift), shift);
+                result = _builder.CreateMul(left, right);
+                break;
+            }
+            case K::MultiplyAddWords: {
+                auto* words = llvm::FixedVectorType::get(Int(32), count * 2);
+                auto* product = _builder.CreateMul(_builder.CreateSExt(AsVector(a, 16), words), _builder.CreateSExt(AsVector(b, 16), words));
+                std::vector<int> even(count);
+                std::vector<int> odd(count);
+                for (unsigned i = 0; i < count; ++i) {
+                    even[i] = static_cast<int>(2 * i);
+                    odd[i] = static_cast<int>(2 * i + 1);
+                }
+                result = _builder.CreateAdd(_builder.CreateShuffleVector(product, product, even), _builder.CreateShuffleVector(product, product, odd));
+                break;
+            }
+            case K::Average: {
+                auto* wide = llvm::FixedVectorType::get(Int(element * 2), count);
+                auto* sum = _builder.CreateAdd(_builder.CreateAdd(_builder.CreateZExt(va, wide), _builder.CreateZExt(vb, wide)), llvm::ConstantInt::get(wide, 1));
+                result = _builder.CreateTrunc(_builder.CreateLShr(sum, 1), va->getType());
+                break;
+            }
+            case K::ShiftLeftVariable:
+            case K::ShiftRightLogicalVariable:
+            case K::ShiftRightArithmeticVariable:
+                result = ShiftByCount(kind, va, vb, element);
+                break;
+            case K::UnpackLow:
+            case K::UnpackHigh: {
+                std::vector<int> mask(count);
+                for (unsigned lane = 0; lane < lanes; ++lane) {
+                    for (unsigned i = 0; i < perLane / 2; ++i) {
+                        const auto from = lane * perLane + (kind == K::UnpackHigh ? perLane / 2 : 0) + i;
+                        mask[lane * perLane + 2 * i] = static_cast<int>(from);
+                        mask[lane * perLane + 2 * i + 1] = static_cast<int>(count + from);
+                    }
+                }
+                result = _builder.CreateShuffleVector(va, vb, mask);
+                break;
+            }
+            case K::ShufflePairs: {
+                const auto control = Immediate(base + 2);
+                std::vector<int> mask(count);
+                for (unsigned lane = 0; lane < lanes; ++lane) {
+                    for (unsigned i = 0; i < 4; ++i) {
+                        const auto selected = static_cast<int>(lane * 4 + ((control >> (2 * i)) & 3));
+                        mask[lane * 4 + i] = i < 2 ? selected : static_cast<int>(count) + selected;
+                    }
+                }
+                result = _builder.CreateShuffleVector(va, vb, mask);
+                break;
+            }
+            case K::PackSignedSaturate:
+            case K::PackUnsignedSaturate: {
+                auto* wa = AsVector(a, element * 2);
+                auto* wb = AsVector(b, element * 2);
+                auto* na = Saturate(wa, element, kind == K::PackSignedSaturate);
+                auto* nb = Saturate(wb, element, kind == K::PackSignedSaturate);
+                const unsigned half = perLane / 2;
+                const unsigned narrowCount = count / 2;
+                std::vector<int> mask(count);
+                for (unsigned lane = 0; lane < lanes; ++lane) {
+                    for (unsigned i = 0; i < half; ++i) {
+                        mask[lane * perLane + i] = static_cast<int>(lane * half + i);
+                        mask[lane * perLane + half + i] = static_cast<int>(narrowCount + lane * half + i);
+                    }
+                }
+                result = _builder.CreateShuffleVector(na, nb, mask);
+                break;
+            }
+            case K::AlignRight: {
+                const auto amount = static_cast<int>(Immediate(base + 2) & 0xff);
+                std::vector<int> mask(count);
+                for (unsigned lane = 0; lane < lanes; ++lane) {
+                    for (int i = 0; i < 16; ++i) {
+                        const int from = i + amount;
+                        const int laneBase = static_cast<int>(lane * 16);
+                        mask[laneBase + i] = from < 16 ? static_cast<int>(count) + laneBase + from : from < 32 ? laneBase + from - 16 : -1;
+                    }
+                }
+                result = ShuffleWithZero(va, vb, mask);
+                break;
+            }
+            case K::ShuffleBytes: {
+                result = llvm::Constant::getNullValue(va->getType());
+                for (unsigned i = 0; i < count; ++i) {
+                    auto* selector = _builder.CreateExtractElement(vb, _builder.getInt64(i));
+                    auto* index = _builder.CreateAdd(_builder.CreateZExt(_builder.CreateAnd(selector, 15), I64()), _builder.getInt64((i / 16) * 16));
+                    auto* picked = _builder.CreateExtractElement(va, index);
+                    auto* value = _builder.CreateSelect(_builder.CreateICmpSLT(selector, _builder.getInt8(0)), _builder.getInt8(0), picked);
+                    result = _builder.CreateInsertElement(result, value, _builder.getInt64(i));
+                }
+                break;
+            }
+            case K::PermuteDwords: {
+                result = llvm::Constant::getNullValue(va->getType());
+                for (unsigned i = 0; i < count; ++i) {
+                    auto* index = _builder.CreateAnd(_builder.CreateExtractElement(va, _builder.getInt64(i)), count - 1);
+                    result = _builder.CreateInsertElement(result, _builder.CreateExtractElement(vb, index), _builder.getInt64(i));
+                }
+                break;
+            }
+            case K::Permute128: {
+                const auto control = Immediate(base + 2);
+                std::vector<int> mask(4);
+                for (int half = 0; half < 2; ++half) {
+                    const auto selector = (control >> (4 * half)) & 0xf;
+                    for (int i = 0; i < 2; ++i) {
+                        const int source = static_cast<int>(selector & 3);
+                        const int from = (source & 2 ? 4 : 0) + (source & 1) * 2 + i;
+                        mask[half * 2 + i] = selector & 8 ? -1 : from;
+                    }
+                }
+                result = ShuffleWithZero(va, vb, mask);
+                break;
+            }
+            case K::Insert128:
+                result = _builder.CreateInsertElement(AsVector(a, 128), _builder.CreateZExtOrTrunc(rawB, Int(128)), _builder.getInt64(Immediate(base + 2) & 1));
+                break;
+            case K::Insert: {
+                const auto index = Immediate(base + 2) & (count - 1);
+                result = _builder.CreateInsertElement(va, _builder.CreateZExtOrTrunc(rawB, Int(element)), _builder.getInt64(index));
+                break;
+            }
+            case K::BlendImmediate: {
+                const auto control = Immediate(base + 2);
+                std::vector<int> mask(count);
+                for (unsigned i = 0; i < count; ++i) {
+                    const auto bit = element == 16 ? i % 8 : i;
+                    mask[i] = (control >> bit) & 1 ? static_cast<int>(count + i) : static_cast<int>(i);
+                }
+                result = _builder.CreateShuffleVector(va, vb, mask);
+                break;
+            }
+            case K::BlendVariable: {
+                auto* selector = _instruction->Info.encoding == ZYDIS_INSTRUCTION_ENCODING_VEX ? ReadAs(base + 2, width) : _builder.CreateTrunc(ReadRegister(ZYDIS_REGISTER_XMM0), Int(width));
+                auto* negative = _builder.CreateICmpSLT(AsVector(selector, element), llvm::Constant::getNullValue(va->getType()));
+                result = _builder.CreateSelect(negative, vb, va);
+                break;
+            }
+            default:
+                throw UnsupportedInstruction("vector form");
+            }
+            break;
+        }
+        }
+        Write(0, AsInteger(result));
+        return true;
+    }
+
     void EmitInstruction(const Instruction& instruction) {
         try {
             EmitSemantics(instruction.Info.mnemonic);
@@ -1087,6 +1632,8 @@ private:
         case ZYDIS_MNEMONIC_MOVSS:
         case ZYDIS_MNEMONIC_VMOVAPS: case ZYDIS_MNEMONIC_VMOVUPS: case ZYDIS_MNEMONIC_VMOVAPD: case ZYDIS_MNEMONIC_VMOVUPD:
         case ZYDIS_MNEMONIC_VMOVDQA: case ZYDIS_MNEMONIC_VMOVDQU: case ZYDIS_MNEMONIC_VMOVQ: case ZYDIS_MNEMONIC_VMOVD:
+        case ZYDIS_MNEMONIC_MOVNTDQ: case ZYDIS_MNEMONIC_VMOVNTDQ: case ZYDIS_MNEMONIC_MOVNTPS: case ZYDIS_MNEMONIC_VMOVNTPS:
+        case ZYDIS_MNEMONIC_MOVNTDQA: case ZYDIS_MNEMONIC_VMOVNTDQA: case ZYDIS_MNEMONIC_LDDQU: case ZYDIS_MNEMONIC_VLDDQU:
             if (_instruction->Info.operand_count_visible != 2) throw UnsupportedInstruction("merge form");
             VectorMove();
             return;
@@ -1107,7 +1654,7 @@ private:
             Broadcast();
             return;
         case ZYDIS_MNEMONIC_VZEROUPPER:
-            for (int i = 0; i < 16; ++i) _builder.CreateStore(llvm::ConstantInt::get(Int(128), 0), _builder.CreateConstGEP1_64(_builder.getInt8Ty(), VectorField(i), 16));
+            for (int i = 0; i < VectorCount; ++i) SetVector(i, _builder.CreateZExt(_builder.CreateTrunc(Vector(i), Int(128)), Int(256)));
             return;
         case ZYDIS_MNEMONIC_CALL: {
             const auto target = DirectTarget(*_instruction);
@@ -1154,6 +1701,7 @@ private:
             Trap();
             return;
         default:
+            if (EmitVector(mnemonic)) return;
             throw UnsupportedInstruction("");
         }
     }

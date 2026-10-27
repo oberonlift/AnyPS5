@@ -14,8 +14,6 @@ FIXTURES = ROOT / "tests" / "fixtures"
 GUEST_FLAGS = [
     "--target=x86_64-unknown-linux-gnu",
     "-march=znver2",
-    "-fno-vectorize",
-    "-fno-slp-vectorize",
     "-fno-stack-protector",
     "-fno-builtin",
     "-ffreestanding",
@@ -51,7 +49,7 @@ def runner_for(triple):
         if qemu is None:
             raise SystemExit("running aarch64 code on this host needs qemu-aarch64")
         sysroot = os.environ.get("PS5LIFT_AARCH64_SYSROOT", "/usr/aarch64-linux-gnu")
-        return [qemu, "-L", sysroot]
+        return [qemu, "-one-insn-per-tb", "-L", sysroot]
     raise SystemExit(f"cannot run {triple} on {platform.machine()}")
 
 
@@ -61,12 +59,13 @@ def lifter_features(triple, runner):
     return []
 
 
-def build_guest(clang, work, name, optimization, defines=()):
+def build_guest(clang, work, name, optimization, defines=(), vectorize=False, suffix=""):
     library = work / "libhost.so"
     if not library.exists():
         run([clang, *GUEST_FLAGS, "-O2", "-fPIC", "-shared", FIXTURES / "host_stub.c", "-o", library])
-    guest = work / f"{name}{optimization}"
-    run([clang, optimization, *GUEST_FLAGS, *defines, "-fno-pic", "-no-pie", "-Wl,--image-base=0x20000000",
+    guest = work / f"{name}{optimization}{suffix}"
+    vector_flags = [] if vectorize else ["-fno-vectorize", "-fno-slp-vectorize"]
+    run([clang, optimization, *GUEST_FLAGS, *vector_flags, *defines, "-fno-pic", "-no-pie", "-Wl,--image-base=0x20000000",
          "-Wl,--dynamic-linker=/lib64/ld-linux-x86-64.so.2", FIXTURES / f"{name}.c", f"-L{work}", "-lhost", "-o", guest])
     return guest
 

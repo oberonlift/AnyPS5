@@ -36,7 +36,7 @@ def main():
     work = Path(tempfile.mkdtemp(prefix="ps5lift-bench-"))
     try:
         scale = [f"-DBENCH_SCALE={args.scale}"]
-        guest = build_guest(args.clang, work, "bench", "-O2", scale)
+        guests = {"": build_guest(args.clang, work, "bench", "-O2", scale), "-vec": build_guest(args.clang, work, "bench", "-O2", scale, vectorize=True, suffix="-vec")}
         programs = {}
         for vectorize in (True, False):
             name = "native" if vectorize else "native-novec"
@@ -44,14 +44,15 @@ def main():
             cpu_flag = ([] if runner else ["-march=native"] if args.triple.startswith("x86_64") else ["-mcpu=native"])
             programs[name] = work / name
             run([args.clang, f"--target={args.triple}", "-O2", *cpu_flag, *flags, *scale, FIXTURES / "bench.c", FIXTURES / "host_native.c", "-fuse-ld=lld", "-o", programs[name]])
-        for memory in ("relaxed", "tso"):
-            lifted = work / f"bench-{memory}.o"
+        for memory, suffix in (("relaxed", ""), ("tso", ""), ("tso", "-vec")):
+            name = f"lifted-{memory}{suffix}"
+            lifted = work / f"{name}.o"
             cpu_args = ["--cpu", cpu] if cpu else []
-            report = run([args.ps5lift, guest, "-o", lifted, "--triple", args.triple, "--memory", memory, *cpu_args, *lifter_features(args.triple, runner)]).stderr.strip()
-            print(f"lifted {memory}: {report}")
-            programs[f"lifted-{memory}"] = work / f"lifted-{memory}"
+            report = run([args.ps5lift, guests[suffix], "-o", lifted, "--triple", args.triple, "--memory", memory, *cpu_args, *lifter_features(args.triple, runner)]).stderr.strip()
+            print(f"{name}: {report}")
+            programs[name] = work / name
             run([args.clangxx, f"--target={args.triple}", "-std=c++20", "-O2", f"-I{ROOT / 'runtime' / 'include'}", ROOT / "runtime" / "src" / "Runtime.cpp",
-                 FIXTURES / "host_bridge.cpp", lifted, "-fuse-ld=lld", "-pthread", "-o", programs[f"lifted-{memory}"]])
+                 FIXTURES / "host_bridge.cpp", lifted, "-fuse-ld=lld", "-pthread", "-o", programs[name]])
 
         reference = None
         best = {}
@@ -69,11 +70,12 @@ def main():
             print(f"note: {args.triple} runs under {Path(runner[0]).name}; the times measure the emulator, not the hardware")
         print(f"host {platform.machine()} {platform.node()}, triple {args.triple}, scale {args.scale}, best of {args.repeat}")
         columns = list(programs)
-        print(f"{'kernel':8}" + "".join(f"{name:>16}" for name in columns) + f"{'tso/relaxed':>14}" + f"{'tso/native':>12}")
+        print(f"{'kernel':8}" + "".join(f"{name:>16}" for name in columns) + f"{'tso/relaxed':>14}" + f"{'tso/native':>12}" + f"{'vec/native':>12}")
         for kernel in reference:
             row = f"{kernel:8}" + "".join(f"{best[(name, kernel)] / 1e6:14.1f}ms" for name in columns)
             row += f"{best[('lifted-tso', kernel)] / best[('lifted-relaxed', kernel)]:13.2f}x"
             row += f"{best[('lifted-tso', kernel)] / best[('native-novec', kernel)]:11.2f}x"
+            row += f"{best[('lifted-tso-vec', kernel)] / best[('native', kernel)]:11.2f}x"
             print(row)
     finally:
         shutil.rmtree(work)
