@@ -19,8 +19,14 @@ enum class MemoryModel {
     Relaxed
 };
 
+enum class FloatModel {
+    Exact,
+    Fast
+};
+
 struct LiftOptions {
     MemoryModel Memory = MemoryModel::Tso;
+    FloatModel Float = FloatModel::Exact;
 };
 
 struct LiftReport {

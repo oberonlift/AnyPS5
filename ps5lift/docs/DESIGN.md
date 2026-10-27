@@ -45,11 +45,23 @@ Guest memory accesses and register-state accesses carry distinct TBAA tags. The 
 
 Flags are computed exactly for add, adc, sub, sbb, cmp, logic, inc, dec, neg, shifts and rotates (including the count-zero case), the multiplies and the BMI1/BMI2 instructions. Shifts are computed in 128 bits so no LLVM shift is ever poison. AF is computed for arithmetic and cleared for logic.
 
+## Floating point
+
+`--float exact` (the default) reproduces SSE and AVX results bit for bit, including NaNs, which LLVM otherwise leaves unspecified:
+
+- A NaN result is the first NaN source, quieted: the first operand for two-operand arithmetic, and for FMA the left multiplicand, the right multiplicand, then the addend, as measured on an Intel host. Invalid operations without a NaN source give the negative default NaN (`0xffc00000`, `0xfff8000000000000`).
+- `min` and `max` return the second operand when either is NaN or both are zero, and under DAZ return a denormal operand as a signed zero.
+- Conversions to integers return the integer indefinite value (`0x80000000`, `0x8000000000000000`) for NaN and out-of-range inputs; float, double and half conversions carry NaN payloads as x86 does; `vcvtps2ph` with an immediate rounding mode is computed in integer arithmetic so it ignores the dynamic mode.
+- Scalar instructions merge into the destination (legacy) or the first source (VEX) and zero bits 128-255 for VEX.
+- `ldmxcsr` stores the guest MXCSR and calls the runtime, which sets the host rounding mode and flushing: on aarch64 with FEAT_AFP (the GB10), DAZ maps to `FPCR.FIZ` and FTZ to `FPCR.FZ` with `FPCR.AH`; without it either bit sets `FPCR.FZ`. Guests start with the console's MXCSR, `0x9fc0`.
+
+`--float fast` drops the NaN and DAZ handling and leaves NaN payloads to the host.
+
 ## Roadmap
 
 1. **Fixtures (done).** Integer code, calls, recursion, function pointers, jump tables, 128-bit products, division, atomics and Zen 2 BMI code lift and match the native output at -O0 to -O3, for aarch64 and x86-64.
 2. **PS5 executables.** Read SELF and the PS5 dynamic sections through AnyPS5 instead of host ELF sections; load PIE images at a chosen base and apply `R_X86_64_RELATIVE`; seed discovery from relocation targets and the init and fini arrays; generate the import bridges from AnyPS5's exports by NID; lift the bundled `sce_module` files.
 3. **Native AnyPS5 libraries on aarch64.** Build the libraries for aarch64 and port their x86-specific parts (`UserContext`, `Fiber`, `RaiseException`, `Backtrace`, `HostCpu`, `FloatingPoint`, `AtomicBuiltins`, about 28 files) to read and write `Ps5LiftState`. Reverse bridges let native code call guest callbacks: thread entries, `atexit`, comparators, fibers and JobManager jobs.
-4. **SSE and AVX2.** Integer vector instructions are done: arithmetic, saturation, compares, shifts, shuffles with x86 per-lane rules, packs, blends, extends, permutes, extracts and inserts, checked against native results by `tests/fixtures/vector.c`. Remaining: floating point with exact x86 behaviour: NaN rules of `minps`/`maxps`, out-of-range `cvtt*` results, MXCSR rounding, flush-to-zero and denormals-are-zero, x87 for libc's `long double`.
+4. **SSE, AVX2, FMA and F16C (done).** Integer and floating-point vector instructions, scalar SSE math, FMA3 and F16C, checked against native results by `tests/fixtures/vector.c` and `tests/fixtures/float.c` under three MXCSR settings. Remaining: x87 for libc's `long double`, `dpps`, gathers and masked moves.
 5. **Exceptions.** Landing pads as dispatch entries so guest `.eh_frame` unwinding can resume inside lifted code.
 6. **Breakout demo, then one title.** Followed by performance work: relaxing ordering where provably private, keeping vector registers in SSA, and recovering prototypes so hot functions skip the state.

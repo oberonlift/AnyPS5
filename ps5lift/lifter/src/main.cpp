@@ -14,7 +14,7 @@
 
 namespace {
 
-constexpr std::string_view Usage = "usage: ps5lift <input.elf> -o <output.o> [--triple <triple>] [--cpu <cpu>|native] [--features <list>] [--memory tso|relaxed] [--emit-ir <file.ll>] [-O0]\n";
+constexpr std::string_view Usage = "usage: ps5lift <input.elf> -o <output.o> [--triple <triple>] [--cpu <cpu>|native] [--features <list>] [--memory tso|relaxed] [--float exact|fast] [--emit-ir <file.ll>] [-O0]\n";
 
 }
 
@@ -46,6 +46,14 @@ int main(int argc, char** argv) {
             else if (model == "relaxed") lift.Memory = Ps5Lift::MemoryModel::Relaxed;
             else {
                 std::cerr << "unknown memory model " << model << "\n";
+                return 2;
+            }
+        } else if (argument == "--float") {
+            const auto model = value();
+            if (model == "exact") lift.Float = Ps5Lift::FloatModel::Exact;
+            else if (model == "fast") lift.Float = Ps5Lift::FloatModel::Fast;
+            else {
+                std::cerr << "unknown float model " << model << "\n";
                 return 2;
             }
         } else if (input.empty() && !argument.starts_with("-")) input = argument;

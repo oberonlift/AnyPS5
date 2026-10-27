@@ -92,12 +92,17 @@ def main():
 
     optimizations = args.optimization or ["-O0", "-O1", "-O2", "-O3"]
     memories = args.memory or ["tso", "relaxed"]
-    expected = (FIXTURES / f"{args.fixture}.expected").read_text()
+
+    def expected_for(optimization):
+        specific = FIXTURES / f"{args.fixture}{optimization}.expected"
+        return (specific if specific.exists() else FIXTURES / f"{args.fixture}.expected").read_text()
+
     runner = runner_for(args.triple)
     work = Path(tempfile.mkdtemp(prefix="ps5lift-"))
     failures = 0
     try:
         for optimization in optimizations:
+            expected = expected_for(optimization)
             guest = build_guest(args.clang, work, args.fixture, optimization)
             if platform.machine() == "x86_64":
                 native = run([guest], env={**os.environ, "LD_LIBRARY_PATH": str(work)}).stdout

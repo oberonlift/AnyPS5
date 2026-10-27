@@ -11,7 +11,7 @@ else()
 endif()
 
 foreach(triple IN LISTS PS5LIFT_TEST_TRIPLES)
-    foreach(fixture basic vector)
+    foreach(fixture basic vector float)
     string(REGEX REPLACE "-.*" "" arch ${triple})
     add_test(NAME fixture_${fixture}_${arch}
             COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tools/run_fixture.py

@@ -1,6 +1,7 @@
 #include <ps5lift/State.h>
 
 #include <pthread.h>
+#include <sys/auxv.h>
 #include <sys/mman.h>
 #include <unistd.h>
 
@@ -12,12 +13,19 @@
 #include <cstdlib>
 #include <cstring>
 
+#if defined(__x86_64__)
+#include <immintrin.h>
+#endif
+
 namespace {
 
 constexpr std::uint64_t GuestStackSize = 8ull << 20;
 constexpr std::size_t HostStackSize = 512ull << 20;
 constexpr std::uint64_t TlsSize = 64ull << 10;
 constexpr std::uint64_t EntryReturnAddress = 0;
+constexpr std::uint32_t ConsoleMxcsr = 0x9fc0;
+constexpr std::uint32_t MxcsrDenormalsAreZero = 1u << 6;
+constexpr std::uint32_t MxcsrFlushToZero = 1u << 15;
 
 [[noreturn]] void Fail(const char* format, ...) __attribute__((format(printf, 1, 2)));
 
@@ -71,7 +79,8 @@ void* RunGuest(void*) {
     const auto threadPointer = reinterpret_cast<std::uint64_t>(tls + TlsSize / 2);
     std::memcpy(reinterpret_cast<void*>(threadPointer), &threadPointer, sizeof(threadPointer));
     state.FsBase = threadPointer;
-    state.Mxcsr = 0x1f80;
+    state.Mxcsr = ConsoleMxcsr;
+    ps5lift_apply_mxcsr(&state);
 
     auto rsp = (reinterpret_cast<std::uint64_t>(stack) + GuestStackSize - 64) & ~std::uint64_t{15};
     rsp -= 8;
@@ -85,6 +94,33 @@ void* RunGuest(void*) {
     std::_Exit(static_cast<int>(state.Gpr[PS5LIFT_RAX] & 0xff));
 }
 
+}
+
+extern "C" void ps5lift_apply_mxcsr(Ps5LiftState* state) {
+    const auto mxcsr = state->Mxcsr;
+#if defined(__aarch64__)
+    constexpr std::uint64_t AlternateHandling = 1u << 1;
+    constexpr std::uint64_t FlushInputs = 1u << 0;
+    constexpr std::uint64_t FlushToZero = 1u << 24;
+    constexpr std::uint64_t RoundingShift = 22;
+    constexpr unsigned long HwcapAfp = 1ul << 20;
+    static const bool alternate = (getauxval(AT_HWCAP2) & HwcapAfp) != 0;
+    static constexpr std::uint64_t Rounding[4] = {0, 2, 1, 3};
+    std::uint64_t fpcr = 0;
+    __asm__ volatile("mrs %0, fpcr" : "=r"(fpcr));
+    fpcr &= ~(FlushInputs | AlternateHandling | FlushToZero | (std::uint64_t{3} << RoundingShift));
+    fpcr |= Rounding[(mxcsr >> 13) & 3] << RoundingShift;
+    if (alternate) {
+        fpcr |= AlternateHandling;
+        if (mxcsr & MxcsrDenormalsAreZero) fpcr |= FlushInputs;
+        if (mxcsr & MxcsrFlushToZero) fpcr |= FlushToZero;
+    } else if (mxcsr & (MxcsrDenormalsAreZero | MxcsrFlushToZero)) {
+        fpcr |= FlushToZero;
+    }
+    __asm__ volatile("msr fpcr, %0" : : "r"(fpcr));
+#elif defined(__x86_64__)
+    _mm_setcsr(mxcsr & ~0x3fu);
+#endif
 }
 
 extern "C" void ps5lift_dispatch(Ps5LiftState* state, const std::uint64_t target) {

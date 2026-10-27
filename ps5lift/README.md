@@ -2,7 +2,7 @@
 
 A static recompiler for PS5 executables. `ps5lift` lifts guest x86-64 code to LLVM IR and compiles it to native code for the host, so a title can run on aarch64 Linux machines such as the NVIDIA DGX Spark (GB10) without an x86 emulator. The system libraries come from [AnyPS5](https://github.com/boykopovar/anyps5), which is a submodule; its ELF reader and `.eh_frame` scanner are the lifter's frontend.
 
-Status: **milestone 1**. Guest code built for Zen 2 lifts and runs on aarch64 with the same output as on x86-64. Real PS5 titles do not run yet; see [the design](docs/DESIGN.md) and [known gaps](docs/DEBT.md).
+Status: **milestone 1**. Guest code built for Zen 2, including SSE, AVX2, FMA and F16C code, lifts and runs on aarch64 with the same output as on x86-64. Real PS5 titles do not run yet; see [the design](docs/DESIGN.md) and [known gaps](docs/DEBT.md).
 
 ## Build
 
@@ -31,6 +31,7 @@ clang++ -O2 -Iruntime/include runtime/src/Runtime.cpp bridges.cpp guest.o -fuse-
 | `--cpu` | `neoverse-v2` on aarch64 | Target CPU; `native` uses the host CPU and features. |
 | `--features` | none | LLVM target features, such as `-rcpc-immo`. |
 | `--memory tso\|relaxed` | `tso` | `tso` keeps x86 ordering with acquire loads and release stores; `relaxed` uses plain accesses and is only correct for single-threaded guests. |
+| `--float exact\|fast` | `exact` | `exact` reproduces x86 NaN, min/max, DAZ and conversion results bit for bit; `fast` leaves NaN payloads to the host. |
 | `--emit-ir file.ll` | none | Writes the optimized LLVM IR. |
 | `-O0` | optimized | Skips the LLVM optimization pipeline. |
 
