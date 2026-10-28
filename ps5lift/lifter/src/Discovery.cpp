@@ -383,7 +383,10 @@ bool ReturnsTwice(const std::string& import) {
 std::map<std::uint64_t, GuestFunction> DiscoverFunctions(const GuestImage& image) {
     const Decoder decoder;
     const auto references = DataReferences(image, decoder);
-    std::set<std::uint64_t> starts{image.Entry()};
+    std::set<std::uint64_t> starts;
+    for (const auto start : {image.Entry(), image.Init()}) {
+        if (start != 0) starts.insert(start);
+    }
     for (const auto& [address, name] : image.Imports()) starts.insert(address);
     for (const auto address : image.CodePointers()) starts.insert(address);
     for (const auto& [address, name] : image.FunctionSymbols()) {

@@ -106,6 +106,28 @@ bool IsSetcc(const ZydisMnemonic mnemonic) {
     }
 }
 
+llvm::Function* DeclareGuest(llvm::Module& module, const std::uint64_t address) {
+    const auto symbol = GuestSymbol(address);
+    if (auto* function = module.getFunction(symbol)) return function;
+    auto* pointer = llvm::PointerType::get(module.getContext(), 0);
+    auto* function = llvm::Function::Create(llvm::FunctionType::get(llvm::Type::getVoidTy(module.getContext()), {pointer}, false), llvm::GlobalValue::ExternalLinkage, symbol, module);
+    function->setVisibility(llvm::GlobalValue::HiddenVisibility);
+    function->addParamAttr(0, llvm::Attribute::NoAlias);
+    function->addParamAttr(0, llvm::Attribute::NoUndef);
+    return function;
+}
+
+std::string ImportName(const LiftOptions& options, const std::string& name) {
+    return options.ImportNids ? Nid(name) : name;
+}
+
+std::unique_ptr<llvm::Module> Verified(std::unique_ptr<llvm::Module> module) {
+    std::string errors;
+    llvm::raw_string_ostream stream(errors);
+    if (llvm::verifyModule(*module, &stream)) throw std::runtime_error("Lifted module does not verify: " + stream.str());
+    return module;
+}
+
 class ModuleLifter {
 public:
     ModuleLifter(llvm::LLVMContext& context, const GuestImage& image, const std::map<std::uint64_t, GuestFunction>& functions, const LiftOptions& options, LiftReport& report)
@@ -127,23 +149,12 @@ public:
             else LiftFunction(function);
             ++_report.Functions;
         }
-        return Verified();
-    }
-
-    std::unique_ptr<llvm::Module> LiftTables() {
-        EmitImage();
-        return Verified();
+        return Verified(std::move(_module));
     }
 
     llvm::Function* Guest(const std::uint64_t address) {
-        const auto symbol = GuestSymbol(address);
-        if (auto* function = _module->getFunction(symbol)) return function;
         if (!_functions.contains(address)) throw std::runtime_error("Call to undiscovered guest function 0x" + Hex(address));
-        auto* function = llvm::Function::Create(_guestType, llvm::GlobalValue::ExternalLinkage, symbol, *_module);
-        function->setVisibility(llvm::GlobalValue::HiddenVisibility);
-        function->addParamAttr(0, llvm::Attribute::NoAlias);
-        function->addParamAttr(0, llvm::Attribute::NoUndef);
-        return function;
+        return DeclareGuest(*_module, address);
     }
 
     llvm::FunctionCallee Runtime(const std::string& name, llvm::FunctionType* type) {
@@ -157,7 +168,7 @@ public:
     llvm::FunctionType* GuestType() const { return _guestType; }
     const LiftOptions& Options() const { return _options; }
 
-    std::string ImportName(const std::string& name) const { return _options.ImportNids ? Nid(name) : name; }
+    std::string ImportName(const std::string& name) const { return Ps5Lift::ImportName(_options, name); }
     LiftReport& Report() { return _report; }
     const std::map<std::uint64_t, GuestFunction>& Functions() const { return _functions; }
     const GuestImage& Image() const { return _image; }
@@ -173,13 +184,6 @@ private:
     llvm::FunctionType* _guestType = nullptr;
     llvm::MDNode* _stateTag = nullptr;
     llvm::MDNode* _guestTag = nullptr;
-
-    std::unique_ptr<llvm::Module> Verified() {
-        std::string errors;
-        llvm::raw_string_ostream stream(errors);
-        if (llvm::verifyModule(*_module, &stream)) throw std::runtime_error("Lifted module does not verify: " + stream.str());
-        return std::move(_module);
-    }
 
     void LiftFunction(const GuestFunction& function);
 
@@ -202,52 +206,87 @@ private:
         builder.CreateRetVoid();
     }
 
-    void EmitImage() {
-        auto* i64 = llvm::Type::getInt64Ty(_context);
-        auto* i32 = llvm::Type::getInt32Ty(_context);
-        auto* segmentType = llvm::StructType::create(_context, {i64, i64, i64, _pointer, i32}, "Ps5LiftSegment");
-        auto* functionType = llvm::StructType::create(_context, {i64, _pointer}, "Ps5LiftFunctionEntry");
-        auto* dataImportType = llvm::StructType::create(_context, {i64, _pointer, i64}, "Ps5LiftDataImport");
-        auto* importType = llvm::StructType::create(_context, {i64, _pointer}, "Ps5LiftImport");
-        auto* imageType = llvm::StructType::create(_context, {_pointer, i64, _pointer, i64, i64, i64, i64, i64, i64, _pointer, i64, _pointer, i64, i64}, "Ps5LiftImage");
+};
 
+class TableLifter {
+public:
+    TableLifter(llvm::LLVMContext& context, const GuestProgram& program, const std::vector<std::map<std::uint64_t, GuestFunction>>& functions, const LiftOptions& options)
+        : _context(context), _program(program), _functions(functions), _options(options), _module(std::make_unique<llvm::Module>("ps5lift", context)),
+          _pointer(llvm::PointerType::get(context, 0)), _i64(llvm::Type::getInt64Ty(context)) {}
+
+    std::unique_ptr<llvm::Module> Lift() {
+        auto* i32 = llvm::Type::getInt32Ty(_context);
+        _segmentType = llvm::StructType::create(_context, {_i64, _i64, _i64, _pointer, i32}, "Ps5LiftSegment");
+        _dataImportType = llvm::StructType::create(_context, {_i64, _pointer, _i64}, "Ps5LiftDataImport");
+        _importType = llvm::StructType::create(_context, {_i64, _pointer}, "Ps5LiftImport");
+        _imageType = llvm::StructType::create(_context, {_pointer, _pointer, _i64, _i64, _i64, _i64, _i64, _pointer, _i64, _pointer, _i64, _i64, _i64, _i64, _i64}, "Ps5LiftImage");
+        auto* functionType = llvm::StructType::create(_context, {_i64, _pointer}, "Ps5LiftFunctionEntry");
+        auto* programType = llvm::StructType::create(_context, {_pointer, _i64, _pointer, _i64, _pointer, _i64, _i64}, "Ps5LiftProgram");
+
+        std::vector<llvm::Constant*> images;
+        for (const auto& image : _program.Images) images.push_back(Image(image));
+        std::map<std::uint64_t, llvm::Constant*> sorted;
+        for (const auto& functions : _functions) {
+            for (const auto& [address, function] : functions) sorted.emplace(address, DeclareGuest(*_module, address));
+        }
+        std::vector<llvm::Constant*> entries;
+        for (const auto& [address, function] : sorted) entries.push_back(llvm::ConstantStruct::get(functionType, {Int(address), function}));
+        std::vector<llvm::Constant*> initialization;
+        for (const auto index : _program.Initialization) initialization.push_back(Int(index));
+
+        auto* program = llvm::ConstantStruct::get(programType, {Table(_imageType, images, "ps5lift_images"), Int(images.size()), Table(_i64, initialization, "ps5lift_initialization"), Int(initialization.size()),
+            Table(functionType, entries, "ps5lift_functions"), Int(entries.size()), Int(_program.Images.front().Entry())});
+        new llvm::GlobalVariable(*_module, programType, true, llvm::GlobalValue::ExternalLinkage, program, "ps5lift_program");
+        return Verified(std::move(_module));
+    }
+
+private:
+    llvm::LLVMContext& _context;
+    const GuestProgram& _program;
+    const std::vector<std::map<std::uint64_t, GuestFunction>>& _functions;
+    const LiftOptions& _options;
+    std::unique_ptr<llvm::Module> _module;
+    llvm::PointerType* _pointer;
+    llvm::IntegerType* _i64;
+    llvm::StructType* _segmentType = nullptr;
+    llvm::StructType* _dataImportType = nullptr;
+    llvm::StructType* _importType = nullptr;
+    llvm::StructType* _imageType = nullptr;
+    std::map<std::string, llvm::GlobalVariable*> _dataSymbols;
+
+    llvm::Constant* Int(const std::uint64_t value) { return llvm::ConstantInt::get(_i64, value); }
+
+    llvm::Constant* Table(llvm::Type* type, const std::vector<llvm::Constant*>& values, const char* name) {
+        auto* array = llvm::ConstantArray::get(llvm::ArrayType::get(type, values.size()), values);
+        return new llvm::GlobalVariable(*_module, array->getType(), true, llvm::GlobalValue::PrivateLinkage, array, name);
+    }
+
+    llvm::Constant* Image(const GuestImage& image) {
+        auto* i32 = llvm::Type::getInt32Ty(_context);
         std::vector<llvm::Constant*> segments;
-        for (const auto& segment : _image.Segments()) {
+        for (const auto& segment : image.Segments()) {
             auto* data = llvm::ConstantDataArray::get(_context, llvm::ArrayRef<std::uint8_t>(segment.Bytes));
             auto* global = new llvm::GlobalVariable(*_module, data->getType(), true, llvm::GlobalValue::PrivateLinkage, data, "segment_" + Hex(segment.Address));
             global->setAlignment(llvm::Align(16));
-            segments.push_back(llvm::ConstantStruct::get(segmentType, {llvm::ConstantInt::get(i64, segment.Address), llvm::ConstantInt::get(i64, segment.MemorySize), llvm::ConstantInt::get(i64, segment.Bytes.size()), global, llvm::ConstantInt::get(i32, segment.Flags)}));
+            segments.push_back(llvm::ConstantStruct::get(_segmentType, {Int(segment.Address), Int(segment.MemorySize), Int(segment.Bytes.size()), global, llvm::ConstantInt::get(i32, segment.Flags)}));
         }
-        std::vector<llvm::Constant*> entries;
-        for (const auto& [address, function] : _functions) entries.push_back(llvm::ConstantStruct::get(functionType, {llvm::ConstantInt::get(i64, address), Guest(address)}));
-
-        auto* segmentArray = llvm::ConstantArray::get(llvm::ArrayType::get(segmentType, segments.size()), segments);
-        auto* segmentGlobal = new llvm::GlobalVariable(*_module, segmentArray->getType(), true, llvm::GlobalValue::PrivateLinkage, segmentArray, "ps5lift_segments");
-        auto* functionArray = llvm::ConstantArray::get(llvm::ArrayType::get(functionType, entries.size()), entries);
-        auto* functionGlobal = new llvm::GlobalVariable(*_module, functionArray->getType(), true, llvm::GlobalValue::PrivateLinkage, functionArray, "ps5lift_functions");
         std::vector<llvm::Constant*> dataImports;
-        std::map<std::string, llvm::GlobalVariable*> dataSymbols;
-        for (const auto& import : _image.DataImports()) {
-            const auto symbol = "ps5lift_data_" + BridgeSymbol(ImportName(import.Name)).substr(std::string_view("ps5lift_import_").size());
-            auto& global = dataSymbols[symbol];
+        for (const auto& import : image.DataImports()) {
+            const auto symbol = "ps5lift_data_" + BridgeSymbol(ImportName(_options, import.Name)).substr(std::string_view("ps5lift_import_").size());
+            auto& global = _dataSymbols[symbol];
             if (!global) global = new llvm::GlobalVariable(*_module, _pointer, true, llvm::GlobalValue::ExternalLinkage, nullptr, symbol);
-            dataImports.push_back(llvm::ConstantStruct::get(dataImportType, {llvm::ConstantInt::get(i64, import.Slot), global, llvm::ConstantInt::get(i64, static_cast<std::uint64_t>(import.Addend))}));
+            dataImports.push_back(llvm::ConstantStruct::get(_dataImportType, {Int(import.Slot), global, Int(static_cast<std::uint64_t>(import.Addend))}));
         }
         std::vector<llvm::Constant*> imports;
-        for (const auto& [address, name] : _image.Imports()) {
-            auto* text = llvm::IRBuilder<>(_context).CreateGlobalStringPtr(ImportName(name), "import_name", 0, _module.get());
-            imports.push_back(llvm::ConstantStruct::get(importType, {llvm::ConstantInt::get(i64, address), text}));
+        for (const auto& [address, name] : image.Imports()) {
+            auto* text = llvm::IRBuilder<>(_context).CreateGlobalStringPtr(ImportName(_options, name), "import_name", 0, _module.get());
+            imports.push_back(llvm::ConstantStruct::get(_importType, {Int(address), text}));
         }
-        const auto table = [&](llvm::StructType* type, const std::vector<llvm::Constant*>& values, const char* name) -> llvm::Constant* {
-            auto* array = llvm::ConstantArray::get(llvm::ArrayType::get(type, values.size()), values);
-            return new llvm::GlobalVariable(*_module, array->getType(), true, llvm::GlobalValue::PrivateLinkage, array, name);
-        };
-        const auto& tls = _image.Tls();
-        auto* image = llvm::ConstantStruct::get(imageType, {segmentGlobal, llvm::ConstantInt::get(i64, segments.size()), functionGlobal, llvm::ConstantInt::get(i64, entries.size()), llvm::ConstantInt::get(i64, _image.Entry()),
-            llvm::ConstantInt::get(i64, tls.Address), llvm::ConstantInt::get(i64, tls.FileSize), llvm::ConstantInt::get(i64, tls.MemorySize), llvm::ConstantInt::get(i64, tls.Alignment),
-            table(dataImportType, dataImports, "ps5lift_data_imports"), llvm::ConstantInt::get(i64, dataImports.size()), table(importType, imports, "ps5lift_imports"), llvm::ConstantInt::get(i64, imports.size()),
-            llvm::ConstantInt::get(i64, _image.EhFrameHeader())});
-        new llvm::GlobalVariable(*_module, imageType, true, llvm::GlobalValue::ExternalLinkage, image, "ps5lift_image");
+        auto* path = llvm::IRBuilder<>(_context).CreateGlobalStringPtr(image.Path(), "image_path", 0, _module.get());
+        const auto& tls = image.Tls();
+        return llvm::ConstantStruct::get(_imageType, {path, Table(_segmentType, segments, "ps5lift_segments"), Int(segments.size()), Int(tls.Address), Int(tls.FileSize), Int(tls.MemorySize), Int(tls.Alignment),
+            Table(_dataImportType, dataImports, "ps5lift_data_imports"), Int(dataImports.size()), Table(_importType, imports, "ps5lift_imports"), Int(imports.size()), Int(image.EhFrameHeader()),
+            Int(image.Init()), Int(image.InitArray().Address), Int(image.InitArray().Count)});
     }
 };
 
@@ -2845,9 +2884,8 @@ std::unique_ptr<llvm::Module> LiftFunctions(llvm::LLVMContext& context, const Gu
     return ModuleLifter(context, image, functions, options, report).LiftFunctions(addresses);
 }
 
-std::unique_ptr<llvm::Module> LiftTables(llvm::LLVMContext& context, const GuestImage& image, const std::map<std::uint64_t, GuestFunction>& functions, const LiftOptions& options) {
-    LiftReport report;
-    return ModuleLifter(context, image, functions, options, report).LiftTables();
+std::unique_ptr<llvm::Module> LiftTables(llvm::LLVMContext& context, const GuestProgram& program, const std::vector<std::map<std::uint64_t, GuestFunction>>& functions, const LiftOptions& options) {
+    return TableLifter(context, program, functions, options).Lift();
 }
 
 }

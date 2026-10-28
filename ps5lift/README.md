@@ -53,7 +53,7 @@ AnyPS5's libraries call the runtime's `GuestCpu` functions, so the program links
 | `--emit-ir prefix` | none | Writes the optimized LLVM IR of each part to `prefix.<n>.ll`. |
 | `-O0` | optimized | Skips the LLVM optimization pipeline. |
 
-The output is a static archive with one object per part of the program: the functions in address order, about 50000 instructions to a part, and a last part with the image's segments and tables. Each part is lifted, optimized and compiled on a thread of its own, and calls between parts are relocations the linker resolves, with range-extension thunks where a call is too far for a direct branch. The parts depend only on the program, so the output does not depend on `--jobs`.
+`ps5lift` also lifts the modules the executable names in `DT_NEEDED` as `$ORIGIN/<path>`, such as the `app0/sce_module/*.guest.prx` files the relinker writes beside `app.elf`, and the runtime initializes them before the executable starts; see [the design](docs/DESIGN.md#images). The output is a static archive with one object per part of the program: the functions in address order, about 50000 instructions to a part, and a last part with the image's segments and tables. Each part is lifted, optimized and compiled on a thread of its own, and calls between parts are relocations the linker resolves, with range-extension thunks where a call is too far for a direct branch. The parts depend only on the program, so the output does not depend on `--jobs`.
 
 The lifter prints how many functions and instructions it lifted, how many jump tables it recovered and how many of them it sized by the data around them, and lists every unsupported instruction it found. Reaching one at run time stops the program with its address.
 

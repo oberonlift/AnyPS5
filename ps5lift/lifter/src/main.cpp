@@ -1,3 +1,4 @@
+#include <lifter/Compile.hpp>
 #include <lifter/Program.hpp>
 
 #include <llvm/ADT/StringMap.h>
@@ -20,7 +21,7 @@ constexpr std::string_view Usage = "usage: ps5lift <input.elf> -o <output.a> [--
 
 int main(int argc, char** argv) {
     std::string input;
-    Ps5Lift::ProgramOptions program{std::max(1u, std::thread::hardware_concurrency()), "", ""};
+    Ps5Lift::CompileOptions compile{std::max(1u, std::thread::hardware_concurrency()), "", ""};
     Ps5Lift::LiftOptions lift;
     Ps5Lift::CodegenOptions codegen{"aarch64-unknown-linux-gnu", "", "", true};
 
@@ -33,11 +34,11 @@ int main(int argc, char** argv) {
             }
             return argv[++i];
         };
-        if (argument == "-o") program.Archive = value();
+        if (argument == "-o") compile.Archive = value();
         else if (argument == "--jobs") {
             const auto text = value();
-            const auto [end, error] = std::from_chars(text.data(), text.data() + text.size(), program.Jobs);
-            if (error != std::errc() || end != text.data() + text.size() || program.Jobs == 0) {
+            const auto [end, error] = std::from_chars(text.data(), text.data() + text.size(), compile.Jobs);
+            if (error != std::errc() || end != text.data() + text.size() || compile.Jobs == 0) {
                 std::cerr << "--jobs needs a positive number, not " << text << "\n";
                 return 2;
             }
@@ -45,7 +46,7 @@ int main(int argc, char** argv) {
         else if (argument == "--triple") codegen.Triple = value();
         else if (argument == "--cpu") codegen.Cpu = value();
         else if (argument == "--features") codegen.Features = value();
-        else if (argument == "--emit-ir") program.IrPrefix = value();
+        else if (argument == "--emit-ir") compile.IrPrefix = value();
         else if (argument == "-O0") codegen.Optimize = false;
         else if (argument == "--preserve-flags") lift.PreserveFlags = true;
         else if (argument == "--import-nids") lift.ImportNids = true;
@@ -71,7 +72,7 @@ int main(int argc, char** argv) {
             return 2;
         }
     }
-    if (input.empty() || (program.Archive.empty() && program.IrPrefix.empty())) {
+    if (input.empty() || (compile.Archive.empty() && compile.IrPrefix.empty())) {
         std::cerr << Usage;
         return 2;
     }
@@ -93,18 +94,21 @@ int main(int argc, char** argv) {
     }
 
     try {
-        const auto image = Ps5Lift::GuestImage::Load(input);
-        const auto functions = Ps5Lift::DiscoverFunctions(image);
-        const auto report = Ps5Lift::CompileProgram(image, functions, lift, codegen, program);
+        const auto program = Ps5Lift::GuestProgram::Load(input);
+        std::vector<std::map<std::uint64_t, Ps5Lift::GuestFunction>> functions;
+        for (const auto& image : program.Images) functions.push_back(Ps5Lift::DiscoverFunctions(image));
+        const auto report = Ps5Lift::CompileProgram(program, functions, lift, codegen, compile);
 
         std::cerr << "ps5lift: " << report.Functions << " functions, " << report.Instructions << " instructions";
         std::size_t unsupported = 0;
         for (const auto& [mnemonic, count] : report.Unsupported) unsupported += count;
         std::size_t tables = 0;
         std::size_t unguarded = 0;
-        for (const auto& [entry, function] : functions) {
-            tables += function.JumpTables.size();
-            unguarded += function.UnguardedJumpTables.size();
+        for (const auto& image : functions) {
+            for (const auto& [entry, function] : image) {
+                tables += function.JumpTables.size();
+                unguarded += function.UnguardedJumpTables.size();
+            }
         }
         std::cerr << ", " << unsupported << " unsupported, " << tables << " jump tables (" << unguarded << " sized by layout)\n";
         for (const auto& [mnemonic, count] : report.Unsupported) std::cerr << "  unsupported " << mnemonic << ": " << count << "\n";

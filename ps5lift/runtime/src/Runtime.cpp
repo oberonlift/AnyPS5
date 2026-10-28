@@ -1,3 +1,4 @@
+#include <ps5lift/Bridge.hpp>
 #include <ps5lift/State.h>
 
 #include <pthread.h>
@@ -72,8 +73,8 @@ void* MapAnonymous(const std::uint64_t size) {
 }
 
 Ps5LiftFunction Lookup(const std::uint64_t target) {
-    const auto* begin = ps5lift_image.Functions;
-    const auto* end = begin + ps5lift_image.FunctionCount;
+    const auto* begin = ps5lift_program.Functions;
+    const auto* end = begin + ps5lift_program.FunctionCount;
     const auto* found = std::lower_bound(begin, end, target, [](const Ps5LiftFunctionEntry& entry, const std::uint64_t address) { return entry.GuestAddress < address; });
     if (found == end || found->GuestAddress != target) return nullptr;
     return found->Host;
@@ -97,17 +98,30 @@ std::uint64_t PrepareThread(GuestThread& thread, Ps5LiftState& state) {
     thread.Tls = static_cast<std::uint8_t*>(MapAnonymous(TlsSize));
     const auto threadPointer = reinterpret_cast<std::uint64_t>(thread.Tls + TlsSize / 2);
     std::memcpy(reinterpret_cast<void*>(threadPointer), &threadPointer, sizeof(threadPointer));
-    if (ps5lift_image.TlsMemorySize != 0) {
-        const auto alignment = ps5lift_image.TlsAlignment;
-        const auto offset = (ps5lift_image.TlsMemorySize + alignment - 1) / alignment * alignment;
-        if (offset > TlsSize / 2) ps5lift_fail("the static TLS block of %" PRIu64 " bytes does not fit", ps5lift_image.TlsMemorySize);
-        std::memcpy(reinterpret_cast<void*>(threadPointer - offset), reinterpret_cast<const void*>(ps5lift_image.TlsAddress), ps5lift_image.TlsFileSize);
+    if (ps5lift_program.ImageCount != 0 && ps5lift_program.Images[0].TlsMemorySize != 0) {
+        const auto& executable = ps5lift_program.Images[0];
+        const auto alignment = executable.TlsAlignment;
+        const auto offset = (executable.TlsMemorySize + alignment - 1) / alignment * alignment;
+        if (offset > TlsSize / 2) ps5lift_fail("the static TLS block of %" PRIu64 " bytes does not fit", executable.TlsMemorySize);
+        std::memcpy(reinterpret_cast<void*>(threadPointer - offset), reinterpret_cast<const void*>(executable.TlsAddress), executable.TlsFileSize);
     }
     state.FsBase = threadPointer;
     state.Mxcsr = thread.Mxcsr & ~0x3fu;
     state.X87Control = ConsoleX87Control;
     ps5lift_apply_mxcsr(&state);
     return reinterpret_cast<std::uint64_t>(thread.Stack + GuestStackSize);
+}
+
+void Initialize(const std::uint64_t argc, const std::uint64_t argv, const std::uint64_t environment) {
+    for (std::uint64_t i = 0; i < ps5lift_program.InitializationCount; ++i) {
+        const auto& image = ps5lift_program.Images[ps5lift_program.Initialization[i]];
+        if (image.Init != 0) Ps5Lift::Bridge::CallGuest<void>(image.Init, argc, argv, environment);
+        for (std::uint64_t index = 0; index < image.InitCount; ++index) {
+            std::uint64_t initializer = 0;
+            std::memcpy(&initializer, reinterpret_cast<const void*>(image.InitArray + 8 * index), sizeof(initializer));
+            if (initializer != 0 && initializer != ~std::uint64_t{0}) Ps5Lift::Bridge::CallGuest<void>(initializer, argc, argv, environment);
+        }
+    }
 }
 
 void* RunThread(void* argument) {
@@ -126,6 +140,7 @@ void* RunThread(void* argument) {
         const auto rsp = (name - sizeof(entryStack)) & ~std::uint64_t{15};
         std::memcpy(reinterpret_cast<void*>(rsp), entryStack, sizeof(entryStack));
         state.Gpr[PS5LIFT_RSP] = rsp;
+        Initialize(entryStack[0], rsp + 8, rsp + 24);
         function(&state);
         if (state.Unwinding) ps5lift_fail("nothing on the main thread's guest stack resumes at 0x%" PRIx64, state.ResumeRip);
         std::fflush(stdout);
@@ -317,9 +332,13 @@ extern "C" std::uint64_t ps5lift_thread_join(const std::uint64_t handle) {
 }
 
 extern "C" void ps5lift_run_main(void) {
-    MapSegments(ps5lift_image);
+    for (std::uint64_t i = 0; i < ps5lift_program.ImageCount; ++i) {
+        const auto& image = ps5lift_program.Images[i];
+        if (i != 0 && image.TlsMemorySize != 0) ps5lift_fail("%s has a TLS segment, which a module cannot have yet", image.Path);
+        MapSegments(image);
+    }
     GuestThread thread;
-    thread.Entry = ps5lift_image.Entry;
+    thread.Entry = ps5lift_program.Entry;
     thread.Main = true;
     StartThread(thread);
     pthread_join(thread.Handle, nullptr);

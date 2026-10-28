@@ -137,11 +137,9 @@ typedef struct Ps5LiftImport {
 } Ps5LiftImport;
 
 typedef struct Ps5LiftImage {
+    const char* Path;
     const Ps5LiftSegment* Segments;
     uint64_t SegmentCount;
-    const Ps5LiftFunctionEntry* Functions;
-    uint64_t FunctionCount;
-    uint64_t Entry;
     uint64_t TlsAddress;
     uint64_t TlsFileSize;
     uint64_t TlsMemorySize;
@@ -151,9 +149,22 @@ typedef struct Ps5LiftImage {
     const Ps5LiftImport* Imports;
     uint64_t ImportCount;
     uint64_t EhFrameHeader;
+    uint64_t Init;
+    uint64_t InitArray;
+    uint64_t InitCount;
 } Ps5LiftImage;
 
-extern const Ps5LiftImage ps5lift_image;
+typedef struct Ps5LiftProgram {
+    const Ps5LiftImage* Images;
+    uint64_t ImageCount;
+    const uint64_t* Initialization;
+    uint64_t InitializationCount;
+    const Ps5LiftFunctionEntry* Functions;
+    uint64_t FunctionCount;
+    uint64_t Entry;
+} Ps5LiftProgram;
+
+extern const Ps5LiftProgram ps5lift_program;
 
 void ps5lift_dispatch(Ps5LiftState* state, uint64_t target);
 void ps5lift_apply_mxcsr(Ps5LiftState* state);

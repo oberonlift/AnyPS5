@@ -4,6 +4,7 @@ add_executable(ps5lift
         src/Discovery.cpp
         src/Lifter.cpp
         src/Codegen.cpp
+        src/Compile.cpp
         src/Program.cpp)
 target_include_directories(ps5lift PRIVATE include ${LLVM_INCLUDE_DIRS} ${CMAKE_SOURCE_DIR}/runtime/include)
 target_compile_definitions(ps5lift PRIVATE ${LLVM_DEFINITIONS})

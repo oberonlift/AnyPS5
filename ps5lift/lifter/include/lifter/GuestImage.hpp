@@ -2,6 +2,7 @@
 #define PS5LIFT_GUESTIMAGE_HPP
 
 #include <cstdint>
+#include <functional>
 #include <map>
 #include <optional>
 #include <set>
@@ -33,10 +34,34 @@ struct GuestSegment {
     bool IsExecutable() const;
 };
 
+struct GuestArray {
+    std::uint64_t Address = 0;
+    std::uint64_t Count = 0;
+};
+
+struct GuestRelocation {
+    std::uint64_t Offset;
+    std::uint32_t Type;
+    std::int64_t Addend;
+    std::string Symbol;
+    bool Defined;
+    bool Object;
+    std::uint64_t Value;
+};
+
 class GuestImage {
 public:
-    static GuestImage Load(const std::string& path);
+    using Resolver = std::function<std::optional<std::uint64_t>(const std::string& name)>;
 
+    static GuestImage Read(const std::string& path, std::optional<std::uint64_t> base);
+    void Relocate(const Resolver& resolve);
+
+    const std::string& Path() const;
+    const std::vector<std::string>& Needed() const;
+    std::uint64_t End() const;
+    std::optional<std::uint64_t> Export(const std::string& name) const;
+    std::uint64_t Init() const;
+    const GuestArray& InitArray() const;
     std::uint64_t Entry() const;
     const std::vector<GuestSegment>& Segments() const;
     std::span<const std::uint8_t> CodeAt(std::uint64_t address) const;
@@ -53,6 +78,14 @@ public:
     const GuestTls& Tls() const;
 
 private:
+    std::string _path;
+    std::vector<std::string> _needed;
+    std::map<std::string, std::uint64_t> _exports;
+    std::vector<GuestRelocation> _relocations;
+    std::uint64_t _mappedEnd = 0;
+    std::uint64_t _importCount = 0;
+    std::uint64_t _init = 0;
+    GuestArray _initArray;
     std::uint64_t _entry = 0;
     std::vector<GuestSegment> _segments;
     std::map<std::uint64_t, std::string> _functionSymbols;
