@@ -10,6 +10,7 @@
 #include <map>
 #include <optional>
 #include <set>
+#include <span>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -31,6 +32,7 @@ struct GuestFunction {
     std::map<std::uint64_t, Instruction> Instructions;
     std::set<std::uint64_t> Leaders;
     std::map<std::uint64_t, std::vector<std::uint64_t>> JumpTables;
+    std::set<std::uint64_t> UnguardedJumpTables;
     std::set<std::uint64_t> ResumePoints;
 };
 
@@ -38,6 +40,7 @@ class Decoder {
 public:
     Decoder();
     Instruction Decode(const GuestImage& image, std::uint64_t address) const;
+    std::optional<Instruction> TryDecode(std::span<const std::uint8_t> code, std::uint64_t address) const;
 
 private:
     ZydisDecoder _decoder;

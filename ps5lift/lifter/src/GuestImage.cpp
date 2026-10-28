@@ -21,7 +21,6 @@ constexpr std::uint32_t ProgramEhFrame = 0x6474e550;
 constexpr std::uint32_t SectionSymbolTable = 2;
 constexpr std::uint8_t SymbolObject = 1;
 constexpr std::uint8_t SymbolFunction = 2;
-constexpr std::uint32_t SegmentExecute = 1;
 constexpr std::int64_t DynamicStringTable = 5;
 constexpr std::int64_t DynamicSymbolTable = 6;
 constexpr std::int64_t DynamicRela = 7;
@@ -200,13 +199,18 @@ std::uint64_t GuestImage::Entry() const {
     return _entry;
 }
 
+bool GuestSegment::IsExecutable() const {
+    constexpr std::uint32_t Execute = 1;
+    return (Flags & Execute) != 0;
+}
+
 const std::vector<GuestSegment>& GuestImage::Segments() const {
     return _segments;
 }
 
 std::span<const std::uint8_t> GuestImage::CodeAt(const std::uint64_t address) const {
     for (const auto& segment : _segments) {
-        if ((segment.Flags & SegmentExecute) == 0) continue;
+        if (!segment.IsExecutable()) continue;
         if (address >= segment.Address && address < segment.Address + segment.Bytes.size()) {
             const auto offset = address - segment.Address;
             return {segment.Bytes.data() + offset, segment.Bytes.size() - offset};
