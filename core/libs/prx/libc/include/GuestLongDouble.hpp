@@ -1,9 +1,19 @@
 #ifndef CORE_LIBS_PRX_LIBC_INCLUDE_GUESTLONGDOUBLE_HPP
 #define CORE_LIBS_PRX_LIBC_INCLUDE_GUESTLONGDOUBLE_HPP
 
+#include <array>
+#include <cerrno>
+#include <cfenv>
+#include <cfloat>
+#include <cmath>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 #include <limits>
+
+#if defined(ANYPS5_GUEST_LIFTED) && LDBL_MANT_DIG != 64
+extern "C" void GuestCpuStoreExtended_nid_no_patch(const long double* host, void* guest);
+#endif
 
 namespace LibcDetail {
 
@@ -34,6 +44,9 @@ inline void GuestLongDoubleStore(void* target, long double value) {
     if constexpr (std::numeric_limits<long double>::digits == 64) {
         std::memcpy(target, &value, sizeof(value));
     } else {
+#ifdef ANYPS5_GUEST_LIFTED
+        GuestCpuStoreExtended_nid_no_patch(&value, target);
+#else
         std::uint64_t low;
         std::uint64_t high;
         std::memcpy(&low, &value, sizeof(low));
@@ -46,6 +59,42 @@ inline void GuestLongDoubleStore(void* target, long double value) {
         std::memcpy(bytes, &mantissa, sizeof(mantissa));
         std::memcpy(bytes + 8, &signExponent, sizeof(signExponent));
         std::memcpy(target, bytes, sizeof(bytes));
+#endif
+    }
+}
+
+inline std::array<unsigned char, GuestLongDoubleBytes> GuestLongDoubleImage(const long double value) {
+    std::array<unsigned char, GuestLongDoubleBytes> bytes{};
+    GuestLongDoubleStore(bytes.data(), value);
+    return bytes;
+}
+
+inline long double GuestLongDoubleRound(const long double value) {
+    return GuestLongDoubleLoad(GuestLongDoubleImage(value).data());
+}
+
+inline long double GuestLongDoubleParse(const char* text, char** end) {
+    if constexpr (std::numeric_limits<long double>::digits == 64) {
+        return std::strtold(text, end);
+    } else {
+        const int rounding = std::fegetround();
+        const int saved = errno;
+        std::fesetround(FE_DOWNWARD);
+        const long double below = std::strtold(text, end);
+        std::fesetround(FE_UPWARD);
+        errno = saved;
+        const long double above = std::strtold(text, nullptr);
+        std::fesetround(rounding);
+        long double truncated = std::fabs(below) <= std::fabs(above) ? below : above;
+        if (below != above && !std::isnan(below)) {
+            unsigned char bits[sizeof(long double)];
+            std::memcpy(bits, &truncated, sizeof(truncated));
+            bits[0] |= 1;
+            std::memcpy(&truncated, bits, sizeof(truncated));
+        }
+        const long double value = GuestLongDoubleRound(truncated);
+        if (std::isinf(value) && !std::isinf(truncated)) errno = ERANGE;
+        return value;
     }
 }
 
