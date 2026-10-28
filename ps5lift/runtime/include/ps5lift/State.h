@@ -144,6 +144,7 @@ typedef struct Ps5LiftImage {
     uint64_t TlsFileSize;
     uint64_t TlsMemorySize;
     uint64_t TlsAlignment;
+    uint64_t TlsOffset;
     const Ps5LiftDataImport* DataImports;
     uint64_t DataImportCount;
     const Ps5LiftImport* Imports;

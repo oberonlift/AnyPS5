@@ -219,7 +219,7 @@ public:
         _segmentType = llvm::StructType::create(_context, {_i64, _i64, _i64, _pointer, i32}, "Ps5LiftSegment");
         _dataImportType = llvm::StructType::create(_context, {_i64, _pointer, _i64}, "Ps5LiftDataImport");
         _importType = llvm::StructType::create(_context, {_i64, _pointer}, "Ps5LiftImport");
-        _imageType = llvm::StructType::create(_context, {_pointer, _pointer, _i64, _i64, _i64, _i64, _i64, _pointer, _i64, _pointer, _i64, _i64, _i64, _i64, _i64}, "Ps5LiftImage");
+        _imageType = llvm::StructType::create(_context, {_pointer, _pointer, _i64, _i64, _i64, _i64, _i64, _i64, _pointer, _i64, _pointer, _i64, _i64, _i64, _i64, _i64}, "Ps5LiftImage");
         auto* functionType = llvm::StructType::create(_context, {_i64, _pointer}, "Ps5LiftFunctionEntry");
         auto* programType = llvm::StructType::create(_context, {_pointer, _i64, _pointer, _i64, _pointer, _i64, _i64}, "Ps5LiftProgram");
 
@@ -285,7 +285,7 @@ private:
         auto* path = llvm::IRBuilder<>(_context).CreateGlobalStringPtr(image.Path(), "image_path", 0, _module.get());
         const auto& tls = image.Tls();
         return llvm::ConstantStruct::get(_imageType, {path, Table(_segmentType, segments, "ps5lift_segments"), Int(segments.size()), Int(tls.Address), Int(tls.FileSize), Int(tls.MemorySize), Int(tls.Alignment),
-            Table(_dataImportType, dataImports, "ps5lift_data_imports"), Int(dataImports.size()), Table(_importType, imports, "ps5lift_imports"), Int(imports.size()), Int(image.EhFrameHeader()),
+            Int(tls.Offset), Table(_dataImportType, dataImports, "ps5lift_data_imports"), Int(dataImports.size()), Table(_importType, imports, "ps5lift_imports"), Int(imports.size()), Int(image.EhFrameHeader()),
             Int(image.Init()), Int(image.InitArray().Address), Int(image.InitArray().Count)});
     }
 };

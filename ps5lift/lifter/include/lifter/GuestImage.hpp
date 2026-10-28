@@ -17,6 +17,8 @@ struct GuestTls {
     std::uint64_t FileSize = 0;
     std::uint64_t MemorySize = 0;
     std::uint64_t Alignment = 1;
+    std::uint64_t Module = 0;
+    std::uint64_t Offset = 0;
 };
 
 struct GuestDataImport {
@@ -54,12 +56,14 @@ public:
     using Resolver = std::function<std::optional<std::uint64_t>(const std::string& name)>;
 
     static GuestImage Read(const std::string& path, std::optional<std::uint64_t> base);
+    void PlaceTls(std::uint64_t module, std::uint64_t offset);
     void Relocate(const Resolver& resolve);
 
     const std::string& Path() const;
     const std::vector<std::string>& Needed() const;
     std::uint64_t End() const;
     std::optional<std::uint64_t> Export(const std::string& name) const;
+    const std::map<std::string, std::uint64_t>& Exports() const;
     std::uint64_t Init() const;
     const GuestArray& InitArray() const;
     std::uint64_t Entry() const;
