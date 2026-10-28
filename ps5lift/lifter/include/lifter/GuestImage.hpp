@@ -18,6 +18,12 @@ struct GuestTls {
     std::uint64_t Alignment = 1;
 };
 
+struct GuestDataImport {
+    std::uint64_t Slot;
+    std::string Name;
+    std::int64_t Addend;
+};
+
 struct GuestSegment {
     std::uint64_t Address;
     std::uint64_t MemorySize;
@@ -39,6 +45,9 @@ public:
     std::optional<std::uint64_t> ImportAt(std::uint64_t slot) const;
     const std::set<std::uint64_t>& CodePointers() const;
     const std::set<std::uint64_t>& ExceptionFunctionStarts() const;
+    const std::map<std::uint64_t, std::set<std::uint64_t>>& LandingPads() const;
+    const std::vector<GuestDataImport>& DataImports() const;
+    std::uint64_t EhFrameHeader() const;
     const GuestTls& Tls() const;
 
 private:
@@ -49,6 +58,9 @@ private:
     std::map<std::uint64_t, std::uint64_t> _importSlots;
     std::set<std::uint64_t> _codePointers;
     std::set<std::uint64_t> _exceptionStarts;
+    std::map<std::uint64_t, std::set<std::uint64_t>> _landingPads;
+    std::vector<GuestDataImport> _dataImports;
+    std::uint64_t _ehFrameHeader = 0;
     GuestTls _tls;
 
     void Write64(std::uint64_t address, std::uint64_t value);

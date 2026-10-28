@@ -18,7 +18,7 @@ ninja -C build
 ctest --test-dir build --output-on-failure
 ```
 
-On an aarch64 host the test lifts the fixture and runs it natively. On an x86-64 host it also runs it natively and, when `qemu-aarch64` and an aarch64 sysroot are installed (`qemu-user g++-aarch64-linux-gnu`), lifts it for aarch64 and runs it under qemu. `patches/anyps5` holds the changes to AnyPS5 that build its libc for a lifted guest, on top of the upstream commit the submodule points at, until they live in a fork. The libc tests reserve the PS5 user address range, about 1 TiB of address space, so they fail under a `ulimit -v` limit.
+On an aarch64 host the test lifts the fixture and runs it natively; building the x86-64 guests there needs an x86-64 cross toolchain and libraries (`g++-x86-64-linux-gnu` on Ubuntu). On an x86-64 host it also runs it natively and, when `qemu-aarch64` and an aarch64 sysroot are installed (`qemu-user g++-aarch64-linux-gnu`), lifts it for aarch64 and runs it under qemu. `patches/anyps5` holds the changes to AnyPS5 that build its libc for a lifted guest, on top of the upstream commit the submodule points at, until they live in a fork. The libc tests reserve the PS5 user address range, about 1 TiB of address space, so they fail under a `ulimit -v` limit.
 
 `tools/build_runtime.py` builds the runtime and [Berkeley SoftFloat](https://github.com/ucb-bar/berkeley-softfloat-3) (a submodule, for x87) into a static library per target; the tests build and cache it in `build/runtime-<arch>`.
 
@@ -45,6 +45,7 @@ clang++ -O2 -Iruntime/include bridges.cpp guest.o build/runtime-aarch64/libps5li
 | `--memory tso\|relaxed` | `tso` | `tso` keeps x86 ordering with acquire loads and release stores; `relaxed` uses plain accesses and is only correct for single-threaded guests. |
 | `--float exact\|fast` | `exact` | `exact` reproduces x86 NaN, min/max, DAZ and conversion results bit for bit; `fast` leaves NaN payloads to the host. |
 | `--preserve-flags` | off | Keeps the status flags across calls and returns, for hand-written assembly that relies on them. |
+| `--import-nids` | off | Imports a plain symbol name as its NID, so a guest built for Linux calls AnyPS5's exports. |
 | `--emit-ir file.ll` | none | Writes the optimized LLVM IR. |
 | `-O0` | optimized | Skips the LLVM optimization pipeline. |
 
@@ -58,7 +59,7 @@ The lifter prints how many functions and instructions it lifted and lists every 
 python3 tools/generate_bridges.py libc -o libc_bridges.cpp
 ```
 
-Function-pointer parameters become native thunks that call back into the guest (see [the design](docs/DESIGN.md#callbacks)), `long double` values cross between the guest's x87 format and the host's, and a variadic export calls its `v` sibling with a SysV `va_list` built from the guest's registers (see [variadic imports](docs/DESIGN.md#variadic-imports)). It prints how many exports it could not bridge and why; `--report` lists them. For libc it writes 1397 bridges and leaves 31 exports: records passed or returned by value (21), complex values (6), function pointers as return values (4) and `setjmp`/`longjmp`, which need the guest's own registers.
+Function-pointer parameters become native thunks that call back into the guest (see [the design](docs/DESIGN.md#callbacks)), `long double` values cross between the guest's x87 format and the host's, and a variadic export calls its `v` sibling with a SysV `va_list` built from the guest's registers (see [variadic imports](docs/DESIGN.md#variadic-imports)). It prints how many exports it could not bridge and why; `--report` lists them. For libc it writes 1395 bridges and leaves 33 exports: records passed or returned by value (21), complex values (6), function pointers as return values (4) and `setjmp`/`longjmp`, which need the guest's own registers.
 
 The bridges call AnyPS5's libc built for the lifted guest (`-DANYPS5_GUEST_LIFTED`). `tools/run_libc_tests.py --triple aarch64-unknown-linux-gnu` builds it and runs upstream's libc tests against it, and `tools/run_libc_fixture.py` lifts a guest that calls it through the generated bridges; ctest runs both for each target.
 

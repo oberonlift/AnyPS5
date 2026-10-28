@@ -148,6 +148,8 @@ public:
     llvm::PointerType* Pointer() const { return _pointer; }
     llvm::FunctionType* GuestType() const { return _guestType; }
     const LiftOptions& Options() const { return _options; }
+
+    std::string ImportName(const std::string& name) const { return _options.ImportNids ? Nid(name) : name; }
     LiftReport& Report() { return _report; }
     const std::map<std::uint64_t, GuestFunction>& Functions() const { return _functions; }
     const GuestImage& Image() const { return _image; }
@@ -170,7 +172,7 @@ private:
         auto* host = Guest(function.Entry);
         llvm::IRBuilder<> builder(llvm::BasicBlock::Create(_context, "entry", host));
         auto* state = host->getArg(0);
-        builder.CreateCall(Runtime(BridgeSymbol(*function.Import), _guestType), {state});
+        builder.CreateCall(Runtime(BridgeSymbol(ImportName(*function.Import)), _guestType), {state});
         auto* unwinding = builder.CreateLoad(builder.getInt8Ty(), builder.CreateConstGEP1_64(builder.getInt8Ty(), state, offsetof(Ps5LiftState, Unwinding)));
         unwinding->setMetadata(llvm::LLVMContext::MD_tbaa, _stateTag);
         auto* returned = llvm::BasicBlock::Create(_context, "returned", host);
@@ -190,7 +192,9 @@ private:
         auto* i32 = llvm::Type::getInt32Ty(_context);
         auto* segmentType = llvm::StructType::create(_context, {i64, i64, i64, _pointer, i32}, "Ps5LiftSegment");
         auto* functionType = llvm::StructType::create(_context, {i64, _pointer}, "Ps5LiftFunctionEntry");
-        auto* imageType = llvm::StructType::create(_context, {_pointer, i64, _pointer, i64, i64, i64, i64, i64, i64}, "Ps5LiftImage");
+        auto* dataImportType = llvm::StructType::create(_context, {i64, _pointer, i64}, "Ps5LiftDataImport");
+        auto* importType = llvm::StructType::create(_context, {i64, _pointer}, "Ps5LiftImport");
+        auto* imageType = llvm::StructType::create(_context, {_pointer, i64, _pointer, i64, i64, i64, i64, i64, i64, _pointer, i64, _pointer, i64, i64}, "Ps5LiftImage");
 
         std::vector<llvm::Constant*> segments;
         for (const auto& segment : _image.Segments()) {
@@ -206,9 +210,28 @@ private:
         auto* segmentGlobal = new llvm::GlobalVariable(*_module, segmentArray->getType(), true, llvm::GlobalValue::PrivateLinkage, segmentArray, "ps5lift_segments");
         auto* functionArray = llvm::ConstantArray::get(llvm::ArrayType::get(functionType, entries.size()), entries);
         auto* functionGlobal = new llvm::GlobalVariable(*_module, functionArray->getType(), true, llvm::GlobalValue::PrivateLinkage, functionArray, "ps5lift_functions");
+        std::vector<llvm::Constant*> dataImports;
+        std::map<std::string, llvm::GlobalVariable*> dataSymbols;
+        for (const auto& import : _image.DataImports()) {
+            const auto symbol = "ps5lift_data_" + BridgeSymbol(ImportName(import.Name)).substr(std::string_view("ps5lift_import_").size());
+            auto& global = dataSymbols[symbol];
+            if (!global) global = new llvm::GlobalVariable(*_module, _pointer, true, llvm::GlobalValue::ExternalLinkage, nullptr, symbol);
+            dataImports.push_back(llvm::ConstantStruct::get(dataImportType, {llvm::ConstantInt::get(i64, import.Slot), global, llvm::ConstantInt::get(i64, static_cast<std::uint64_t>(import.Addend))}));
+        }
+        std::vector<llvm::Constant*> imports;
+        for (const auto& [address, name] : _image.Imports()) {
+            auto* text = llvm::IRBuilder<>(_context).CreateGlobalStringPtr(ImportName(name), "import_name", 0, _module.get());
+            imports.push_back(llvm::ConstantStruct::get(importType, {llvm::ConstantInt::get(i64, address), text}));
+        }
+        const auto table = [&](llvm::StructType* type, const std::vector<llvm::Constant*>& values, const char* name) -> llvm::Constant* {
+            auto* array = llvm::ConstantArray::get(llvm::ArrayType::get(type, values.size()), values);
+            return new llvm::GlobalVariable(*_module, array->getType(), true, llvm::GlobalValue::PrivateLinkage, array, name);
+        };
         const auto& tls = _image.Tls();
         auto* image = llvm::ConstantStruct::get(imageType, {segmentGlobal, llvm::ConstantInt::get(i64, segments.size()), functionGlobal, llvm::ConstantInt::get(i64, entries.size()), llvm::ConstantInt::get(i64, _image.Entry()),
-            llvm::ConstantInt::get(i64, tls.Address), llvm::ConstantInt::get(i64, tls.FileSize), llvm::ConstantInt::get(i64, tls.MemorySize), llvm::ConstantInt::get(i64, tls.Alignment)});
+            llvm::ConstantInt::get(i64, tls.Address), llvm::ConstantInt::get(i64, tls.FileSize), llvm::ConstantInt::get(i64, tls.MemorySize), llvm::ConstantInt::get(i64, tls.Alignment),
+            table(dataImportType, dataImports, "ps5lift_data_imports"), llvm::ConstantInt::get(i64, dataImports.size()), table(importType, imports, "ps5lift_imports"), llvm::ConstantInt::get(i64, imports.size()),
+            llvm::ConstantInt::get(i64, _image.EhFrameHeader())});
         new llvm::GlobalVariable(*_module, imageType, true, llvm::GlobalValue::ExternalLinkage, image, "ps5lift_image");
     }
 };

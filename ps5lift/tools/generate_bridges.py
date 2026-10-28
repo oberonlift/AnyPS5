@@ -166,6 +166,7 @@ def collect(library, index):
             explicit[function] = nid
 
     exports = {}
+    data = {}
     unsupported = {}
     parse_errors = 0
     for source in library_sources(library):
@@ -177,7 +178,7 @@ def collect(library, index):
             if cursor.kind in (cindex.CursorKind.TRANSLATION_UNIT, cindex.CursorKind.LINKAGE_SPEC, cindex.CursorKind.NAMESPACE, cindex.CursorKind.UNEXPOSED_DECL):
                 stack.extend(cursor.get_children())
                 continue
-            if cursor.kind != cindex.CursorKind.FUNCTION_DECL:
+            if cursor.kind not in (cindex.CursorKind.FUNCTION_DECL, cindex.CursorKind.VAR_DECL):
                 continue
             name = cursor.spelling
             if name.endswith(POSTFIX):
@@ -188,6 +189,9 @@ def collect(library, index):
                 continue
             if cursor.mangled_name not in (name, "_" + name):
                 unsupported.setdefault(nid, (name, "C++ linkage"))
+                continue
+            if cursor.kind == cindex.CursorKind.VAR_DECL:
+                data.setdefault(nid, name)
                 continue
             if nid in exports or nid in unsupported:
                 continue
@@ -210,10 +214,14 @@ def collect(library, index):
             continue
         export["target"] = sibling["symbol"]
         exports[nid] = export
-    return exports, unsupported, parse_errors
+    return exports, data, unsupported, parse_errors
 
 
-def emit(exports, library_name):
+def data_symbol(nid):
+    return "ps5lift_data_" + bridge_symbol(nid)[len("ps5lift_import_"):]
+
+
+def emit(exports, data, library_name):
     lines = [f"#include <ps5lift/Bridge.hpp>", "", "#include <cstddef>", "#include <cstdint>", "", "using namespace Ps5Lift::Bridge;", ""]
     for nid in sorted(exports):
         export = exports[nid]
@@ -222,6 +230,9 @@ def emit(exports, library_name):
         return_class, return_spelling = export["return"]
         declaration = ", ".join(spelling for spelling, _ in export["parameters"])
         lines.append(f'extern "C" {return_spelling} {export["symbol"]}({declaration});')
+    for nid in sorted(data):
+        lines.append(f'extern "C" char {data[nid]};')
+        lines.append(f'extern "C" void* const {data_symbol(nid)} = &{data[nid]};')
     lines.append("")
     for nid in sorted(exports):
         export = exports[nid]
@@ -231,17 +242,20 @@ def emit(exports, library_name):
             accesses.append("variadic.List()")
         call = f'{export.get("target", export["symbol"])}({", ".join(accesses)})'
         lines.append(f'extern "C" void {bridge_symbol(nid)}(Ps5LiftState* state) {{')
+        lines.append("    try {")
         if export["variadic"]:
             integers, floats, stack = export["variadic"]
-            lines.append(f"    VariadicArguments variadic(state, {integers}, {floats}, {stack});")
+            lines.append(f"        VariadicArguments variadic(state, {integers}, {floats}, {stack});")
         if return_class == "extended" or any(access.startswith("Extended(") for _, access in export["parameters"]):
-            lines.append("    const ExtendedScope scope(state);")
+            lines.append("        const ExtendedScope scope(state);")
         if return_class == "void":
-            lines.append(f"    {call};")
+            lines.append(f"        {call};")
         elif return_class == "extended":
-            lines.append(f"    ReturnExtended(state, {call});")
+            lines.append(f"        ReturnExtended(state, {call});")
         else:
-            lines.append(f"    Return(state, {call});")
+            lines.append(f"        Return(state, {call});")
+        lines.append("    } catch (const GuestUnwind&) {")
+        lines.append("    }")
         lines.append("}")
         lines.append("")
     return "\n".join(lines)
@@ -260,11 +274,11 @@ def main():
     library = ANYPS5_LIBS / "prx" / args.library
     if not library.is_dir():
         raise SystemExit(f"{library} is not an AnyPS5 library directory")
-    exports, unsupported, parse_errors = collect(library, cindex.Index.create())
-    Path(args.output).write_text(emit(exports, args.library))
+    exports, data, unsupported, parse_errors = collect(library, cindex.Index.create())
+    Path(args.output).write_text(emit(exports, data, args.library))
 
     reasons = collections.Counter(re.sub(r"\d+-byte", "N-byte", reason) for _, reason in unsupported.values())
-    print(f"{args.library}: {len(exports)} bridges, {len(unsupported)} exports without one, {parse_errors} parse errors")
+    print(f"{args.library}: {len(exports)} bridges, {len(data)} data exports, {len(unsupported)} exports without one, {parse_errors} parse errors")
     for reason, count in reasons.most_common():
         print(f"  {count:5} {reason}")
     if args.report:

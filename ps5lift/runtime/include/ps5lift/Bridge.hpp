@@ -15,6 +15,8 @@
 
 namespace Ps5Lift::Bridge {
 
+struct GuestUnwind {};
+
 constexpr int IntegerRegisters[6] = {PS5LIFT_RDI, PS5LIFT_RSI, PS5LIFT_RDX, PS5LIFT_RCX, PS5LIFT_R8, PS5LIFT_R9};
 
 template <typename T>

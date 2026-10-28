@@ -28,6 +28,7 @@ struct LiftOptions {
     MemoryModel Memory = MemoryModel::Tso;
     FloatModel Float = FloatModel::Exact;
     bool PreserveFlags = false;
+    bool ImportNids = false;
 };
 
 struct LiftReport {

@@ -14,7 +14,7 @@
 
 namespace {
 
-constexpr std::string_view Usage = "usage: ps5lift <input.elf> -o <output.o> [--triple <triple>] [--cpu <cpu>|native] [--features <list>] [--memory tso|relaxed] [--float exact|fast] [--preserve-flags] [--emit-ir <file.ll>] [-O0]\n";
+constexpr std::string_view Usage = "usage: ps5lift <input.elf> -o <output.o> [--triple <triple>] [--cpu <cpu>|native] [--features <list>] [--memory tso|relaxed] [--float exact|fast] [--preserve-flags] [--import-nids] [--emit-ir <file.ll>] [-O0]\n";
 
 }
 
@@ -41,6 +41,7 @@ int main(int argc, char** argv) {
         else if (argument == "--emit-ir") ir = value();
         else if (argument == "-O0") codegen.Optimize = false;
         else if (argument == "--preserve-flags") lift.PreserveFlags = true;
+        else if (argument == "--import-nids") lift.ImportNids = true;
         else if (argument == "--memory") {
             const auto model = value();
             if (model == "tso") lift.Memory = Ps5Lift::MemoryModel::Tso;

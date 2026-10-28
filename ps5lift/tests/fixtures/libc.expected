@@ -13,3 +13,4 @@ strtold tiny 1e-4940 huge inf
 strtod 2.7182818284590451
 modfl -0.625000 -12.000000
 fabsl 3.3333333333333333334e-01
+fprintf _Stdout 5

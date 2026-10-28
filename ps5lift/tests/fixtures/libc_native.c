@@ -52,6 +52,17 @@ long double nid_modfl(long double value, long double* integral) { return modfl(v
 long double nid_fabsl(long double value) __asm__(NID_fabsl);
 long double nid_fabsl(long double value) { return fabsl(value); }
 
+int nid_fprintf(void* stream, const char* format, ...) __asm__(NID_fprintf);
+int nid_fprintf(void* stream, const char* format, ...) {
+    va_list arguments;
+    va_start(arguments, format);
+    const int count = vfprintf(stream, format, arguments);
+    va_end(arguments);
+    return count;
+}
+
+char nid_stdout[8] __asm__(NID__Stdout);
+
 void host_exit(int code) {
     fflush(stdout);
     _Exit(code);

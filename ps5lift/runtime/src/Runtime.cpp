@@ -48,6 +48,14 @@ std::uint64_t PageSize() {
     return static_cast<std::uint64_t>(sysconf(_SC_PAGESIZE));
 }
 
+void BindDataImports(const Ps5LiftImage& image) {
+    for (std::uint64_t i = 0; i < image.DataImportCount; ++i) {
+        const auto& import = image.DataImports[i];
+        const auto value = reinterpret_cast<std::uint64_t>(*import.Address) + static_cast<std::uint64_t>(import.Addend);
+        std::memcpy(reinterpret_cast<void*>(import.Slot), &value, sizeof(value));
+    }
+}
+
 void MapSegments(const Ps5LiftImage& image) {
     if (image.SegmentCount == 0) Fail("the image has no segments");
     const auto page = PageSize();
@@ -61,11 +69,13 @@ void MapSegments(const Ps5LiftImage& image) {
     if (GuestArenaContains_nid_postfix != nullptr && GuestArenaContains_nid_postfix(start, end - begin)) {
         GuestArenaCommit_nid_postfix(start, end - begin, ArenaReadWrite, end - begin);
         for (std::uint64_t i = 0; i < image.SegmentCount; ++i) std::memcpy(reinterpret_cast<void*>(image.Segments[i].GuestAddress), image.Segments[i].Data, image.Segments[i].FileSize);
+        BindDataImports(image);
         return;
     }
     auto* mapped = mmap(start, end - begin, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED_NOREPLACE, -1, 0);
     if (mapped != start) Fail("cannot map the guest image at 0x%" PRIx64 "-0x%" PRIx64 ": %s", begin, end, std::strerror(errno));
     for (std::uint64_t i = 0; i < image.SegmentCount; ++i) std::memcpy(reinterpret_cast<void*>(image.Segments[i].GuestAddress), image.Segments[i].Data, image.Segments[i].FileSize);
+    BindDataImports(image);
 }
 
 void* MapAnonymous(const std::uint64_t size) {

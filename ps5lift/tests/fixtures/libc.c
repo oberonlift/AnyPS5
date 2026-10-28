@@ -12,6 +12,8 @@ long double guest_strtold(const char* text, char** end) __asm__(NID_strtold);
 double guest_strtod(const char* text, char** end) __asm__(NID_strtod);
 long double guest_modfl(long double value, long double* integral) __asm__(NID_modfl);
 long double guest_fabsl(long double value) __asm__(NID_fabsl);
+int guest_fprintf(void* stream, const char* format, ...) __asm__(NID_fprintf);
+extern char guest_stdout[] __asm__(NID__Stdout);
 
 static int format_list(char* buffer, unsigned long size, const char* format, ...) {
     va_list arguments;
@@ -55,6 +57,7 @@ int main(void) {
     const long double fraction = guest_modfl(-12.625L, &whole);
     guest_printf("modfl %Lf %Lf\n", fraction, whole);
     guest_printf("fabsl %.19Le\n", guest_fabsl(-third));
+    guest_fprintf(guest_stdout, "fprintf %s %d\n", "_Stdout", 5);
     return 0;
 }
 

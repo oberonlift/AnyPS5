@@ -17,7 +17,9 @@ namespace {
 constexpr std::uint32_t ProgramLoad = 1;
 constexpr std::uint32_t ProgramDynamic = 2;
 constexpr std::uint32_t ProgramTls = 7;
+constexpr std::uint32_t ProgramEhFrame = 0x6474e550;
 constexpr std::uint32_t SectionSymbolTable = 2;
+constexpr std::uint8_t SymbolObject = 1;
 constexpr std::uint8_t SymbolFunction = 2;
 constexpr std::uint32_t SegmentExecute = 1;
 constexpr std::int64_t DynamicStringTable = 5;
@@ -92,8 +94,10 @@ GuestImage GuestImage::Load(const std::string& path) {
 
     GuestImage image;
     image._entry = header.EntryPoint;
+    std::map<std::uint64_t, std::uint64_t> relocated;
     std::uint64_t imageEnd = 0;
     for (const auto& program : programs) {
+        if (program.Type == ProgramEhFrame) image._ehFrameHeader = program.MappedAddress;
         if (program.Type == ProgramTls) image._tls = {program.MappedAddress, program.FileSize, program.MemorySize, std::max<std::uint64_t>(program.Alignment, 1)};
         if (program.Type != ProgramLoad || program.MemorySize == 0) continue;
         GuestSegment segment;
@@ -146,6 +150,11 @@ GuestImage GuestImage::Load(const std::string& path) {
                 value = static_cast<std::uint64_t>(relocation.Addend);
             } else if (relocation.Type == RelocationAbsolute || relocation.Type == RelocationGlobalData || relocation.Type == RelocationJumpSlot) {
                 const auto symbol = symbolAt(relocation.Symbol);
+                if (symbol.Section == 0 && symbol.Type == SymbolObject) {
+                    image._dataImports.push_back({relocation.Offset, symbol.Name, relocation.Type == RelocationAbsolute ? relocation.Addend : 0});
+                    image.Write64(relocation.Offset, 0);
+                    continue;
+                }
                 if (symbol.Section != 0) {
                     value = symbol.Value;
                 } else {
@@ -162,11 +171,17 @@ GuestImage GuestImage::Load(const std::string& path) {
                 throw std::runtime_error("Unsupported relocation type " + std::to_string(relocation.Type) + " at 0x" + Hex(relocation.Offset));
             }
             image.Write64(relocation.Offset, value);
+            relocated[relocation.Offset] = value;
             if (image.IsExecutable(value)) image._codePointers.insert(value);
         }
     }
 
-    for (const auto& region : Relinker::UnusedNidFilter::ReadExceptionFunctions(bytes, programs, {}, {})) image._exceptionStarts.insert(region.Begin);
+    for (const auto& region : Relinker::UnusedNidFilter::ReadExceptionFunctions(bytes, programs, relocated, {})) {
+        image._exceptionStarts.insert(region.Begin);
+        for (const auto target : region.ExtraTargets) {
+            if (target >= region.Begin && target < region.End) image._landingPads[region.Begin].insert(target);
+        }
+    }
     return image;
 }
 
@@ -234,6 +249,18 @@ const std::set<std::uint64_t>& GuestImage::CodePointers() const {
 
 const std::set<std::uint64_t>& GuestImage::ExceptionFunctionStarts() const {
     return _exceptionStarts;
+}
+
+const std::map<std::uint64_t, std::set<std::uint64_t>>& GuestImage::LandingPads() const {
+    return _landingPads;
+}
+
+const std::vector<GuestDataImport>& GuestImage::DataImports() const {
+    return _dataImports;
+}
+
+std::uint64_t GuestImage::EhFrameHeader() const {
+    return _ehFrameHeader;
 }
 
 const GuestTls& GuestImage::Tls() const {

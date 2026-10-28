@@ -146,6 +146,13 @@ GuestFunction DiscoverFunction(const GuestImage& image, const Decoder& decoder, 
 
     function.Leaders.insert(entry);
     std::deque<std::uint64_t> pending{entry};
+    if (const auto pads = image.LandingPads().find(entry); pads != image.LandingPads().end()) {
+        for (const auto pad : pads->second) {
+            function.Leaders.insert(pad);
+            function.ResumePoints.insert(pad);
+            pending.push_back(pad);
+        }
+    }
     while (!pending.empty()) {
         auto address = pending.front();
         pending.pop_front();
