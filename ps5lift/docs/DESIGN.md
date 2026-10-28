@@ -83,7 +83,7 @@ The runtime keeps each guest thread's state in a thread-local. A native thread t
 
 ## Memory ordering
 
-x86 is TSO; the GB10 cores have no TSO mode. With `--memory tso` every guest load except an `rsp`-based one is an acquire load and every store a release store. On a CPU with FEAT_LRCPC (`neoverse-v2`, the GB10) acquire loads become `LDAPR`, which is cheaper than `LDAR`. Locked instructions, `xchg` with memory, `xadd` and `cmpxchg` are sequentially consistent LLVM atomics, lowered to LSE. `mfence` is a full fence.
+x86 is TSO; the GB10 cores have no TSO mode. With `--memory tso` every guest load except an `rsp`-based one is an acquire load and every store a release store. On a CPU with FEAT_LRCPC (`neoverse-v2`, the GB10) acquire loads become `LDAPR`, which is cheaper than `LDAR`. Both fault on an address that is not naturally aligned, which the GB10 relaxes only within 16 bytes, while x86 code may use any address, so each ordered access wider than a byte tests its alignment: an unaligned one is a plain access followed by `DMB ISHLD` for a load and preceded by `DMB ISH` for a store, which orders it as TSO requires. Locked instructions, `xchg` with memory, `xadd` and `cmpxchg` are sequentially consistent LLVM atomics, lowered to LSE. `mfence` is a full fence.
 
 qemu 8.2 computes the address of `STLUR` and `LDAPUR` with a negative offset wrongly; the test driver turns off `rcpc-immo` when it runs aarch64 code under qemu, and runs it with `-one-insn-per-tb` (see [known gaps](DEBT.md)). Real hardware is not affected by the first.
 

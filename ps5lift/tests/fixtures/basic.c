@@ -228,6 +228,31 @@ __attribute__((noinline)) static void zen2_integer(void) {
     line_hex("load through 32-bit address", word);
 }
 
+static volatile u64 opaque_misalignment = 13;
+
+__attribute__((noinline)) static void unaligned_accesses(void) {
+    static _Alignas(16) u8 bytes[64];
+    for (int i = 0; i < 64; ++i) bytes[i] = (u8)i;
+    u8* base = bytes + opaque_misalignment;
+    u64 quad;
+    u32 double_word;
+    u16 word;
+    __asm__ volatile("movq (%1), %0" : "=r"(quad) : "r"(base) : "memory");
+    __asm__ volatile("movl 1(%1), %0" : "=r"(double_word) : "r"(base) : "memory");
+    __asm__ volatile("movw 2(%1), %0" : "=r"(word) : "r"(base) : "memory");
+    line_hex("unaligned load 64", quad);
+    line_hex("unaligned load 32", double_word);
+    line_hex("unaligned load 16", word);
+    __asm__ volatile("movq %1, 16(%0)" : : "r"(base), "r"(0x1122334455667788UL) : "memory");
+    __asm__ volatile("movl %1, 34(%0)" : : "r"(base), "r"(0xaabbccddU) : "memory");
+    __asm__ volatile("movw %1, 18(%0)" : : "r"(base), "r"((u16)0xeeff) : "memory");
+    for (int i = 3; i < 7; ++i) {
+        u64 aligned;
+        __asm__ volatile("movq (%1), %0" : "=r"(aligned) : "r"(bytes + 8 * i) : "memory");
+        line_hex("after unaligned stores", aligned);
+    }
+}
+
 struct Record {
     i64 key;
     u32 values[6];
@@ -300,6 +325,7 @@ int main(void) {
     for (i64 i = 0; i < 4; ++i) line("table after compare", table_index_copied_after_compare(i));
     for (i64 i = 0; i < 4; ++i) line("table before compare", table_index_copied_before_compare(i));
     zen2_integer();
+    unaligned_accesses();
 
     struct Record record = make_record(41);
     struct Record copy;
