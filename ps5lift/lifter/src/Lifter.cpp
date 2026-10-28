@@ -466,10 +466,12 @@ private:
 
     llvm::Value* Address(const ZydisDecodedOperand& operand, const bool applySegment = true) {
         if (operand.type != ZYDIS_OPERAND_TYPE_MEMORY) throw std::logic_error("Address of a non-memory operand");
-        if (_instruction->Info.address_width != 64) throw UnsupportedInstruction("32-bit addressing");
-        llvm::Value* address = _builder.getInt64(static_cast<std::uint64_t>(operand.mem.disp.value));
+        const auto width = _instruction->Info.address_width;
+        if (width != 64 && width != 32) throw UnsupportedInstruction("16-bit addressing");
+        llvm::Value* address = Const(width, static_cast<std::uint64_t>(operand.mem.disp.value));
         if (operand.mem.base != ZYDIS_REGISTER_NONE) address = _builder.CreateAdd(address, ReadRegister(operand.mem.base));
-        if (operand.mem.index != ZYDIS_REGISTER_NONE) address = _builder.CreateAdd(address, _builder.CreateMul(ReadRegister(operand.mem.index), _builder.getInt64(operand.mem.scale)));
+        if (operand.mem.index != ZYDIS_REGISTER_NONE) address = _builder.CreateAdd(address, _builder.CreateMul(ReadRegister(operand.mem.index), Const(width, operand.mem.scale)));
+        address = _builder.CreateZExt(address, I64());
         if (applySegment && operand.mem.segment == ZYDIS_REGISTER_FS) address = _builder.CreateAdd(address, StateLoad(I64(), offsetof(Ps5LiftState, FsBase)));
         if (applySegment && operand.mem.segment == ZYDIS_REGISTER_GS) address = _builder.CreateAdd(address, StateLoad(I64(), offsetof(Ps5LiftState, GsBase)));
         return address;
@@ -769,6 +771,40 @@ private:
         SetFlag(PS5LIFT_ZF, _builder.CreateSelect(zero, Flag(PS5LIFT_ZF), _builder.CreateICmpEQ(result, llvm::ConstantInt::get(result->getType(), 0))));
         SetFlag(PS5LIFT_SF, _builder.CreateSelect(zero, Flag(PS5LIFT_SF), SignBit(result)));
         SetFlag(PS5LIFT_PF, _builder.CreateSelect(zero, Flag(PS5LIFT_PF), Parity(result)));
+    }
+
+    void ShiftDouble(const ZydisMnemonic mnemonic) {
+        const auto bits = Bits(0);
+        if (bits == 16) throw UnsupportedInstruction("16-bit");
+        auto* value = Read(0);
+        auto* count = _builder.CreateAnd(ReadAs(2, 8), _builder.getInt8(bits == 64 ? 63 : 31));
+        auto* zero = _builder.CreateICmpEQ(count, _builder.getInt8(0));
+        auto* amount = _builder.CreateZExt(count, Int(bits));
+        auto* wideValue = _builder.CreateZExt(value, Int(128));
+        auto* wideCount = _builder.CreateZExt(count, Int(128));
+        llvm::Value* result = nullptr;
+        llvm::Value* carry = nullptr;
+        if (mnemonic == ZYDIS_MNEMONIC_SHLD) {
+            result = _builder.CreateIntrinsic(llvm::Intrinsic::fshl, {Int(bits)}, {value, ReadAs(1, bits), amount});
+            carry = _builder.CreateTrunc(_builder.CreateLShr(_builder.CreateShl(wideValue, wideCount), bits), _builder.getInt1Ty());
+        } else {
+            result = _builder.CreateIntrinsic(llvm::Intrinsic::fshr, {Int(bits)}, {ReadAs(1, bits), value, amount});
+            auto* below = _builder.CreateSelect(zero, llvm::ConstantInt::get(Int(128), 0), _builder.CreateSub(wideCount, llvm::ConstantInt::get(Int(128), 1)));
+            carry = _builder.CreateTrunc(_builder.CreateLShr(wideValue, below), _builder.getInt1Ty());
+        }
+        Write(0, result);
+        SetFlag(PS5LIFT_CF, _builder.CreateSelect(zero, Flag(PS5LIFT_CF), carry));
+        SetFlag(PS5LIFT_OF, _builder.CreateSelect(zero, Flag(PS5LIFT_OF), _builder.CreateXor(SignBit(result), SignBit(value))));
+        SetFlag(PS5LIFT_ZF, _builder.CreateSelect(zero, Flag(PS5LIFT_ZF), _builder.CreateICmpEQ(result, llvm::ConstantInt::get(result->getType(), 0))));
+        SetFlag(PS5LIFT_SF, _builder.CreateSelect(zero, Flag(PS5LIFT_SF), SignBit(result)));
+        SetFlag(PS5LIFT_PF, _builder.CreateSelect(zero, Flag(PS5LIFT_PF), Parity(result)));
+    }
+
+    void AddWithFlagCarry(const int flag) {
+        auto* sum = _builder.CreateIntrinsic(llvm::Intrinsic::uadd_with_overflow, {Int(Bits(0))}, {Read(0), ReadAs(1, Bits(0))});
+        auto* total = _builder.CreateIntrinsic(llvm::Intrinsic::uadd_with_overflow, {Int(Bits(0))}, {_builder.CreateExtractValue(sum, 0), _builder.CreateZExt(Flag(flag), Int(Bits(0)))});
+        Write(0, _builder.CreateExtractValue(total, 0));
+        SetFlag(flag, _builder.CreateOr(_builder.CreateExtractValue(sum, 1), _builder.CreateExtractValue(total, 1)));
     }
 
     int ImplicitGpr(const ZydisRegister reg) const {
@@ -2507,6 +2543,23 @@ private:
         case ZYDIS_MNEMONIC_ROL:
         case ZYDIS_MNEMONIC_ROR:
             Shift(mnemonic);
+            return;
+        case ZYDIS_MNEMONIC_SHLD:
+        case ZYDIS_MNEMONIC_SHRD:
+            ShiftDouble(mnemonic);
+            return;
+        case ZYDIS_MNEMONIC_ADCX:
+            AddWithFlagCarry(PS5LIFT_CF);
+            return;
+        case ZYDIS_MNEMONIC_ADOX:
+            AddWithFlagCarry(PS5LIFT_OF);
+            return;
+        case ZYDIS_MNEMONIC_BSWAP:
+            if (Bits(0) == 16) throw UnsupportedInstruction("16-bit");
+            Write(0, _builder.CreateUnaryIntrinsic(llvm::Intrinsic::bswap, Read(0)));
+            return;
+        case ZYDIS_MNEMONIC_MOVBE:
+            Write(0, _builder.CreateUnaryIntrinsic(llvm::Intrinsic::bswap, Read(1)));
             return;
         case ZYDIS_MNEMONIC_IMUL:
             SignedMultiply();

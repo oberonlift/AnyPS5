@@ -159,6 +159,75 @@ __asm__(".text\n"
         ".popsection\n"
         ".text\n");
 
+static i64 flags_of(u8 carry, u8 overflow, u8 zero, u8 sign) {
+    return carry | overflow << 1 | zero << 2 | sign << 3;
+}
+
+__attribute__((noinline)) static void zen2_integer(void) {
+    u64 value = 0x0123456789abcdefUL;
+    u64 swapped64 = value;
+    __asm__("bswap %0" : "+r"(swapped64));
+    line_hex("bswap 64", swapped64);
+    u32 swapped32 = 0x01234567;
+    __asm__("bswap %0" : "+r"(swapped32));
+    line_hex("bswap 32", swapped32);
+
+    u64 loaded64;
+    __asm__("movbe %1, %0" : "=r"(loaded64) : "m"(value));
+    line_hex("movbe load 64", loaded64);
+    u16 half = 0x1234;
+    u16 loaded16;
+    __asm__("movbe %1, %0" : "=r"(loaded16) : "m"(half));
+    line_hex("movbe load 16", loaded16);
+    u32 stored32;
+    __asm__("movbe %1, %0" : "=m"(stored32) : "r"((u32)0x01234567));
+    line_hex("movbe store 32", stored32);
+
+    u8 carry, overflow, zero, sign;
+    u64 left64 = 0x0123456789abcdefUL;
+    __asm__("shld %%cl, %[source], %[target]\n\tsetc %[carry]\n\tsetz %[zero]\n\tsets %[sign]"
+            : [target] "+r"(left64), [carry] "=r"(carry), [zero] "=r"(zero), [sign] "=r"(sign) : [source] "r"(0xfedcba9876543210UL), "c"(4) : "cc");
+    line_hex("shld 64 by 4", left64);
+    line("shld 64 by 4 flags", flags_of(carry, 0, zero, sign));
+    u32 left32 = 0x81000001;
+    __asm__("shld $8, %[source], %[target]\n\tsetc %[carry]\n\tsetz %[zero]\n\tsets %[sign]"
+            : [target] "+r"(left32), [carry] "=r"(carry), [zero] "=r"(zero), [sign] "=r"(sign) : [source] "r"(0xa0000000u) : "cc");
+    line_hex("shld 32 by 8", left32);
+    line("shld 32 by 8 flags", flags_of(carry, 0, zero, sign));
+    u64 right64 = 0x8000000000000001UL;
+    __asm__("shrd $1, %[source], %[target]\n\tsetc %[carry]\n\tseto %[overflow]\n\tsetz %[zero]\n\tsets %[sign]"
+            : [target] "+r"(right64), [carry] "=r"(carry), [overflow] "=r"(overflow), [zero] "=r"(zero), [sign] "=r"(sign) : [source] "r"(0UL) : "cc");
+    line_hex("shrd 64 by 1", right64);
+    line("shrd 64 by 1 flags", flags_of(carry, overflow, zero, sign));
+    u32 unshifted = 0x12345678;
+    __asm__("stc\n\tshrd %%cl, %[source], %[target]\n\tsetc %[carry]" : [target] "+r"(unshifted), [carry] "=r"(carry) : [source] "r"(0xffffffffu), "c"(0) : "cc");
+    line_hex("shrd 32 by 0", unshifted);
+    line("shrd 32 by 0 carry", carry);
+    u32 right32 = 0x80000000;
+    __asm__("shrd %%cl, %[source], %[target]\n\tsetc %[carry]\n\tsetz %[zero]\n\tsets %[sign]"
+            : [target] "+r"(right32), [carry] "=r"(carry), [zero] "=r"(zero), [sign] "=r"(sign) : [source] "r"(0xffffffffu), "c"(31) : "cc");
+    line_hex("shrd 32 by 31", right32);
+    line("shrd 32 by 31 flags", flags_of(carry, 0, zero, sign));
+
+    u64 all = ~0UL, high = 0x8000000000000000UL, five = 5, seven = 7;
+    __asm__("xor %%eax, %%eax\n\tadcx %[one], %[all]\n\tadox %[high2], %[high]\n\tadcx %[none], %[five]\n\tadox %[none], %[seven]\n\tsetc %[carry]\n\tseto %[overflow]"
+            : [all] "+r"(all), [high] "+r"(high), [five] "+r"(five), [seven] "+r"(seven), [carry] "=r"(carry), [overflow] "=r"(overflow)
+            : [one] "r"(1UL), [high2] "r"(0x8000000000000000UL), [none] "r"(0UL) : "rax", "cc");
+    line("adcx sum", all);
+    line("adox sum", high);
+    line("adcx carried", five);
+    line("adox carried", seven);
+    line("adcx adox flags", flags_of(carry, overflow, 0, 0));
+
+    u64 wrapped;
+    __asm__("lea 0x10(%k1,%k2), %0" : "=r"(wrapped) : "r"(0xfffffff0UL), "r"(8UL));
+    line_hex("lea 32-bit wraps", wrapped);
+    static u32 words[2] = {0x11111111, 0x22222222};
+    u32 word;
+    __asm__("movl 4(%k1), %0" : "=r"(word) : "r"((u64)words));
+    line_hex("load through 32-bit address", word);
+}
+
 struct Record {
     i64 key;
     u32 values[6];
@@ -230,6 +299,7 @@ int main(void) {
     line("classify total", total);
     for (i64 i = 0; i < 4; ++i) line("table after compare", table_index_copied_after_compare(i));
     for (i64 i = 0; i < 4; ++i) line("table before compare", table_index_copied_before_compare(i));
+    zen2_integer();
 
     struct Record record = make_record(41);
     struct Record copy;
