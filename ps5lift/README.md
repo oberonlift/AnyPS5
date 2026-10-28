@@ -2,7 +2,7 @@
 
 A static recompiler for PS5 executables. `ps5lift` lifts guest x86-64 code to LLVM IR and compiles it to native code for the host, so a title can run on aarch64 Linux machines such as the NVIDIA DGX Spark (GB10) without an x86 emulator. The system libraries come from [AnyPS5](https://github.com/boykopovar/anyps5), which is a submodule; its ELF reader and `.eh_frame` scanner are the lifter's frontend.
 
-Status: **milestone 2 in progress**. Guest code built for Zen 2, including SSE, AVX2, FMA, F16C and x87 code, lifts and runs on aarch64 with the same output as on x86-64. AnyPS5's PS5-style test executables (NID imports, static TLS) relink, lift and run. Real titles do not run yet; see [the design](docs/DESIGN.md) and [known gaps](docs/DEBT.md).
+Status: **milestone 2 in progress**. Guest code built for Zen 2, including SSE, AVX2, FMA, F16C and x87 code, lifts and runs on aarch64 with the same output as on x86-64. AnyPS5's PS5-style test executables (NID imports, static TLS) relink, lift and run. Real titles do not run yet; see [the design](docs/DESIGN.md), [known gaps](docs/DEBT.md) and [next steps](docs/NEXT.md).
 
 ## Build
 
