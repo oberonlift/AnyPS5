@@ -1,0 +1,344 @@
+From f0f4d483f646d005a0e29f880b6ec980b627e9cc Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Wed, 28 Oct 2026 05:52:32 +0000
+Subject: [PATCH 1/4] refactor(libc): reach the guest FPU state through
+ GuestCpu
+
+The fenv functions read and write the x87 control, status and
+environment and MXCSR through GuestCpu. Direct builds keep the same
+x87 and SSE instructions; under ANYPS5_GUEST_LIFTED the calls go to
+GuestCpu*_nid_no_patch functions that the host runtime implements on
+its emulated guest state, so the same sources serve a recompiled guest
+on a non-x86 host. feholdexcept keeps the exceptions masked as the
+fnstenv it replaces did.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ core/libs/prx/libc/include/GuestCpu.hpp  | 98 ++++++++++++++++++++++++
+ core/libs/prx/libc/src/FloatingPoint.cpp | 61 +++++----------
+ core/libs/prx/libc/src/Math.cpp          | 44 +++++------
+ 3 files changed, 139 insertions(+), 64 deletions(-)
+ create mode 100644 core/libs/prx/libc/include/GuestCpu.hpp
+
+diff --git a/core/libs/prx/libc/include/GuestCpu.hpp b/core/libs/prx/libc/include/GuestCpu.hpp
+new file mode 100644
+index 000000000..5c69439b4
+--- /dev/null
++++ b/core/libs/prx/libc/include/GuestCpu.hpp
+@@ -0,0 +1,98 @@
++#ifndef CORE_LIBS_PRX_LIBC_INCLUDE_GUESTCPU_HPP
++#define CORE_LIBS_PRX_LIBC_INCLUDE_GUESTCPU_HPP
++
++#include <array>
++#include <cstdint>
++
++#ifdef ANYPS5_GUEST_LIFTED
++
++extern "C" {
++std::uint32_t GuestCpuMxcsr_nid_no_patch(void);
++void GuestCpuSetMxcsr_nid_no_patch(std::uint32_t value);
++std::uint16_t GuestCpuX87Control_nid_no_patch(void);
++void GuestCpuSetX87Control_nid_no_patch(std::uint16_t value);
++std::uint16_t GuestCpuX87Status_nid_no_patch(void);
++void GuestCpuSetX87Status_nid_no_patch(std::uint16_t value);
++void GuestCpuX87Wait_nid_no_patch(void);
++std::uint32_t GuestCpuMxcsrMask_nid_no_patch(void);
++}
++
++namespace GuestCpu {
++
++inline std::uint32_t Mxcsr() { return GuestCpuMxcsr_nid_no_patch(); }
++inline void SetMxcsr(const std::uint32_t value) { GuestCpuSetMxcsr_nid_no_patch(value); }
++inline std::uint16_t X87Control() { return GuestCpuX87Control_nid_no_patch(); }
++inline void SetX87Control(const std::uint16_t value) { GuestCpuSetX87Control_nid_no_patch(value); }
++inline std::uint16_t X87Status() { return GuestCpuX87Status_nid_no_patch(); }
++inline void SetX87Status(const std::uint16_t value) { GuestCpuSetX87Status_nid_no_patch(value); }
++inline void X87ClearExceptions() { SetX87Status(static_cast<std::uint16_t>(X87Status() & 0x7f00)); }
++inline void X87Wait() { GuestCpuX87Wait_nid_no_patch(); }
++inline std::uint32_t MxcsrMask() { return GuestCpuMxcsrMask_nid_no_patch(); }
++
++inline std::array<std::uint32_t, 7> X87Environment() {
++    return {0xffff0000u | X87Control(), 0xffff0000u | X87Status(), 0xffffffffu, 0, 0, 0, 0xffff0000u};
++}
++
++inline void SetX87Environment(const std::array<std::uint32_t, 7>& environment) {
++    SetX87Control(static_cast<std::uint16_t>(environment[0]));
++    SetX87Status(static_cast<std::uint16_t>(environment[1]));
++}
++
++}
++
++#else
++
++#include <xmmintrin.h>
++
++namespace GuestCpu {
++
++inline std::uint32_t Mxcsr() { return _mm_getcsr(); }
++inline void SetMxcsr(const std::uint32_t value) { _mm_setcsr(value); }
++
++inline std::uint16_t X87Control() {
++    std::uint16_t control;
++    asm volatile("fnstcw %0" : "=m"(control));
++    return control;
++}
++
++inline void SetX87Control(const std::uint16_t value) {
++    asm volatile("fldcw %0" : : "m"(value));
++}
++
++inline std::uint16_t X87Status() {
++    std::uint16_t status;
++    asm volatile("fnstsw %0" : "=am"(status));
++    return status;
++}
++
++inline void SetX87Status(const std::uint16_t value) {
++    std::array<std::uint32_t, 7> environment;
++    asm volatile("fnstenv %0" : "=m"(environment));
++    environment[1] = (environment[1] & 0xffff0000u) | value;
++    asm volatile("fldenv %0" : : "m"(environment));
++}
++
++inline void X87ClearExceptions() { asm volatile("fnclex"); }
++inline void X87Wait() { asm volatile("fwait"); }
++
++inline std::uint32_t MxcsrMask() {
++    alignas(16) std::array<std::uint32_t, 128> state;
++    asm volatile("fxsave %0" : "=m"(state));
++    return state[7] != 0 ? state[7] : 0xffbfu;
++}
++
++inline std::array<std::uint32_t, 7> X87Environment() {
++    std::array<std::uint32_t, 7> environment;
++    asm volatile("fnstenv %0\n\tfldcw %0" : "+m"(environment));
++    return environment;
++}
++
++inline void SetX87Environment(const std::array<std::uint32_t, 7>& environment) {
++    asm volatile("fldenv %0" : : "m"(environment) : "st", "st(1)", "st(2)", "st(3)", "st(4)", "st(5)", "st(6)", "st(7)");
++}
++
++}
++
++#endif
++
++#endif
+diff --git a/core/libs/prx/libc/src/FloatingPoint.cpp b/core/libs/prx/libc/src/FloatingPoint.cpp
+index 9ba535015..3d3d586af 100644
+--- a/core/libs/prx/libc/src/FloatingPoint.cpp
++++ b/core/libs/prx/libc/src/FloatingPoint.cpp
+@@ -3,7 +3,8 @@
+ #include <array>
+ #include <cstdint>
+ #include <stdexcept>
+-#include <xmmintrin.h>
++
++#include "prx/libc/include/GuestCpu.hpp"
+ 
+ namespace {
+ 
+@@ -11,21 +12,16 @@ constexpr unsigned Exceptions = 0x3f;
+ constexpr unsigned Rounding = 0xc00;
+ 
+ void ReplaceFlags(unsigned mask, unsigned flags) {
+-    std::array<std::uint32_t, 7> environment;
+-    asm volatile("fnstenv %0" : "=m"(environment));
+-    environment[1] = (environment[1] & ~mask) | (flags & mask);
+-    asm volatile("fldenv %0" : : "m"(environment));
+-    _mm_setcsr((_mm_getcsr() & ~mask) | (flags & mask));
++    GuestCpu::SetX87Status(static_cast<std::uint16_t>((GuestCpu::X87Status() & ~mask) | (flags & mask)));
++    GuestCpu::SetMxcsr((GuestCpu::Mxcsr() & ~mask) | (flags & mask));
+ }
+ 
+ int ChangeTraps(int exceptions, bool enable) {
+     const auto mask = static_cast<unsigned>(exceptions) & Exceptions;
+-    std::uint16_t control;
+-    asm volatile("fnstcw %0" : "=m"(control));
+-    const unsigned csr = _mm_getcsr();
+-    const auto changed = static_cast<std::uint16_t>(enable ? (control & ~mask) : (control | mask));
+-    asm volatile("fldcw %0" : : "m"(changed));
+-    _mm_setcsr(enable ? (csr & ~(mask << 7)) : (csr | (mask << 7)));
++    const std::uint16_t control = GuestCpu::X87Control();
++    const unsigned csr = GuestCpu::Mxcsr();
++    GuestCpu::SetX87Control(static_cast<std::uint16_t>(enable ? (control & ~mask) : (control | mask)));
++    GuestCpu::SetMxcsr(enable ? (csr & ~(mask << 7)) : (csr | (mask << 7)));
+     return static_cast<int>(~((csr >> 7) | control) | ~Exceptions);
+ }
+ 
+@@ -34,26 +30,19 @@ int ChangeTraps(int exceptions, bool enable) {
+ extern "C" {
+ 
+ int APS5_VABI fegetround_nid_postfix() {
+-    std::uint16_t control;
+-    asm volatile("fnstcw %0" : "=m"(control));
+-    return control & Rounding;
++    return GuestCpu::X87Control() & Rounding;
+ }
+ 
+ int APS5_VABI fesetround_nid_postfix(int rounding) {
+     const auto mode = static_cast<unsigned>(rounding);
+     if ((mode & ~Rounding) != 0) return -1;
+-    std::uint16_t control;
+-    asm volatile("fnstcw %0" : "=m"(control));
+-    control = static_cast<std::uint16_t>((control & ~Rounding) | mode);
+-    asm volatile("fldcw %0" : : "m"(control));
+-    _mm_setcsr((_mm_getcsr() & ~(Rounding << 3)) | (mode << 3));
++    GuestCpu::SetX87Control(static_cast<std::uint16_t>((GuestCpu::X87Control() & ~Rounding) | mode));
++    GuestCpu::SetMxcsr((GuestCpu::Mxcsr() & ~(Rounding << 3)) | (mode << 3));
+     return 0;
+ }
+ 
+ int APS5_VABI fetestexcept_nid_postfix(int exceptions) {
+-    std::uint16_t status;
+-    asm volatile("fnstsw %0" : "=am"(status));
+-    return static_cast<int>((status | _mm_getcsr()) & static_cast<unsigned>(exceptions));
++    return static_cast<int>((GuestCpu::X87Status() | GuestCpu::Mxcsr()) & static_cast<unsigned>(exceptions));
+ }
+ 
+ int APS5_VABI fegetexceptflag_nid_postfix(std::uint16_t* flags, int exceptions) {
+@@ -68,12 +57,9 @@ void APS5_VABI _Feraise_nid_postfix(int exceptions) {
+     auto raised = static_cast<unsigned>(exceptions);
+     if ((raised & Overflows) != 0) raised |= Inexact;
+     *__error_nid_postfix() = GuestEdom;
+-    std::array<std::uint32_t, 7> environment;
+-    asm volatile("fnstenv %0" : "=m"(environment));
+-    environment[1] = (environment[1] & ~raised) | (raised & 0xffff);
+-    asm volatile("fldenv %0" : : "m"(environment));
+-    _mm_setcsr((_mm_getcsr() & ~raised) | (raised & 0xffff));
+-    asm volatile("fwait");
++    GuestCpu::SetX87Status(static_cast<std::uint16_t>((GuestCpu::X87Status() & ~raised) | (raised & 0xffff)));
++    GuestCpu::SetMxcsr((GuestCpu::Mxcsr() & ~raised) | (raised & 0xffff));
++    GuestCpu::X87Wait();
+     if ((raised & Invalid) != 0) *__error_nid_postfix() = GuestEdom;
+     else if ((raised & Ranges) != 0) *__error_nid_postfix() = GuestErange;
+ }
+@@ -88,15 +74,15 @@ int APS5_VABI feraiseexcept_nid_postfix(int exceptions) {
+     const auto raised = static_cast<unsigned>(exceptions);
+     if ((raised & ~Exceptions) != 0) throw std::invalid_argument("feraiseexcept: unsupported exception bits");
+     ReplaceFlags(raised, raised);
+-    asm volatile("fwait");
++    GuestCpu::X87Wait();
+     return 0;
+ }
+ 
+ int APS5_VABI feclearexcept_nid_postfix(int exceptions) {
+     const auto mask = static_cast<unsigned>(exceptions) & Exceptions;
+     if (mask == Exceptions) {
+-        asm volatile("fnclex");
+-        _mm_setcsr(_mm_getcsr() & ~Exceptions);
++        GuestCpu::X87ClearExceptions();
++        GuestCpu::SetMxcsr(GuestCpu::Mxcsr() & ~Exceptions);
+     } else if (mask != 0) {
+         ReplaceFlags(mask, 0);
+     }
+@@ -120,9 +106,7 @@ int APS5_VABI __fedisableexcept_nid_postfix(int exceptions) {
+ }
+ 
+ int APS5_VABI fegettrapenable_nid_postfix() {
+-    std::uint16_t control;
+-    asm volatile("fnstcw %0" : "=m"(control));
+-    return ~control & Exceptions;
++    return ~GuestCpu::X87Control() & Exceptions;
+ }
+ 
+ int APS5_VABI fegetexcept_nid_postfix() {
+@@ -132,11 +116,8 @@ int APS5_VABI fegetexcept_nid_postfix() {
+ int APS5_VABI fesettrapenable_nid_postfix(int exceptions) {
+     const auto mask = static_cast<std::uint16_t>(exceptions);
+     if (mask > Exceptions) return 1;
+-    std::uint16_t control;
+-    asm volatile("fnstcw %0" : "=m"(control));
+-    control = static_cast<std::uint16_t>(control & ~mask);
+-    asm volatile("fldcw %0" : : "m"(control));
+-    _mm_setcsr(_mm_getcsr() & ~(static_cast<unsigned>(mask) << 7));
++    GuestCpu::SetX87Control(static_cast<std::uint16_t>(GuestCpu::X87Control() & ~mask));
++    GuestCpu::SetMxcsr(GuestCpu::Mxcsr() & ~(static_cast<unsigned>(mask) << 7));
+     return 0;
+ }
+ 
+diff --git a/core/libs/prx/libc/src/Math.cpp b/core/libs/prx/libc/src/Math.cpp
+index eecd5815e..52689d581 100644
+--- a/core/libs/prx/libc/src/Math.cpp
++++ b/core/libs/prx/libc/src/Math.cpp
+@@ -13,9 +13,9 @@
+ #include <cstring>
+ #include <limits>
+ #include <stdexcept>
+-#include <xmmintrin.h>
+ 
+ #include "prx/libc/include/General.hpp"
++#include "prx/libc/include/GuestCpu.hpp"
+ #include "prx/libc/include/SonyCrt.hpp"
+ 
+ namespace {
+@@ -1652,8 +1652,7 @@ float APS5_VABI modff_nid_postfix(float x, float* integral) {
+     if (exponent >= 150u) {
+         *integral = x;
+         if (exponent == 0xffu && (bits & 0x7fffffu) != 0) {
+-            volatile int unordered = _mm_ucomieq_ss(_mm_set_ss(x), _mm_setzero_ps());
+-            (void)unordered;
++            if ((bits & 0x400000u) == 0) GuestCpu::SetMxcsr(GuestCpu::Mxcsr() | 1u);
+             return x;
+         }
+         return zero;
+@@ -1910,38 +1909,35 @@ static_assert(sizeof(GuestFloatingPointEnvironment) == 32 && alignof(GuestFloati
+ int APS5_VABI feupdateenv_nid_postfix(const GuestFloatingPointEnvironment* environment) {
+     if (environment == nullptr) throw std::invalid_argument("feupdateenv: null environment");
+     const auto saved = *environment;
+-    alignas(16) std::array<std::uint32_t, 128> state;
+-    asm volatile("fxsave %0" : "=m"(state));
+-    const auto supported = state[7] != 0 ? state[7] : 0xffbfu;
+-    if ((saved.mxcsr & ~supported) != 0) throw std::invalid_argument("feupdateenv: unsupported MXCSR bits");
+-    std::uint16_t status;
+-    asm volatile("fnstsw %0" : "=am"(status));
+-    const auto pending = (status | _mm_getcsr()) & 0x3f;
+-    asm volatile("fldenv %0" : : "m"(saved) : "st", "st(1)", "st(2)", "st(3)", "st(4)", "st(5)", "st(6)", "st(7)");
+-    _mm_setcsr(saved.mxcsr);
+-    GuestFloatingPointEnvironment raised;
+-    asm volatile("fnstenv %0" : "=m"(raised));
+-    raised.status |= pending;
+-    const auto mxcsr = _mm_getcsr() | pending;
+-    asm volatile("fldenv %0" : : "m"(raised) : "st", "st(1)", "st(2)", "st(3)", "st(4)", "st(5)", "st(6)", "st(7)");
+-    _mm_setcsr(mxcsr);
+-    asm volatile("fwait");
++    if ((saved.mxcsr & ~GuestCpu::MxcsrMask()) != 0) throw std::invalid_argument("feupdateenv: unsupported MXCSR bits");
++    const auto pending = (GuestCpu::X87Status() | GuestCpu::Mxcsr()) & 0x3f;
++    std::array<std::uint32_t, 7> x87;
++    std::memcpy(x87.data(), &saved, sizeof(x87));
++    GuestCpu::SetX87Environment(x87);
++    GuestCpu::SetMxcsr(saved.mxcsr);
++    GuestCpu::SetX87Status(static_cast<std::uint16_t>(GuestCpu::X87Status() | pending));
++    GuestCpu::SetMxcsr(GuestCpu::Mxcsr() | pending);
++    GuestCpu::X87Wait();
+     return 0;
+ }
+ 
+ int APS5_VABI fegetenv_nid_postfix(GuestFloatingPointEnvironment* environment) {
+     if (environment == nullptr) throw std::invalid_argument("fegetenv: null environment");
+-    asm volatile("fnstenv %0\n\tfldcw %0" : "+m"(*environment));
+-    environment->mxcsr = _mm_getcsr();
++    const auto x87 = GuestCpu::X87Environment();
++    std::memcpy(environment, x87.data(), sizeof(x87));
++    environment->mxcsr = GuestCpu::Mxcsr();
+     return 0;
+ }
+ 
+ int APS5_VABI feholdexcept_nid_postfix(GuestFloatingPointEnvironment* environment) {
+     if (environment == nullptr) throw std::invalid_argument("feholdexcept: null environment");
+-    const auto csr = _mm_getcsr();
+-    asm volatile("fnstenv %0\n\tfnclex" : "=m"(*environment));
++    const auto csr = GuestCpu::Mxcsr();
++    const auto x87 = GuestCpu::X87Environment();
++    std::memcpy(environment, x87.data(), sizeof(x87));
++    GuestCpu::X87ClearExceptions();
++    GuestCpu::SetX87Control(static_cast<std::uint16_t>(x87[0] | 0x3fu));
+     environment->mxcsr = csr;
+-    _mm_setcsr((csr & ~0x3fu) | 0x1f80u);
++    GuestCpu::SetMxcsr((csr & ~0x3fu) | 0x1f80u);
+     return 0;
+ }
+ 
+-- 
+2.43.0
+

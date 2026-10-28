@@ -1,0 +1,397 @@
+From cf2f7419c4b07be0cde019abd9edb61eff57a852 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Wed, 28 Oct 2026 07:12:37 +0000
+Subject: [PATCH 3/4] feat(libc): convert guest long double at its boundaries
+
+Add GuestLongDouble to load and store the guest's x87 80-bit values,
+so the libc can compute with a host long double that is not x87
+extended, such as aarch64's binary128, when built for a lifted guest.
+Formatting, scanning, strtold, modfl, _LDtest and the code that takes
+80-bit values apart go through it; strtold parses with round-to-odd
+so that the final rounding is correct. On an x87 host it only copies.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ .../libs/prx/libc/include/GuestLongDouble.hpp | 84 +++++++++++++++++++
+ .../prx/libc/include/WindowsFormatting.hpp    | 13 ++-
+ core/libs/prx/libc/src/FloatBuiltins.cpp      | 12 ++-
+ core/libs/prx/libc/src/Math.cpp               | 28 +++----
+ core/libs/prx/libc/src/MathExact.cpp          | 20 +++--
+ core/libs/prx/libc/src/ScanningWide.cpp       |  5 +-
+ core/libs/prx/libc/src/Strings.cpp            |  7 +-
+ .../libc/src/exception/StandardExceptions.cpp |  2 +-
+ 8 files changed, 131 insertions(+), 40 deletions(-)
+ create mode 100644 core/libs/prx/libc/include/GuestLongDouble.hpp
+
+diff --git a/core/libs/prx/libc/include/GuestLongDouble.hpp b/core/libs/prx/libc/include/GuestLongDouble.hpp
+new file mode 100644
+index 000000000..7098af1c6
+--- /dev/null
++++ b/core/libs/prx/libc/include/GuestLongDouble.hpp
+@@ -0,0 +1,84 @@
++#ifndef CORE_LIBS_PRX_LIBC_INCLUDE_GUESTLONGDOUBLE_HPP
++#define CORE_LIBS_PRX_LIBC_INCLUDE_GUESTLONGDOUBLE_HPP
++
++#include <array>
++#include <cerrno>
++#include <cfenv>
++#include <cfloat>
++#include <cmath>
++#include <cstdint>
++#include <cstdlib>
++#include <cstring>
++#include <limits>
++
++static_assert(std::numeric_limits<long double>::digits >= 64 && std::numeric_limits<long double>::max_exponent == 16384, "host long double must hold every x87 extended value");
++
++#if LDBL_MANT_DIG != 64
++#ifndef ANYPS5_GUEST_LIFTED
++#error "a host long double other than x87 extended needs the lifted guest runtime"
++#endif
++extern "C" {
++void GuestCpuLoadExtended_nid_no_patch(const void* guest, long double* host);
++void GuestCpuStoreExtended_nid_no_patch(const long double* host, void* guest);
++}
++#endif
++
++namespace GuestLongDouble {
++
++inline long double Load(const void* guest) {
++    long double value;
++#if LDBL_MANT_DIG == 64
++    std::memset(&value, 0, sizeof(value));
++    std::memcpy(&value, guest, 10);
++#else
++    GuestCpuLoadExtended_nid_no_patch(guest, &value);
++#endif
++    return value;
++}
++
++inline void Store(void* guest, const long double value) {
++#if LDBL_MANT_DIG == 64
++    std::memcpy(guest, &value, 10);
++#else
++    GuestCpuStoreExtended_nid_no_patch(&value, guest);
++#endif
++}
++
++inline std::array<unsigned char, 16> Bytes(const long double value) {
++    std::array<unsigned char, 16> bytes{};
++    Store(bytes.data(), value);
++    return bytes;
++}
++
++inline long double Round(const long double value) {
++    return Load(Bytes(value).data());
++}
++
++inline long double Parse(const char* text, char** end) {
++#if LDBL_MANT_DIG == 64
++    return std::strtold(text, end);
++#else
++    const int rounding = std::fegetround();
++    const int saved = errno;
++    std::fesetround(FE_DOWNWARD);
++    const long double below = std::strtold(text, end);
++    std::fesetround(FE_UPWARD);
++    errno = saved;
++    const long double above = std::strtold(text, nullptr);
++    std::fesetround(rounding);
++    long double truncated = std::fabs(below) <= std::fabs(above) ? below : above;
++    if (below != above && !std::isnan(below)) {
++        unsigned char bits[sizeof(long double)];
++        std::memcpy(bits, &truncated, sizeof(truncated));
++        bits[0] |= 1;
++        std::memcpy(&truncated, bits, sizeof(truncated));
++    }
++    const long double value = Round(truncated);
++    if (std::isinf(value) && !std::isinf(truncated)) errno = ERANGE;
++    return value;
++#endif
++}
++
++}
++
++#endif
+diff --git a/core/libs/prx/libc/include/WindowsFormatting.hpp b/core/libs/prx/libc/include/WindowsFormatting.hpp
+index e3b973178..aae962a0a 100644
+--- a/core/libs/prx/libc/include/WindowsFormatting.hpp
++++ b/core/libs/prx/libc/include/WindowsFormatting.hpp
+@@ -2,6 +2,7 @@
+ #define CORE_LIBS_PRX_LIBC_INCLUDE_WINDOWSFORMATTING_HPP
+ 
+ #include "SceTypes.hpp"
++#include "prx/libc/include/GuestLongDouble.hpp"
+ #include <algorithm>
+ #include <array>
+ #include <bit>
+@@ -87,9 +88,13 @@ private:
+                 args.overflow_arg_area = static_cast<char*>(args.overflow_arg_area) + 8;
+             }
+         }
+-        T value;
+-        std::memcpy(&value, address, sizeof(value));
+-        return value;
++        if constexpr (std::is_same_v<T, long double>) {
++            return GuestLongDouble::Load(address);
++        } else {
++            T value;
++            std::memcpy(&value, address, sizeof(value));
++            return value;
++        }
+     }
+ 
+ };
+@@ -656,7 +661,7 @@ inline int FormatWindows(char* buffer, size_t size, const char* format, const vo
+         } else if (std::strchr("aAeEfFgG", conversion)) {
+             if (length == "L") {
+                 static_assert(sizeof(long double) == 16);
+-                static_assert(std::numeric_limits<long double>::digits == 64);
++                static_assert(std::numeric_limits<long double>::digits >= 64);
+                 const long double value = args.Next<long double>();
+                 if (std::isnan(value)) {
+                     output.Value(PaddedStringSpec(spec), NanText(spec, std::signbit(value), conversion < 'a').c_str());
+diff --git a/core/libs/prx/libc/src/FloatBuiltins.cpp b/core/libs/prx/libc/src/FloatBuiltins.cpp
+index 020d73eb1..d90550876 100644
+--- a/core/libs/prx/libc/src/FloatBuiltins.cpp
++++ b/core/libs/prx/libc/src/FloatBuiltins.cpp
+@@ -7,6 +7,7 @@
+ #include <type_traits>
+ 
+ #include "prx/libc/include/General.hpp"
++#include "prx/libc/include/GuestLongDouble.hpp"
+ 
+ namespace {
+ 
+@@ -55,12 +56,11 @@ struct ExtendedBits {
+ };
+ 
+ ExtendedBits DecomposeExtended(long double value) {
+-    unsigned char bytes[sizeof(long double)];
+-    std::memcpy(bytes, &value, sizeof(bytes));
++    const auto bytes = GuestLongDouble::Bytes(value);
+     std::uint64_t mantissa;
+     std::uint16_t signExponent;
+-    std::memcpy(&mantissa, bytes, sizeof(mantissa));
+-    std::memcpy(&signExponent, bytes + 8, sizeof(signExponent));
++    std::memcpy(&mantissa, bytes.data(), sizeof(mantissa));
++    std::memcpy(&signExponent, bytes.data() + 8, sizeof(signExponent));
+     return {mantissa, (signExponent & 0x8000u) != 0, static_cast<int>(signExponent & 0x7fffu) - 16383};
+ }
+ 
+@@ -69,9 +69,7 @@ long double ComposeExtended(bool negative, int biased, std::uint64_t mantissa) {
+     const std::uint16_t signExponent = static_cast<std::uint16_t>((negative ? 0x8000u : 0u) | static_cast<unsigned>(biased));
+     std::memcpy(bytes, &mantissa, sizeof(mantissa));
+     std::memcpy(bytes + 8, &signExponent, sizeof(signExponent));
+-    long double value;
+-    std::memcpy(&value, bytes, sizeof(value));
+-    return value;
++    return GuestLongDouble::Load(bytes);
+ }
+ 
+ template<typename TShift>
+diff --git a/core/libs/prx/libc/src/Math.cpp b/core/libs/prx/libc/src/Math.cpp
+index 52689d581..624b4f147 100644
+--- a/core/libs/prx/libc/src/Math.cpp
++++ b/core/libs/prx/libc/src/Math.cpp
+@@ -15,6 +15,7 @@
+ #include <stdexcept>
+ 
+ #include "prx/libc/include/General.hpp"
++#include "prx/libc/include/GuestLongDouble.hpp"
+ #include "prx/libc/include/GuestCpu.hpp"
+ #include "prx/libc/include/SonyCrt.hpp"
+ 
+@@ -137,7 +138,7 @@ float AtanhfLog1p(float x) {
+     return kFloat * Ln2High - ((halfSquare - (s * (halfSquare + r) + (kFloat * Ln2Low + c))) - f);
+ }
+ 
+-static_assert(std::numeric_limits<long double>::digits == 64, "guest long double is the x87 80-bit format");
++static_assert(std::numeric_limits<long double>::digits >= 64, "host long double holds the guest x87 80-bit format");
+ 
+ struct ExtendedParts {
+     std::uint64_t mantissa;
+@@ -162,20 +163,17 @@ TValue Hypot3(TValue x, TValue y, TValue z, THypot hypot) {
+ }
+ 
+ ExtendedParts SplitExtended(long double value) {
+-    unsigned char bytes[sizeof(long double)];
+-    std::memcpy(bytes, &value, sizeof(value));
++    const auto bytes = GuestLongDouble::Bytes(value);
+     ExtendedParts parts;
+-    std::memcpy(&parts.mantissa, bytes, sizeof(parts.mantissa));
+-    std::memcpy(&parts.signExponent, bytes + sizeof(parts.mantissa), sizeof(parts.signExponent));
++    std::memcpy(&parts.mantissa, bytes.data(), sizeof(parts.mantissa));
++    std::memcpy(&parts.signExponent, bytes.data() + sizeof(parts.mantissa), sizeof(parts.signExponent));
+     return parts;
+ }
+ 
+ long double ClearLowMantissaWord(long double value) {
+-    unsigned char bytes[sizeof(long double)];
+-    std::memcpy(bytes, &value, sizeof(value));
+-    std::memset(bytes, 0, sizeof(std::uint32_t));
+-    std::memcpy(&value, bytes, sizeof(value));
+-    return value;
++    auto bytes = GuestLongDouble::Bytes(value);
++    std::memset(bytes.data(), 0, sizeof(std::uint32_t));
++    return GuestLongDouble::Load(bytes.data());
+ }
+ 
+ constexpr long double AsinNumeratorCoefficients[] = {
+@@ -211,11 +209,11 @@ bool NanWithoutException(T value) {
+         std::memcpy(&bits, &value, sizeof(bits));
+         return (bits & UINT64_C(0x7fffffffffffffff)) > UINT64_C(0x7ff0000000000000);
+     } else {
+-        static_assert(std::numeric_limits<T>::digits == 64);
++        const auto bytes = GuestLongDouble::Bytes(value);
+         std::uint64_t significand;
+         std::uint16_t signAndExponent;
+-        std::memcpy(&significand, &value, sizeof(significand));
+-        std::memcpy(&signAndExponent, reinterpret_cast<const unsigned char*>(&value) + sizeof(significand), sizeof(signAndExponent));
++        std::memcpy(&significand, bytes.data(), sizeof(significand));
++        std::memcpy(&signAndExponent, bytes.data() + sizeof(significand), sizeof(signAndExponent));
+         return (signAndExponent & 0x7fff) == 0x7fff && (significand & UINT64_C(0x7fffffffffffffff)) != 0;
+     }
+ }
+@@ -1773,9 +1771,9 @@ int APS5_VABI __signbitl_nid_postfix(long double x) {
+ }
+ 
+ int APS5_VABI __isfinitel_nid_postfix(long double x) {
+-    static_assert(sizeof(long double) == 16 && std::numeric_limits<long double>::digits == 64 && std::numeric_limits<long double>::max_exponent == 16384 && std::endian::native == std::endian::little, "guest long double requires little-endian x87 extended precision storage");
++    static_assert(sizeof(long double) == 16 && std::numeric_limits<long double>::max_exponent == 16384 && std::endian::native == std::endian::little, "guest long double requires little-endian storage with the x87 exponent range");
+     std::uint16_t exponent;
+-    std::memcpy(&exponent, reinterpret_cast<const std::uint8_t*>(&x) + 8, sizeof(exponent));
++    std::memcpy(&exponent, GuestLongDouble::Bytes(x).data() + 8, sizeof(exponent));
+     return (exponent & 0x7fffu) != 0x7fffu;
+ }
+ 
+diff --git a/core/libs/prx/libc/src/MathExact.cpp b/core/libs/prx/libc/src/MathExact.cpp
+index bbfe5114e..22f9d59f9 100644
+--- a/core/libs/prx/libc/src/MathExact.cpp
++++ b/core/libs/prx/libc/src/MathExact.cpp
+@@ -8,6 +8,7 @@
+ #include <limits>
+ 
+ #include "prx/libc/include/General.hpp"
++#include "prx/libc/include/GuestLongDouble.hpp"
+ 
+ namespace {
+ 
+@@ -27,15 +28,17 @@ struct ExtendedBits {
+     std::uint16_t signExponent;
+ };
+ 
+-ExtendedBits Bits(const long double& value) {
++ExtendedBits Bits(const void* bytes) {
+     ExtendedBits bits;
+-    unsigned char bytes[sizeof(long double)];
+-    std::memcpy(bytes, &value, sizeof(bytes));
+     std::memcpy(&bits.mantissa, bytes, sizeof(bits.mantissa));
+-    std::memcpy(&bits.signExponent, bytes + 8, sizeof(bits.signExponent));
++    std::memcpy(&bits.signExponent, static_cast<const unsigned char*>(bytes) + 8, sizeof(bits.signExponent));
+     return bits;
+ }
+ 
++ExtendedBits Bits(const long double& value) {
++    return Bits(GuestLongDouble::Bytes(value).data());
++}
++
+ constexpr short Denormal = -2, Finite = -1, Zero = 0, Infinite = 1, NotANumber = 2;
+ 
+ short TestExtended(const ExtendedBits& bits) {
+@@ -150,10 +153,13 @@ long double APS5_VABI sqrtl_nid_postfix(long double x) {
+ 
+ long double APS5_VABI modfl_nid_postfix(long double x, long double* integral) {
+     if (std::isnan(x)) {
+-        *integral = x;
++        GuestLongDouble::Store(integral, x);
+         return x;
+     }
+-    return std::modf(x, integral);
++    long double whole;
++    const long double fraction = std::modf(x, &whole);
++    GuestLongDouble::Store(integral, whole);
++    return fraction;
+ }
+ long double APS5_VABI nanl_nid_postfix(const char*) { return std::numeric_limits<long double>::quiet_NaN(); }
+ 
+@@ -253,7 +259,7 @@ int APS5_VABI __isnormall_nid_postfix(long double x) {
+     return exponent != 0 && exponent != 0x7fff ? 1 : 0;
+ }
+ 
+-short APS5_VABI _LDtest_nid_postfix(const long double* value) { return TestExtended(Bits(*value)); }
++short APS5_VABI _LDtest_nid_postfix(const long double* value) { return TestExtended(Bits(static_cast<const void*>(value))); }
+ int APS5_VABI _Dclass_nid_postfix(double x) { return TestFloat(x); }
+ int APS5_VABI _FDclass_nid_postfix(float x) { return TestFloat(x); }
+ int APS5_VABI _LDclass_nid_postfix(long double x) { return TestExtended(Bits(x)); }
+diff --git a/core/libs/prx/libc/src/ScanningWide.cpp b/core/libs/prx/libc/src/ScanningWide.cpp
+index cccfa535b..ded99ba88 100644
+--- a/core/libs/prx/libc/src/ScanningWide.cpp
++++ b/core/libs/prx/libc/src/ScanningWide.cpp
+@@ -366,7 +366,7 @@ private:
+     }
+ 
+     Outcome Float(const Directive& directive) {
+-        static_assert(sizeof(long double) == 16 && std::numeric_limits<long double>::digits == 64);
++        static_assert(sizeof(long double) == 16 && std::numeric_limits<long double>::digits >= 64);
+         if (!directive.length.empty() && directive.length != "l" && directive.length != "L")
+             Fail("invalid floating length modifier " + directive.length);
+         void* target = nullptr;
+@@ -378,8 +378,7 @@ private:
+         if (target != nullptr) {
+             const int savedError = errno;
+             if (directive.length == "L") {
+-                const long double value = std::strtold(field.c_str(), nullptr);
+-                std::memcpy(target, &value, sizeof(value));
++                GuestLongDouble::Store(target, GuestLongDouble::Parse(field.c_str(), nullptr));
+             } else if (directive.length == "l") {
+                 const double value = std::strtod(field.c_str(), nullptr);
+                 std::memcpy(target, &value, sizeof(value));
+diff --git a/core/libs/prx/libc/src/Strings.cpp b/core/libs/prx/libc/src/Strings.cpp
+index 128c85cd7..731498fe1 100644
+--- a/core/libs/prx/libc/src/Strings.cpp
++++ b/core/libs/prx/libc/src/Strings.cpp
+@@ -13,6 +13,7 @@
+ #include <type_traits>
+ 
+ #include "prx/libc/include/General.hpp"
++#include "prx/libc/include/GuestLongDouble.hpp"
+ #include "prx/libc/include/SonyCrt.hpp"
+ 
+ namespace {
+@@ -444,7 +445,7 @@ float APS5_VABI strtof_nid_postfix(const char* str, char** endptr) {
+ }
+ long double APS5_VABI strtold_nid_postfix(const char* str, char** endptr) {
+     static_assert(sizeof(long double) == 16, "Guest long double requires x87 extended precision storage");
+-    return ParseFloat<long double>(str, endptr, std::strtold);
++    return ParseFloat<long double>(str, endptr, GuestLongDouble::Parse);
+ }
+ 
+ int APS5_VABI atoi_nid_postfix(const char* str) {
+@@ -771,8 +772,8 @@ float APS5_VABI wcstof_nid_postfix(const char16_t* str, char16_t** endptr) {
+ 
+ long double APS5_VABI wcstold_nid_postfix(const char16_t* str, char16_t** endptr) {
+     static_assert(sizeof(long double) == 16);
+-    static_assert(std::numeric_limits<long double>::digits == 64);
+-    return ParseAsciiPrefix(str, endptr, [](const char* text, char** end) { return ParseFloat<long double>(text, end, std::strtold); });
++    static_assert(std::numeric_limits<long double>::digits >= 64);
++    return ParseAsciiPrefix(str, endptr, [](const char* text, char** end) { return ParseFloat<long double>(text, end, GuestLongDouble::Parse); });
+ }
+ 
+ unsigned long long APS5_VABI wcstoul_nid_postfix(const char16_t* str, char16_t** endptr, int base) {
+diff --git a/core/libs/prx/libc/src/exception/StandardExceptions.cpp b/core/libs/prx/libc/src/exception/StandardExceptions.cpp
+index e6bca4777..ce4ba613f 100644
+--- a/core/libs/prx/libc/src/exception/StandardExceptions.cpp
++++ b/core/libs/prx/libc/src/exception/StandardExceptions.cpp
+@@ -266,7 +266,7 @@ static const char* APS5_VABI FutureCategoryName_nid_no_patch(const CategoryObjec
+ static ErrorCode APS5_VABI CategoryCondition_nid_no_patch(const CategoryObject* self, int value) { return {0, value, self}; }
+ static bool APS5_VABI CategoryEquivalentCondition_nid_no_patch(const CategoryObject* self, int value, const ErrorCode* condition) {
+     using Condition = ErrorCode (APS5_VABI *)(const CategoryObject*, int);
+-#ifdef __APPLE__
++#if defined(__APPLE__) || defined(__clang__)
+     const auto mapped = reinterpret_cast<Condition>(const_cast<void*>(static_cast<const void* const*>(self->vtable)[4]))(self, value);
+ #else
+     const auto mapped = reinterpret_cast<Condition>(static_cast<const void* const*>(self->vtable)[4])(self, value);
+-- 
+2.43.0
+

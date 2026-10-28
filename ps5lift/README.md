@@ -12,12 +12,13 @@ Requirements: CMake 3.22+, Ninja, Clang and LLD, LLVM 18 or newer with developme
 git submodule update --init
 git -C 3rdparty/zydis submodule update --init
 git -C 3rdparty/anyps5 submodule update --init 3rdparty/ZArchive
+git -C 3rdparty/anyps5 am "$PWD"/patches/anyps5/*.patch
 cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ -DLLVM_DIR=/usr/lib/llvm-18/lib/cmake/llvm
 ninja -C build
 ctest --test-dir build --output-on-failure
 ```
 
-On an aarch64 host the test lifts the fixture and runs it natively. On an x86-64 host it also runs it natively and, when `qemu-aarch64` and an aarch64 sysroot are installed (`qemu-user g++-aarch64-linux-gnu`), lifts it for aarch64 and runs it under qemu. The libc tests reserve the PS5 user address range, about 1 TiB of address space, so they fail under a `ulimit -v` limit.
+On an aarch64 host the test lifts the fixture and runs it natively. On an x86-64 host it also runs it natively and, when `qemu-aarch64` and an aarch64 sysroot are installed (`qemu-user g++-aarch64-linux-gnu`), lifts it for aarch64 and runs it under qemu. `patches/anyps5` holds the changes to AnyPS5 that build its libc for a lifted guest, on top of the upstream commit the submodule points at, until they live in a fork. The libc tests reserve the PS5 user address range, about 1 TiB of address space, so they fail under a `ulimit -v` limit.
 
 `tools/build_runtime.py` builds the runtime and [Berkeley SoftFloat](https://github.com/ucb-bar/berkeley-softfloat-3) (a submodule, for x87) into a static library per target; the tests build and cache it in `build/runtime-<arch>`.
 
