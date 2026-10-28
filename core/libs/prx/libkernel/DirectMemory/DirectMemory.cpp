@@ -28,9 +28,9 @@
 
 #if defined(__linux__)
 #include <fcntl.h>
-#include <link.h>
 #include <sys/mman.h>
 #include <unistd.h>
+#include "prx/libc/include/specifics/linux/ElfTypes.hpp"
 #include <fstream>
 #include <sstream>
 #include <string>
