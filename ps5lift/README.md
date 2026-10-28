@@ -2,7 +2,7 @@
 
 A static recompiler for PS5 executables. `ps5lift` lifts guest x86-64 code to LLVM IR and compiles it to native code for the host, so a title can run on aarch64 Linux machines such as the NVIDIA DGX Spark (GB10) without an x86 emulator. The system libraries come from [AnyPS5](https://github.com/boykopovar/anyps5), which is a submodule; its ELF reader and `.eh_frame` scanner are the lifter's frontend.
 
-Status: **milestone 2 in progress**. Guest code built for Zen 2, including SSE, AVX2, FMA and F16C code, lifts and runs on aarch64 with the same output as on x86-64. AnyPS5's PS5-style test executables (NID imports, static TLS) relink, lift and run. Real titles do not run yet; see [the design](docs/DESIGN.md) and [known gaps](docs/DEBT.md).
+Status: **milestone 2 in progress**. Guest code built for Zen 2, including SSE, AVX2, FMA, F16C and x87 code, lifts and runs on aarch64 with the same output as on x86-64. AnyPS5's PS5-style test executables (NID imports, static TLS) relink, lift and run. Real titles do not run yet; see [the design](docs/DESIGN.md) and [known gaps](docs/DEBT.md).
 
 ## Build
 
@@ -19,6 +19,8 @@ ctest --test-dir build --output-on-failure
 
 On an aarch64 host the test lifts the fixture and runs it natively. On an x86-64 host it also runs it natively and, when `qemu-aarch64` and an aarch64 sysroot are installed (`qemu-user g++-aarch64-linux-gnu`), lifts it for aarch64 and runs it under qemu.
 
+`tools/build_runtime.py` builds the runtime and [Berkeley SoftFloat](https://github.com/ucb-bar/berkeley-softfloat-3) (a submodule, for x87) into a static library per target; the tests build and cache it in `build/runtime-<arch>`.
+
 ## Use
 
 A PS5 executable goes through the AnyPS5 relinker first, which the test build compiles as `build/anyps5-relinker/core/relinker/relinker`:
@@ -29,7 +31,8 @@ build/anyps5-relinker/core/relinker/relinker eboot.bin eboot.elf
 
 ```sh
 build/lifter/ps5lift eboot.elf -o guest.o --cpu native
-clang++ -O2 -Iruntime/include runtime/src/Runtime.cpp bridges.cpp guest.o -fuse-ld=lld -pthread -o guest
+python3 tools/build_runtime.py --triple aarch64-unknown-linux-gnu --output build/runtime-aarch64
+clang++ -O2 -Iruntime/include bridges.cpp guest.o build/runtime-aarch64/libps5lift_runtime.a -fuse-ld=lld -pthread -o guest
 ./guest
 ```
 

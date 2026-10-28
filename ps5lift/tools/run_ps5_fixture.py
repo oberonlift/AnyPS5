@@ -7,7 +7,7 @@ import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from run_fixture import FIXTURES, ROOT, host_triple, lifter_features, run, runner_for
+from run_fixture import runtime_library, FIXTURES, ROOT, host_triple, lifter_features, run, runner_for
 
 GENERATORS = ROOT / "3rdparty" / "anyps5" / "core" / "relinker" / "relinker" / "tests" / "macos"
 EXPECTED = {
@@ -20,6 +20,7 @@ def main():
     parser = argparse.ArgumentParser(description="Relink an AnyPS5 PS5-style fixture, lift it and check its output and exit code")
     parser.add_argument("--ps5lift", required=True)
     parser.add_argument("--relinker", required=True)
+    parser.add_argument("--clang", default="clang")
     parser.add_argument("--clangxx", default="clang++")
     parser.add_argument("--triple", default=host_triple())
     parser.add_argument("--fixture", choices=sorted(EXPECTED), required=True)
@@ -38,8 +39,7 @@ def main():
             lifted = work / f"{args.fixture}-{memory}.o"
             report = run([args.ps5lift, relinked, "-o", lifted, "--triple", args.triple, "--memory", memory, *lifter_features(args.triple, runner)]).stderr.strip()
             program = work / f"{args.fixture}-{memory}"
-            run([args.clangxx, f"--target={args.triple}", "-std=c++20", "-O2", f"-I{ROOT / 'runtime' / 'include'}", ROOT / "runtime" / "src" / "Runtime.cpp",
-                 FIXTURES / "ps5_bridge.cpp", lifted, "-fuse-ld=lld", "-pthread", "-o", program])
+            run([args.clangxx, f"--target={args.triple}", "-std=c++20", "-O2", f"-I{ROOT / 'runtime' / 'include'}", FIXTURES / "ps5_bridge.cpp", lifted, runtime_library(args.ps5lift, args.triple, args.clang, args.clangxx), "-fuse-ld=lld", "-pthread", "-o", program])
             result = subprocess.run([*runner, program], capture_output=True, text=True)
             ok = result.stdout == expected_output and result.returncode == expected_code
             if not ok:

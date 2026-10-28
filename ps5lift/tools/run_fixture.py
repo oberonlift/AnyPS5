@@ -10,6 +10,7 @@ import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 FIXTURES = ROOT / "tests" / "fixtures"
 GUEST_FLAGS = [
     "--target=x86_64-unknown-linux-gnu",
@@ -30,6 +31,12 @@ def run(command, **kwargs):
         sys.stderr.write(f"$ {' '.join(map(str, command))}\n{result.stdout}{result.stderr}")
         raise SystemExit(f"command failed with exit code {result.returncode}")
     return result
+
+
+def runtime_library(ps5lift, triple, clang, clangxx):
+    from build_runtime import build
+    directory = Path(ps5lift).resolve().parent.parent / f"runtime-{triple.split('-')[0]}"
+    return build(triple, directory, clang, clangxx, os.cpu_count())
 
 
 def host_triple():
@@ -122,8 +129,7 @@ def main():
                 lifted = work / f"{guest.name}-{memory}.o"
                 report = run([args.ps5lift, guest, "-o", lifted, "--triple", args.triple, "--memory", memory, *lifter_features(args.triple, runner)]).stderr
                 program = work / f"{guest.name}-{memory}"
-                run([args.clangxx, f"--target={args.triple}", "-std=c++20", "-O2", f"-I{ROOT / 'runtime' / 'include'}",
-                     ROOT / "runtime" / "src" / "Runtime.cpp", FIXTURES / "host_bridge.cpp", lifted, "-fuse-ld=lld", "-pthread", "-o", program])
+                run([args.clangxx, f"--target={args.triple}", "-std=c++20", "-O2", f"-I{ROOT / 'runtime' / 'include'}", FIXTURES / "host_bridge.cpp", lifted, runtime_library(args.ps5lift, args.triple, args.clang, args.clangxx), "-fuse-ld=lld", "-pthread", "-o", program])
                 result = subprocess.run([*runner, program], capture_output=True, text=True)
                 ok = result.returncode == 0 and compare(expected, result.stdout, label)
                 if result.returncode != 0:

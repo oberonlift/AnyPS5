@@ -4,3 +4,6 @@
 [submodule "3rdparty/zydis"]
 	path = 3rdparty/zydis
 	url = https://github.com/zyantific/zydis
+[submodule "3rdparty/softfloat"]
+	path = 3rdparty/softfloat
+	url = https://github.com/ucb-bar/berkeley-softfloat-3

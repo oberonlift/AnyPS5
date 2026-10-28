@@ -8,7 +8,7 @@ import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from run_fixture import FIXTURES, ROOT, build_guest, host_triple, lifter_features, run, runner_for
+from run_fixture import runtime_library, FIXTURES, ROOT, build_guest, host_triple, lifter_features, run, runner_for
 
 
 def parse(output):
@@ -51,8 +51,7 @@ def main():
             report = run([args.ps5lift, guests[suffix], "-o", lifted, "--triple", args.triple, "--memory", memory, *cpu_args, *lifter_features(args.triple, runner)]).stderr.strip()
             print(f"{name}: {report}")
             programs[name] = work / name
-            run([args.clangxx, f"--target={args.triple}", "-std=c++20", "-O2", f"-I{ROOT / 'runtime' / 'include'}", ROOT / "runtime" / "src" / "Runtime.cpp",
-                 FIXTURES / "host_bridge.cpp", lifted, "-fuse-ld=lld", "-pthread", "-o", programs[name]])
+            run([args.clangxx, f"--target={args.triple}", "-std=c++20", "-O2", f"-I{ROOT / 'runtime' / 'include'}", FIXTURES / "host_bridge.cpp", lifted, runtime_library(args.ps5lift, args.triple, args.clang, args.clangxx), "-fuse-ld=lld", "-pthread", "-o", programs[name]])
 
         reference = None
         best = {}

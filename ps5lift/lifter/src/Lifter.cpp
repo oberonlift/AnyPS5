@@ -2133,6 +2133,168 @@ private:
         }
     }
 
+    llvm::Value* CallX87(const std::uint32_t operation, const std::uint32_t format, llvm::Value* address, const std::uint32_t index) {
+        auto callee = _module.Runtime("ps5lift_x87", llvm::FunctionType::get(_builder.getInt32Ty(), {_module.Pointer(), _builder.getInt32Ty(), _builder.getInt32Ty(), I64(), _builder.getInt32Ty()}, false));
+        return _builder.CreateCall(callee, {_state, _builder.getInt32(operation), _builder.getInt32(format), address ? address : _builder.getInt64(0), _builder.getInt32(index)});
+    }
+
+    static bool IsStackRegister(const ZydisDecodedOperand& operand) {
+        return operand.type == ZYDIS_OPERAND_TYPE_REGISTER && operand.reg.value >= ZYDIS_REGISTER_ST0 && operand.reg.value <= ZYDIS_REGISTER_ST7;
+    }
+
+    static std::uint32_t StackIndex(const ZydisDecodedOperand& operand) {
+        return static_cast<std::uint32_t>(operand.reg.value - ZYDIS_REGISTER_ST0);
+    }
+
+    const ZydisDecodedOperand* X87Memory() const {
+        for (unsigned i = 0; i < _instruction->Info.operand_count_visible; ++i) {
+            if (Operand(static_cast<int>(i)).type == ZYDIS_OPERAND_TYPE_MEMORY) return &Operand(static_cast<int>(i));
+        }
+        return nullptr;
+    }
+
+    std::uint32_t X87Format(const bool integer) const {
+        const auto* memory = X87Memory();
+        if (memory == nullptr) return PS5LIFT_X87_REGISTER;
+        switch (memory->size) {
+        case 16: return integer ? PS5LIFT_X87_INTEGER16 : throw UnsupportedInstruction("16-bit x87 float");
+        case 32: return integer ? PS5LIFT_X87_INTEGER32 : PS5LIFT_X87_FLOAT32;
+        case 64: return integer ? PS5LIFT_X87_INTEGER64 : PS5LIFT_X87_FLOAT64;
+        case 80: return PS5LIFT_X87_FLOAT80;
+        default: throw UnsupportedInstruction("x87 operand size");
+        }
+    }
+
+    std::uint32_t X87Index(const std::uint32_t fallback) const {
+        std::uint32_t index = fallback;
+        bool found = false;
+        for (unsigned i = 0; i < _instruction->Info.operand_count_visible; ++i) {
+            const auto& operand = Operand(static_cast<int>(i));
+            if (!IsStackRegister(operand)) continue;
+            if (StackIndex(operand) != 0 || !found) index = StackIndex(operand);
+            found = found || StackIndex(operand) != 0;
+        }
+        return index;
+    }
+
+    bool X87ToRegister() const {
+        return _instruction->Info.operand_count_visible >= 2 && IsStackRegister(Operand(0)) && StackIndex(Operand(0)) != 0;
+    }
+
+    void X87CompareFlags(llvm::Value* result) {
+        auto* unordered = _builder.CreateICmpEQ(result, _builder.getInt32(3));
+        SetFlag(PS5LIFT_ZF, _builder.CreateOr(unordered, _builder.CreateICmpEQ(result, _builder.getInt32(2))));
+        SetFlag(PS5LIFT_PF, unordered);
+        SetFlag(PS5LIFT_CF, _builder.CreateOr(unordered, _builder.CreateICmpEQ(result, _builder.getInt32(1))));
+        for (const auto flag : {PS5LIFT_OF, PS5LIFT_SF, PS5LIFT_AF}) SetFlag(flag, _builder.getFalse());
+    }
+
+    llvm::Value* X87Address() {
+        const auto* memory = X87Memory();
+        return memory ? Address(*memory) : nullptr;
+    }
+
+    bool EmitX87(const ZydisMnemonic mnemonic) {
+        using M = std::uint32_t;
+        const auto arithmetic = [&](const M operation, const bool integer, const bool pop) {
+            M format = X87Format(integer);
+            if (format == PS5LIFT_X87_REGISTER && (X87ToRegister() || pop)) format |= PS5LIFT_X87_TO_REGISTER;
+            if (pop) format |= PS5LIFT_X87_POP;
+            CallX87(operation, format, X87Address(), X87Index(1));
+        };
+        switch (mnemonic) {
+        case ZYDIS_MNEMONIC_FLD: CallX87(PS5LIFT_X87_LOAD, X87Format(false), X87Address(), X87Index(0)); return true;
+        case ZYDIS_MNEMONIC_FILD: CallX87(PS5LIFT_X87_LOAD, X87Format(true), X87Address(), 0); return true;
+        case ZYDIS_MNEMONIC_FST: CallX87(PS5LIFT_X87_STORE, X87Format(false), X87Address(), X87Index(0)); return true;
+        case ZYDIS_MNEMONIC_FSTP: CallX87(PS5LIFT_X87_STORE, X87Format(false) | PS5LIFT_X87_POP, X87Address(), X87Index(0)); return true;
+        case ZYDIS_MNEMONIC_FIST: CallX87(PS5LIFT_X87_STORE, X87Format(true), X87Address(), 0); return true;
+        case ZYDIS_MNEMONIC_FISTP: CallX87(PS5LIFT_X87_STORE, X87Format(true) | PS5LIFT_X87_POP, X87Address(), 0); return true;
+        case ZYDIS_MNEMONIC_FISTTP: CallX87(PS5LIFT_X87_STORE, X87Format(true) | PS5LIFT_X87_POP | PS5LIFT_X87_TRUNCATE, X87Address(), 0); return true;
+        case ZYDIS_MNEMONIC_FADD: arithmetic(PS5LIFT_X87_ADD, false, false); return true;
+        case ZYDIS_MNEMONIC_FADDP: arithmetic(PS5LIFT_X87_ADD, false, true); return true;
+        case ZYDIS_MNEMONIC_FIADD: arithmetic(PS5LIFT_X87_ADD, true, false); return true;
+        case ZYDIS_MNEMONIC_FSUB: arithmetic(PS5LIFT_X87_SUBTRACT, false, false); return true;
+        case ZYDIS_MNEMONIC_FSUBP: arithmetic(PS5LIFT_X87_SUBTRACT, false, true); return true;
+        case ZYDIS_MNEMONIC_FISUB: arithmetic(PS5LIFT_X87_SUBTRACT, true, false); return true;
+        case ZYDIS_MNEMONIC_FSUBR: arithmetic(PS5LIFT_X87_SUBTRACT_REVERSE, false, false); return true;
+        case ZYDIS_MNEMONIC_FSUBRP: arithmetic(PS5LIFT_X87_SUBTRACT_REVERSE, false, true); return true;
+        case ZYDIS_MNEMONIC_FISUBR: arithmetic(PS5LIFT_X87_SUBTRACT_REVERSE, true, false); return true;
+        case ZYDIS_MNEMONIC_FMUL: arithmetic(PS5LIFT_X87_MULTIPLY, false, false); return true;
+        case ZYDIS_MNEMONIC_FMULP: arithmetic(PS5LIFT_X87_MULTIPLY, false, true); return true;
+        case ZYDIS_MNEMONIC_FIMUL: arithmetic(PS5LIFT_X87_MULTIPLY, true, false); return true;
+        case ZYDIS_MNEMONIC_FDIV: arithmetic(PS5LIFT_X87_DIVIDE, false, false); return true;
+        case ZYDIS_MNEMONIC_FDIVP: arithmetic(PS5LIFT_X87_DIVIDE, false, true); return true;
+        case ZYDIS_MNEMONIC_FIDIV: arithmetic(PS5LIFT_X87_DIVIDE, true, false); return true;
+        case ZYDIS_MNEMONIC_FDIVR: arithmetic(PS5LIFT_X87_DIVIDE_REVERSE, false, false); return true;
+        case ZYDIS_MNEMONIC_FDIVRP: arithmetic(PS5LIFT_X87_DIVIDE_REVERSE, false, true); return true;
+        case ZYDIS_MNEMONIC_FIDIVR: arithmetic(PS5LIFT_X87_DIVIDE_REVERSE, true, false); return true;
+        case ZYDIS_MNEMONIC_FCOM: CallX87(PS5LIFT_X87_COMPARE, X87Format(false), X87Address(), X87Index(1)); return true;
+        case ZYDIS_MNEMONIC_FCOMP: CallX87(PS5LIFT_X87_COMPARE, X87Format(false) | PS5LIFT_X87_POP, X87Address(), X87Index(1)); return true;
+        case ZYDIS_MNEMONIC_FCOMPP: CallX87(PS5LIFT_X87_COMPARE, PS5LIFT_X87_POP_TWICE, nullptr, 1); return true;
+        case ZYDIS_MNEMONIC_FUCOM: CallX87(PS5LIFT_X87_COMPARE_UNORDERED, PS5LIFT_X87_REGISTER, nullptr, X87Index(1)); return true;
+        case ZYDIS_MNEMONIC_FUCOMP: CallX87(PS5LIFT_X87_COMPARE_UNORDERED, PS5LIFT_X87_POP, nullptr, X87Index(1)); return true;
+        case ZYDIS_MNEMONIC_FUCOMPP: CallX87(PS5LIFT_X87_COMPARE_UNORDERED, PS5LIFT_X87_POP_TWICE, nullptr, 1); return true;
+        case ZYDIS_MNEMONIC_FICOM: CallX87(PS5LIFT_X87_COMPARE, X87Format(true), X87Address(), 0); return true;
+        case ZYDIS_MNEMONIC_FICOMP: CallX87(PS5LIFT_X87_COMPARE, X87Format(true) | PS5LIFT_X87_POP, X87Address(), 0); return true;
+        case ZYDIS_MNEMONIC_FCOMI: X87CompareFlags(CallX87(PS5LIFT_X87_COMPARE_FLAGS, 0, nullptr, X87Index(1))); return true;
+        case ZYDIS_MNEMONIC_FCOMIP: X87CompareFlags(CallX87(PS5LIFT_X87_COMPARE_FLAGS, PS5LIFT_X87_POP, nullptr, X87Index(1))); return true;
+        case ZYDIS_MNEMONIC_FUCOMI: X87CompareFlags(CallX87(PS5LIFT_X87_COMPARE_FLAGS_UNORDERED, 0, nullptr, X87Index(1))); return true;
+        case ZYDIS_MNEMONIC_FUCOMIP: X87CompareFlags(CallX87(PS5LIFT_X87_COMPARE_FLAGS_UNORDERED, PS5LIFT_X87_POP, nullptr, X87Index(1))); return true;
+        case ZYDIS_MNEMONIC_FTST: CallX87(PS5LIFT_X87_TEST, 0, nullptr, 0); return true;
+        case ZYDIS_MNEMONIC_FXAM: CallX87(PS5LIFT_X87_EXAMINE, 0, nullptr, 0); return true;
+        case ZYDIS_MNEMONIC_FCHS: CallX87(PS5LIFT_X87_CHANGE_SIGN, 0, nullptr, 0); return true;
+        case ZYDIS_MNEMONIC_FABS: CallX87(PS5LIFT_X87_ABSOLUTE, 0, nullptr, 0); return true;
+        case ZYDIS_MNEMONIC_FSQRT: CallX87(PS5LIFT_X87_SQUARE_ROOT, 0, nullptr, 0); return true;
+        case ZYDIS_MNEMONIC_FRNDINT: CallX87(PS5LIFT_X87_ROUND, 0, nullptr, 0); return true;
+        case ZYDIS_MNEMONIC_FSCALE: CallX87(PS5LIFT_X87_SCALE, 0, nullptr, 0); return true;
+        case ZYDIS_MNEMONIC_FPREM: CallX87(PS5LIFT_X87_PARTIAL_REMAINDER, 0, nullptr, 0); return true;
+        case ZYDIS_MNEMONIC_FPREM1: CallX87(PS5LIFT_X87_IEEE_REMAINDER, 0, nullptr, 0); return true;
+        case ZYDIS_MNEMONIC_FXCH: CallX87(PS5LIFT_X87_EXCHANGE, 0, nullptr, X87Index(1)); return true;
+        case ZYDIS_MNEMONIC_FFREE: CallX87(PS5LIFT_X87_FREE, 0, nullptr, X87Index(0)); return true;
+        case ZYDIS_MNEMONIC_FINCSTP: CallX87(PS5LIFT_X87_INCREMENT_TOP, 0, nullptr, 0); return true;
+        case ZYDIS_MNEMONIC_FDECSTP: CallX87(PS5LIFT_X87_DECREMENT_TOP, 0, nullptr, 0); return true;
+        case ZYDIS_MNEMONIC_FNINIT: CallX87(PS5LIFT_X87_INITIALIZE, 0, nullptr, 0); return true;
+        case ZYDIS_MNEMONIC_FNCLEX: CallX87(PS5LIFT_X87_CLEAR_EXCEPTIONS, 0, nullptr, 0); return true;
+        case ZYDIS_MNEMONIC_FWAIT: CallX87(PS5LIFT_X87_WAIT, 0, nullptr, 0); return true;
+        case ZYDIS_MNEMONIC_FNSTSW: Write(0, _builder.CreateTrunc(CallX87(PS5LIFT_X87_STORE_STATUS, 0, nullptr, 0), _builder.getInt16Ty())); return true;
+        case ZYDIS_MNEMONIC_FNSTCW: CallX87(PS5LIFT_X87_STORE_CONTROL, 0, X87Address(), 0); return true;
+        case ZYDIS_MNEMONIC_FLDCW: CallX87(PS5LIFT_X87_LOAD_CONTROL, 0, X87Address(), 0); return true;
+        case ZYDIS_MNEMONIC_FNSTENV: CallX87(PS5LIFT_X87_STORE_ENVIRONMENT, 0, X87Address(), 0); return true;
+        case ZYDIS_MNEMONIC_FLDENV: CallX87(PS5LIFT_X87_LOAD_ENVIRONMENT, 0, X87Address(), 0); return true;
+        case ZYDIS_MNEMONIC_FLD1: CallX87(PS5LIFT_X87_LOAD_CONSTANT, 0, nullptr, 0); return true;
+        case ZYDIS_MNEMONIC_FLDL2T: CallX87(PS5LIFT_X87_LOAD_CONSTANT, 0, nullptr, 1); return true;
+        case ZYDIS_MNEMONIC_FLDL2E: CallX87(PS5LIFT_X87_LOAD_CONSTANT, 0, nullptr, 2); return true;
+        case ZYDIS_MNEMONIC_FLDPI: CallX87(PS5LIFT_X87_LOAD_CONSTANT, 0, nullptr, 3); return true;
+        case ZYDIS_MNEMONIC_FLDLG2: CallX87(PS5LIFT_X87_LOAD_CONSTANT, 0, nullptr, 4); return true;
+        case ZYDIS_MNEMONIC_FLDLN2: CallX87(PS5LIFT_X87_LOAD_CONSTANT, 0, nullptr, 5); return true;
+        case ZYDIS_MNEMONIC_FLDZ: CallX87(PS5LIFT_X87_LOAD_CONSTANT, 0, nullptr, 6); return true;
+        case ZYDIS_MNEMONIC_FCMOVB: case ZYDIS_MNEMONIC_FCMOVE: case ZYDIS_MNEMONIC_FCMOVBE: case ZYDIS_MNEMONIC_FCMOVU:
+        case ZYDIS_MNEMONIC_FCMOVNB: case ZYDIS_MNEMONIC_FCMOVNE: case ZYDIS_MNEMONIC_FCMOVNBE: case ZYDIS_MNEMONIC_FCMOVNU: {
+            llvm::Value* condition = nullptr;
+            switch (mnemonic) {
+            case ZYDIS_MNEMONIC_FCMOVB: condition = Flag(PS5LIFT_CF); break;
+            case ZYDIS_MNEMONIC_FCMOVE: condition = Flag(PS5LIFT_ZF); break;
+            case ZYDIS_MNEMONIC_FCMOVBE: condition = _builder.CreateOr(Flag(PS5LIFT_CF), Flag(PS5LIFT_ZF)); break;
+            case ZYDIS_MNEMONIC_FCMOVU: condition = Flag(PS5LIFT_PF); break;
+            case ZYDIS_MNEMONIC_FCMOVNB: condition = _builder.CreateNot(Flag(PS5LIFT_CF)); break;
+            case ZYDIS_MNEMONIC_FCMOVNE: condition = _builder.CreateNot(Flag(PS5LIFT_ZF)); break;
+            case ZYDIS_MNEMONIC_FCMOVNBE: condition = _builder.CreateNot(_builder.CreateOr(Flag(PS5LIFT_CF), Flag(PS5LIFT_ZF))); break;
+            default: condition = _builder.CreateNot(Flag(PS5LIFT_PF)); break;
+            }
+            auto* move = llvm::BasicBlock::Create(Context(), "fcmov", _host);
+            auto* after = llvm::BasicBlock::Create(Context(), "fcmov_done", _host);
+            _builder.CreateCondBr(condition, move, after);
+            _builder.SetInsertPoint(move);
+            CallX87(PS5LIFT_X87_MOVE_REGISTER, 0, nullptr, X87Index(1));
+            _builder.CreateBr(after);
+            _builder.SetInsertPoint(after);
+            return true;
+        }
+        default:
+            return false;
+        }
+    }
+
     void EmitInstruction(const Instruction& instruction) {
         try {
             EmitSemantics(instruction.Info.mnemonic);
@@ -2413,6 +2575,7 @@ private:
         default:
             if (EmitVector(mnemonic)) return;
             if (EmitFloat(mnemonic)) return;
+            if (EmitX87(mnemonic)) return;
             throw UnsupportedInstruction("");
         }
     }

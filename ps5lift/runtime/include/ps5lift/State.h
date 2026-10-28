@@ -48,8 +48,63 @@ typedef struct Ps5LiftState {
     uint32_t Mxcsr;
     uint16_t X87Control;
     uint16_t X87Status;
+    uint8_t X87Valid;
+    uint8_t X87Padding[7];
+    uint8_t X87Registers[8][16];
     uint8_t Vector[16][32];
 } Ps5LiftState;
+
+enum Ps5LiftX87Operation {
+    PS5LIFT_X87_LOAD,
+    PS5LIFT_X87_STORE,
+    PS5LIFT_X87_ADD,
+    PS5LIFT_X87_SUBTRACT,
+    PS5LIFT_X87_SUBTRACT_REVERSE,
+    PS5LIFT_X87_MULTIPLY,
+    PS5LIFT_X87_DIVIDE,
+    PS5LIFT_X87_DIVIDE_REVERSE,
+    PS5LIFT_X87_COMPARE,
+    PS5LIFT_X87_COMPARE_UNORDERED,
+    PS5LIFT_X87_COMPARE_FLAGS,
+    PS5LIFT_X87_COMPARE_FLAGS_UNORDERED,
+    PS5LIFT_X87_CHANGE_SIGN,
+    PS5LIFT_X87_ABSOLUTE,
+    PS5LIFT_X87_SQUARE_ROOT,
+    PS5LIFT_X87_ROUND,
+    PS5LIFT_X87_SCALE,
+    PS5LIFT_X87_PARTIAL_REMAINDER,
+    PS5LIFT_X87_IEEE_REMAINDER,
+    PS5LIFT_X87_EXAMINE,
+    PS5LIFT_X87_TEST,
+    PS5LIFT_X87_EXCHANGE,
+    PS5LIFT_X87_FREE,
+    PS5LIFT_X87_INCREMENT_TOP,
+    PS5LIFT_X87_DECREMENT_TOP,
+    PS5LIFT_X87_INITIALIZE,
+    PS5LIFT_X87_CLEAR_EXCEPTIONS,
+    PS5LIFT_X87_WAIT,
+    PS5LIFT_X87_STORE_STATUS,
+    PS5LIFT_X87_STORE_CONTROL,
+    PS5LIFT_X87_LOAD_CONTROL,
+    PS5LIFT_X87_STORE_ENVIRONMENT,
+    PS5LIFT_X87_LOAD_ENVIRONMENT,
+    PS5LIFT_X87_LOAD_CONSTANT,
+    PS5LIFT_X87_MOVE_REGISTER
+};
+
+enum Ps5LiftX87Format {
+    PS5LIFT_X87_REGISTER = 0,
+    PS5LIFT_X87_FLOAT32 = 1,
+    PS5LIFT_X87_FLOAT64 = 2,
+    PS5LIFT_X87_FLOAT80 = 3,
+    PS5LIFT_X87_INTEGER16 = 4,
+    PS5LIFT_X87_INTEGER32 = 5,
+    PS5LIFT_X87_INTEGER64 = 6,
+    PS5LIFT_X87_TRUNCATE = 8,
+    PS5LIFT_X87_POP = 16,
+    PS5LIFT_X87_POP_TWICE = 32,
+    PS5LIFT_X87_TO_REGISTER = 64
+};
 
 typedef void (*Ps5LiftFunction)(Ps5LiftState*);
 
@@ -83,6 +138,7 @@ extern const Ps5LiftImage ps5lift_image;
 void ps5lift_dispatch(Ps5LiftState* state, uint64_t target);
 void ps5lift_apply_mxcsr(Ps5LiftState* state);
 uint32_t ps5lift_read_mxcsr(Ps5LiftState* state);
+uint32_t ps5lift_x87(Ps5LiftState* state, uint32_t operation, uint32_t format, uint64_t address, uint32_t index);
 uint64_t ps5lift_thread_create(Ps5LiftState* parent, uint64_t entry, uint64_t argument);
 uint64_t ps5lift_thread_join(uint64_t handle);
 Ps5LiftState* ps5lift_current_state(void);
