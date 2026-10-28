@@ -356,7 +356,21 @@ extern "C" std::uint64_t ps5lift_thread_join(const std::uint64_t handle) {
     return result;
 }
 
+namespace {
+
+// cpuid reports the AES-NI and PCLMULQDQ of the PS5's Zen 2, and lifted code runs them on the host's own.
+void RequireHostFeatures() {
+#if defined(__aarch64__)
+    if ((getauxval(AT_HWCAP) & (HWCAP_AES | HWCAP_PMULL)) != (HWCAP_AES | HWCAP_PMULL)) ps5lift_fail("the host CPU lacks AES and PMULL, which lifted AES-NI and PCLMULQDQ use");
+#else
+    if (!__builtin_cpu_supports("aes") || !__builtin_cpu_supports("pclmul")) ps5lift_fail("the host CPU lacks AES-NI and PCLMULQDQ, which lifted code uses");
+#endif
+}
+
+}
+
 extern "C" void ps5lift_run_main(void) {
+    RequireHostFeatures();
     for (std::uint64_t i = 0; i < ps5lift_program.ImageCount; ++i) {
         MapSegments(ps5lift_program.Images[i]);
     }

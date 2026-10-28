@@ -208,6 +208,121 @@ BINARY128(hadd16x, _mm_hadd_epi16(a, b))
 BINARY128(hsub32x, _mm_hsub_epi32(a, b))
 BINARY128(sad8x, _mm_sad_epu8(a, b))
 
+static void report_bytes(const char* name, __m128i value) {
+    static const char digits[] = "0123456789abcdef";
+    u8 bytes[16];
+    memcpy(bytes, &value, sizeof(bytes));
+    char buffer[33];
+    for (int i = 0; i < 16; ++i) {
+        buffer[2 * i] = digits[bytes[i] >> 4];
+        buffer[2 * i + 1] = digits[bytes[i] & 15];
+    }
+    buffer[32] = 0;
+    print(name);
+    print(" ");
+    print(buffer);
+    print("\n");
+}
+
+static volatile u8 aes_key[16] = {0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f};
+static volatile u8 aes_plain[16] = {0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff};
+static volatile u64 clmul_inputs[4] = {0x8000000000000001ul, 0x0123456789abcdeful, 0xfedcba9876543210ul, 0xfffffffffffffffful};
+
+static __m128i load_volatile(const volatile u8* source) {
+    u8 bytes[16];
+    for (int i = 0; i < 16; ++i) bytes[i] = source[i];
+    __m128i value;
+    memcpy(&value, bytes, sizeof(value));
+    return value;
+}
+
+/* The VEX forms come from the intrinsics, which an AVX build encodes with VEX, and the legacy forms from assembly. */
+#define VEX_AESENC(a, b) _mm_aesenc_si128(a, b)
+#define VEX_AESENCLAST(a, b) _mm_aesenclast_si128(a, b)
+#define VEX_AESDEC(a, b) _mm_aesdec_si128(a, b)
+#define VEX_AESDECLAST(a, b) _mm_aesdeclast_si128(a, b)
+#define VEX_AESIMC(a) _mm_aesimc_si128(a)
+#define VEX_AESKEYGENASSIST(a, constant) _mm_aeskeygenassist_si128(a, constant)
+#define VEX_PCLMULQDQ(a, b, selector) _mm_clmulepi64_si128(a, b, selector)
+#define LEGACY_BINARY(instruction, a, b)                                  \
+    ({                                                                    \
+        __m128i result_ = (a);                                            \
+        __asm__(instruction " %1, %0" : "+x"(result_) : "x"(b));          \
+        result_;                                                          \
+    })
+#define SSE_AESENC(a, b) LEGACY_BINARY("aesenc", a, b)
+#define SSE_AESENCLAST(a, b) LEGACY_BINARY("aesenclast", a, b)
+#define SSE_AESDEC(a, b) LEGACY_BINARY("aesdec", a, b)
+#define SSE_AESDECLAST(a, b) LEGACY_BINARY("aesdeclast", a, b)
+#define SSE_AESIMC(a)                                         \
+    ({                                                        \
+        __m128i result_;                                      \
+        __asm__("aesimc %1, %0" : "=x"(result_) : "x"(a));    \
+        result_;                                              \
+    })
+#define SSE_AESKEYGENASSIST(a, constant)                                         \
+    ({                                                                           \
+        __m128i result_;                                                         \
+        __asm__("aeskeygenassist %2, %1, %0" : "=x"(result_) : "x"(a), "i"(constant)); \
+        result_;                                                                 \
+    })
+#define SSE_PCLMULQDQ(a, b, selector)                                                  \
+    ({                                                                                 \
+        __m128i result_ = (a);                                                         \
+        __asm__("pclmulqdq %2, %1, %0" : "+x"(result_) : "x"(b), "i"(selector));       \
+        result_;                                                                       \
+    })
+
+#define KEY_ROUND(form, keys, i, constant)                                                                    \
+    do {                                                                                                       \
+        __m128i generated = _mm_shuffle_epi32(form##_AESKEYGENASSIST(keys[i - 1], constant), 0xff);          \
+        __m128i key = keys[i - 1];                                                                             \
+        key = _mm_xor_si128(key, _mm_slli_si128(key, 4));                                                      \
+        key = _mm_xor_si128(key, _mm_slli_si128(key, 4));                                                      \
+        key = _mm_xor_si128(key, _mm_slli_si128(key, 4));                                                      \
+        keys[i] = _mm_xor_si128(key, generated);                                                               \
+    } while (0)
+
+/* FIPS-197's AES-128 example, with the key expanded by aeskeygenassist and decrypted with aesimc's keys. */
+#define AES128_TEST(form, label)                                                                    \
+    __attribute__((noinline)) static void aes128_##form(void) {                                     \
+        __m128i keys[11];                                                                           \
+        keys[0] = load_volatile(aes_key);                                                           \
+        KEY_ROUND(form, keys, 1, 0x01);                                                             \
+        KEY_ROUND(form, keys, 2, 0x02);                                                             \
+        KEY_ROUND(form, keys, 3, 0x04);                                                             \
+        KEY_ROUND(form, keys, 4, 0x08);                                                             \
+        KEY_ROUND(form, keys, 5, 0x10);                                                             \
+        KEY_ROUND(form, keys, 6, 0x20);                                                             \
+        KEY_ROUND(form, keys, 7, 0x40);                                                             \
+        KEY_ROUND(form, keys, 8, 0x80);                                                             \
+        KEY_ROUND(form, keys, 9, 0x1b);                                                             \
+        KEY_ROUND(form, keys, 10, 0x36);                                                            \
+        __m128i block = _mm_xor_si128(load_volatile(aes_plain), keys[0]);                           \
+        for (int i = 1; i < 10; ++i) block = form##_AESENC(block, keys[i]);                         \
+        block = form##_AESENCLAST(block, keys[10]);                                                 \
+        report_bytes("aes128 encrypt " label, block);                                               \
+        block = _mm_xor_si128(block, keys[10]);                                                     \
+        for (int i = 9; i > 0; --i) block = form##_AESDEC(block, form##_AESIMC(keys[i]));           \
+        block = form##_AESDECLAST(block, keys[0]);                                                  \
+        report_bytes("aes128 decrypt " label, block);                                               \
+    }
+
+#define CLMUL_TEST(form, label)                                                                     \
+    __attribute__((noinline)) static void clmul_##form(void) {                                      \
+        __m128i a = _mm_set_epi64x((long long)clmul_inputs[1], (long long)clmul_inputs[0]);        \
+        __m128i b = _mm_set_epi64x((long long)clmul_inputs[3], (long long)clmul_inputs[2]);        \
+        report_bytes("clmul " label " 00", form##_PCLMULQDQ(a, b, 0x00));                           \
+        report_bytes("clmul " label " 01", form##_PCLMULQDQ(a, b, 0x01));                           \
+        report_bytes("clmul " label " 10", form##_PCLMULQDQ(a, b, 0x10));                           \
+        report_bytes("clmul " label " 11", form##_PCLMULQDQ(a, b, 0x11));                           \
+    }
+
+AES128_TEST(VEX, "vex")
+AES128_TEST(SSE, "sse")
+CLMUL_TEST(VEX, "vex")
+CLMUL_TEST(SSE, "sse")
+
 struct Test {
     const char* name;
     u64 (*run)(void);
@@ -235,6 +350,10 @@ static const struct Test tests[] = {
 
 int main(void) {
     for (u64 i = 0; i < sizeof(tests) / sizeof(tests[0]); ++i) report(tests[i].name, tests[i].run());
+    aes128_VEX();
+    aes128_SSE();
+    clmul_VEX();
+    clmul_SSE();
     return 0;
 }
 
