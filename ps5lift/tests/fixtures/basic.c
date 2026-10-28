@@ -106,6 +106,7 @@ __attribute__((noinline)) static const char* classify(int value) {
 
 i64 table_index_copied_after_compare(i64 value);
 i64 table_index_copied_before_compare(i64 value);
+i64 table_base_before_loop(i64 value);
 
 __asm__(".text\n"
         ".globl table_index_copied_after_compare\n"
@@ -156,6 +157,45 @@ __asm__(".text\n"
         ".pushsection .rodata\n"
         ".p2align 2\n"
         "4:  .long 0b-4b, 1b-4b, 2b-4b, 5b-4b\n"
+        ".popsection\n"
+        ".globl table_base_before_loop\n"
+        ".type table_base_before_loop, @function\n"
+        "table_base_before_loop:\n"
+        "    lea 9f(%rip), %r8\n"
+        "    xor %eax, %eax\n"
+        "    jmp 2f\n"
+        "1:  mov %rcx, %rdi\n"
+        "2:  cmp $3, %edi\n"
+        "    ja 8f\n"
+        "    mov %edi, %ecx\n"
+        "    movslq (%r8,%rcx,4), %rcx\n"
+        "    mov %rdi, %rdx\n"
+        "    add %r8, %rcx\n"
+        "    xor %edx, %edx\n"
+        "    jmp *%rcx\n"
+        "3:  ret\n"
+        "4:  add $10, %rax\n"
+        "    mov %r8, %r9\n"
+        "    mov $3, %r8d\n"
+        "    add %r8, %rax\n"
+        "    mov %r9, %r8\n"
+        "    mov $0, %ecx\n"
+        "    jmp 1b\n"
+        "5:  add $100, %rax\n"
+        "    mov $7, %r8d\n"
+        "    add %r8, %rax\n"
+        "    lea 9f(%rip), %r8\n"
+        "    mov $1, %ecx\n"
+        "    jmp 1b\n"
+        "6:  add $1000, %rax\n"
+        "    mov $2, %ecx\n"
+        "    jmp 1b\n"
+        "8:  mov $-1, %rax\n"
+        "    ret\n"
+        ".size table_base_before_loop, .-table_base_before_loop\n"
+        ".pushsection .rodata\n"
+        ".p2align 2\n"
+        "9:  .long 3b-9b, 4b-9b, 5b-9b, 6b-9b\n"
         ".popsection\n"
         ".text\n");
 
@@ -330,6 +370,7 @@ int main(void) {
     line("classify total", total);
     for (i64 i = 0; i < 4; ++i) line("table after compare", table_index_copied_after_compare(i));
     for (i64 i = 0; i < 4; ++i) line("table before compare", table_index_copied_before_compare(i));
+    for (i64 i = 0; i < 5; ++i) line("table base before loop", table_base_before_loop(i));
     zen2_integer();
     unaligned_accesses();
 
