@@ -10,7 +10,7 @@ import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from run_fixture import FIXTURES, GUEST_FLAGS, ROOT, compare, host_triple, lifter_features, run, runner_for, runtime_library
+from run_fixture import FIXTURES, GUEST_FLAGS, ROOT, compare, host_triple, lifter_target, run, runner_for, runtime_library
 from run_libc_tests import build_libraries
 
 IMPORTS = ["printf", "snprintf", "vsnprintf", "sscanf", "puts", "strtold", "strtod", "modfl", "fabsl", "fprintf", "_Stdout"]
@@ -97,7 +97,7 @@ def main():
                 failures += not compare(expected, run([guest], env={**os.environ, "LD_LIBRARY_PATH": str(work)}).stdout, f"native {optimization}")
             label = f"{args.triple} {optimization}"
             lifted = work / f"{guest.name}.o"
-            report = run([args.ps5lift, guest, "-o", lifted, "--triple", args.triple, *lift_flags, *lifter_features(args.triple, runner)]).stderr
+            report = run([args.ps5lift, guest, "-o", lifted, "--triple", args.triple, *lift_flags, *lifter_target(args.triple, runner)]).stderr
             program = work / f"{guest.name}-lifted"
             run([args.clangxx, f"--target={args.triple}", "-std=c++20", "-O1", f"-I{ROOT / 'runtime' / 'include'}", "-fuse-ld=lld", "-Wl,--gc-sections",
                  "-Wl,--allow-multiple-definition", lifted, bridges, *host_sources, *libraries, *runtime, "-latomic", "-pthread", "-ldl", "-o", program])

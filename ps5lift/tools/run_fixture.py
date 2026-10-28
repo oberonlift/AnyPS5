@@ -60,10 +60,13 @@ def runner_for(triple):
     raise SystemExit(f"cannot run {triple} on {platform.machine()}")
 
 
-def lifter_features(triple, runner):
+def lifter_target(triple, runner, cpu=None):
+    if cpu is None and not runner:
+        cpu = "native"
+    flags = ["--cpu", cpu] if cpu else []
     if runner and triple.startswith("aarch64"):
-        return ["--features", "-rcpc-immo"]
-    return []
+        flags += ["--features", "-rcpc-immo"]
+    return flags
 
 
 HOST_LIBRARIES = {"threads": ("hostthread", "host_thread.c"), "callbacks": ("hostcallbacks", "host_callbacks.c"), "x87": ("hostx87", "host_x87.c"), "setjmp": ("hostsetjmp", "host_setjmp.c")}
@@ -127,7 +130,7 @@ def main():
             for memory in memories:
                 label = f"{args.triple} {optimization} {memory}"
                 lifted = work / f"{guest.name}-{memory}.o"
-                report = run([args.ps5lift, guest, "-o", lifted, "--triple", args.triple, "--memory", memory, *lifter_features(args.triple, runner)]).stderr
+                report = run([args.ps5lift, guest, "-o", lifted, "--triple", args.triple, "--memory", memory, *lifter_target(args.triple, runner)]).stderr
                 program = work / f"{guest.name}-{memory}"
                 run([args.clangxx, f"--target={args.triple}", "-std=c++20", "-O2", f"-I{ROOT / 'runtime' / 'include'}", FIXTURES / "host_bridge.cpp", lifted, *runtime_library(args.ps5lift, args.triple, args.clang, args.clangxx), "-fuse-ld=lld", "-pthread", "-o", program])
                 result = subprocess.run([*runner, program], capture_output=True, text=True)
