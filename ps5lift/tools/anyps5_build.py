@@ -1,5 +1,6 @@
 import json
 import shlex
+import struct
 from pathlib import Path
 
 ANYPS5 = Path(__file__).resolve().parent.parent / "3rdparty" / "anyps5"
@@ -21,6 +22,23 @@ class Build:
         if not path.exists():
             raise SystemExit(f"{path} does not exist: build AnyPS5's libs target")
         return path
+
+    def library_exports(self, name):
+        data = self.library(name).read_bytes()
+        offset, = struct.unpack_from("<Q", data, 0x28)
+        size, count = struct.unpack_from("<HH", data, 0x3a)
+        sections = [struct.unpack_from("<IIQQQQIIQQ", data, offset + index * size) for index in range(count)]
+        for _, kind, _, _, symbols, length, link, _, _, _ in sections:
+            if kind != 11:
+                continue
+            strings = sections[link][4]
+            names = set()
+            for symbol in range(symbols + 24, symbols + length, 24):
+                name, info, _, section = struct.unpack_from("<IBBH", data, symbol)
+                if section != 0 and info >> 4 != 0:
+                    names.add(data[strings + name:data.index(b"\0", strings + name)].decode())
+            return names
+        raise SystemExit(f"{self.library(name)} has no dynamic symbol table")
 
     def library_sources(self, name):
         target = f"/CMakeFiles/{name}.dir/"

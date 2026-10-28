@@ -17,6 +17,7 @@ from anyps5_build import Build, compiler_arguments
 NID_SUFFIX = bytes([0x51, 0x8D, 0x64, 0xA6, 0x35, 0xDE, 0xD8, 0xC1, 0xE6, 0xB0, 0x39, 0xB1, 0xC3, 0xE5, 0x52, 0x30])
 NID_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+-"
 POSTFIX = "_nid_postfix"
+UNPATCHED = "_nid_no_patch"
 VARIADIC_SIBLINGS = {"libc_printf": "vprintf"}
 GUEST_STATE_EXPORTS = {"setjmp", "longjmp", "sigsetjmp", "siglongjmp", "_setjmp", "_longjmp"}
 EXPORT_PATTERN = re.compile(r'APS5_EXPORT\(\s*"([^"]+)"\s*,\s*(\w+)\s*\)')
@@ -75,9 +76,11 @@ def classify(type_, role):
     if kind in POINTER_KINDS:
         pointee = canonical.get_pointee().get_canonical()
         if pointee.kind in FUNCTION_KINDS:
-            if role != "parameter":
-                raise Unsupported(f"function pointer as a {role}")
-            return ("callback", callback_signature(pointee))
+            if role == "parameter":
+                return ("callback", callback_signature(pointee))
+            if role == "return":
+                return ("function", callback_signature(pointee))
+            raise Unsupported(f"function pointer as a {role}")
         return ("pointer", "void*")
     if kind == K.LONGDOUBLE:
         return ("extended", "long double")
@@ -194,13 +197,14 @@ def scan_source(job):
             continue
         name = cursor.spelling
         c_linkage = cursor.mangled_name in (name, "_" + name)
+        unpatched = name.endswith(UNPATCHED)
         if name.endswith(POSTFIX) or name in explicit:
             marked = True
-        elif not name.endswith("_nid_no_patch") and not name.startswith("SDL_") and c_linkage and defined(cursor):
+        elif not name.startswith("SDL_") and c_linkage and defined(cursor):
             marked = False
         else:
             continue
-        candidate = {"name": name, "marked": marked, "c_linkage": c_linkage, "data": cursor.kind == cindex.CursorKind.VAR_DECL}
+        candidate = {"name": name, "marked": marked, "unpatched": unpatched, "c_linkage": c_linkage, "data": cursor.kind == cindex.CursorKind.VAR_DECL}
         if c_linkage and not candidate["data"]:
             try:
                 candidate["export"] = describe(cursor, name)
@@ -210,7 +214,7 @@ def scan_source(job):
     return errors, candidates
 
 
-def collect(sources, pool):
+def collect(sources, exported, pool):
     explicit = {}
     for source, _ in sources:
         for nid, function in EXPORT_PATTERN.findall(source.read_text(errors="replace")):
@@ -223,12 +227,14 @@ def collect(sources, pool):
     candidates = []
     for errors, found in pool.map(scan_source, [(source, compiler_arguments(entry), explicit) for source, entry in sources]):
         parse_errors += errors
-        candidates.extend(found)
+        candidates.extend(candidate for candidate in found if not candidate["c_linkage"] or candidate["name"] in exported)
     named = {candidate["name"] for candidate in candidates}
     for candidate in candidates:
         name = candidate["name"]
         if name in explicit:
             nid = explicit[name]
+        elif candidate["unpatched"]:
+            nid = name
         elif candidate["marked"]:
             nid = compute_nid(export_base(name))
         elif name + POSTFIX in named:
@@ -272,12 +278,14 @@ def data_symbol(nid):
 
 
 def emit(exports, data, library_name):
-    lines = [f"#include <ps5lift/Bridge.hpp>", "", "#include <cstddef>", "#include <cstdint>", "", "using namespace Ps5Lift::Bridge;", ""]
+    lines = [f"#include <ps5lift/Bridge.hpp>", "", "#include <cstddef>", "#include <cstdint>", "#include <type_traits>", "", "using namespace Ps5Lift::Bridge;", ""]
     for nid in sorted(exports):
         export = exports[nid]
         if export["variadic"] and not export.get("forward"):
             continue
         return_class, return_spelling = export["return"]
+        if return_class == "function":
+            return_spelling = f"std::add_pointer_t<{return_spelling}>"
         declaration = ", ".join([spelling for spelling, _ in export["parameters"]] + (["..."] if export.get("forward") else []))
         lines.append(f'extern "C" {return_spelling} {export["symbol"]}({declaration});')
     for nid in sorted(data):
@@ -286,7 +294,7 @@ def emit(exports, data, library_name):
     lines.append("")
     for nid in sorted(exports):
         export = exports[nid]
-        return_class, _ = export["return"]
+        return_class, return_spelling = export["return"]
         accesses = [access for _, access in export["parameters"]]
         if export.get("forward"):
             accesses += [f"Integer<std::uint64_t>(state, {index})" for index in range(export["variadic"][0], 6)]
@@ -304,6 +312,8 @@ def emit(exports, data, library_name):
             lines.append(f"        {call};")
         elif return_class == "extended":
             lines.append(f"        ReturnExtended(state, {call});")
+        elif return_class == "function":
+            lines.append(f"        Return(state, GuestFunction<{return_spelling}>({call}));")
         else:
             lines.append(f"        Return(state, {call});")
         lines.append("    } catch (const GuestUnwind&) {")
@@ -329,7 +339,7 @@ def main():
     exports, data, unsupported, parse_errors = {}, {}, {}, 0
     build = Build(args.anyps5_build)
     for name in args.library:
-        library_exports, library_data, library_unsupported, library_errors = collect(build.library_sources(name), pool)
+        library_exports, library_data, library_unsupported, library_errors = collect(build.library_sources(name), build.library_exports(name), pool)
         for nid, export in library_exports.items():
             exports.setdefault(nid, export)
         for nid, symbol in library_data.items():
