@@ -36,7 +36,7 @@ def main():
         relinked = work / f"{args.fixture}.out"
         run([args.relinker, "--skip-sce-module", source, relinked])
         for memory in ("tso", "relaxed"):
-            lifted = work / f"{args.fixture}-{memory}.o"
+            lifted = work / f"{args.fixture}-{memory}.a"
             report = run([args.ps5lift, relinked, "-o", lifted, "--triple", args.triple, "--memory", memory, *lifter_target(args.triple, runner)]).stderr.strip()
             program = work / f"{args.fixture}-{memory}"
             run([args.clangxx, f"--target={args.triple}", "-std=c++20", "-O2", f"-I{ROOT / 'runtime' / 'include'}", FIXTURES / "ps5_bridge.cpp", lifted, *runtime_link_arguments(args.ps5lift, args.triple, args.clang, args.clangxx), "-fuse-ld=lld", "-pthread", "-o", program])

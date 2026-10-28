@@ -10,6 +10,7 @@
 #include <cstdint>
 #include <map>
 #include <memory>
+#include <span>
 #include <string>
 
 namespace Ps5Lift {
@@ -37,7 +38,9 @@ struct LiftReport {
     std::map<std::string, std::size_t> Unsupported;
 };
 
-std::unique_ptr<llvm::Module> LiftImage(llvm::LLVMContext& context, const GuestImage& image, const std::map<std::uint64_t, GuestFunction>& functions, const LiftOptions& options, LiftReport& report);
+std::unique_ptr<llvm::Module> LiftFunctions(llvm::LLVMContext& context, const GuestImage& image, const std::map<std::uint64_t, GuestFunction>& functions, std::span<const std::uint64_t> addresses,
+                                            const LiftOptions& options, LiftReport& report);
+std::unique_ptr<llvm::Module> LiftTables(llvm::LLVMContext& context, const GuestImage& image, const std::map<std::uint64_t, GuestFunction>& functions, const LiftOptions& options);
 
 }
 

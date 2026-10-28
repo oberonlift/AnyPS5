@@ -45,7 +45,7 @@ def main():
             run([args.clang, f"--target={args.triple}", "-O2", *cpu_flag, *flags, *scale, FIXTURES / "bench.c", FIXTURES / "host_native.c", "-fuse-ld=lld", "-o", programs[name]])
         for memory, suffix in (("relaxed", ""), ("tso", ""), ("tso", "-vec")):
             name = f"lifted-{memory}{suffix}"
-            lifted = work / f"{name}.o"
+            lifted = work / f"{name}.a"
             report = run([args.ps5lift, guests[suffix], "-o", lifted, "--triple", args.triple, "--memory", memory, *lifter_target(args.triple, runner, args.cpu)]).stderr.strip()
             print(f"{name}: {report}")
             programs[name] = work / name
