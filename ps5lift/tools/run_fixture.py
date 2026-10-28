@@ -130,7 +130,7 @@ def main():
                 failures += not compare(expected, native, f"native {optimization}")
             for memory in memories:
                 label = f"{args.triple} {optimization} {memory}"
-                lifted = work / f"{guest.name}-{memory}.o"
+                lifted = work / f"{guest.name}-{memory}.a"
                 report = run([args.ps5lift, guest, "-o", lifted, "--triple", args.triple, "--memory", memory, *lifter_target(args.triple, runner, args.cpu)]).stderr
                 program = work / f"{guest.name}-{memory}"
                 run([args.clangxx, f"--target={args.triple}", "-std=c++20", "-O2", f"-I{ROOT / 'runtime' / 'include'}", FIXTURES / "host_bridge.cpp", lifted, *runtime_link_arguments(args.ps5lift, args.triple, args.clang, args.clangxx), "-fuse-ld=lld", "-pthread", "-o", program])

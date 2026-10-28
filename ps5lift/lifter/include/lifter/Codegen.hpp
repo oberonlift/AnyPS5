@@ -1,6 +1,7 @@
 #ifndef PS5LIFT_CODEGEN_HPP
 #define PS5LIFT_CODEGEN_HPP
 
+#include <llvm/ADT/SmallVector.h>
 #include <llvm/IR/Module.h>
 
 #include <string>
@@ -15,7 +16,7 @@ struct CodegenOptions {
 };
 
 void Optimize(llvm::Module& module, const CodegenOptions& options);
-void WriteObject(llvm::Module& module, const CodegenOptions& options, const std::string& path);
+llvm::SmallVector<char, 0> CompileObject(llvm::Module& module, const CodegenOptions& options);
 void WriteIr(const llvm::Module& module, const std::string& path);
 
 }

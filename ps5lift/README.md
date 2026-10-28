@@ -28,11 +28,11 @@ build/anyps5/core/relinker/relinker eboot.bin eboot.elf
 ```
 
 ```sh
-build/lifter/ps5lift eboot.elf -o guest.o --cpu native
+build/lifter/ps5lift eboot.elf -o guest.a --cpu native
 python3 tools/generate_bridges.py libc libkernel --anyps5-build build/anyps5 -o bridges.cpp
 python3 tools/build_runtime.py --triple aarch64-unknown-linux-gnu --output build/runtime-aarch64
 L=build/anyps5/core/libs/libs/unpatched
-clang++ -O2 -Iruntime/include guest.o bridges.cpp $L/libc.prx $L/libkernel.prx -Wl,-rpath,$PWD/$L \
+clang++ -O2 -Iruntime/include guest.a bridges.cpp $L/libc.prx $L/libkernel.prx -Wl,-rpath,$PWD/$L \
     -Wl,--undefined-glob='GuestCpu*_nid_no_patch' -Wl,--export-dynamic-symbol='GuestCpu*_nid_no_patch' \
     build/runtime-aarch64/libps5lift_runtime.a build/runtime-aarch64/libps5lift_main.a -fuse-ld=lld -latomic -pthread -ldl -o guest
 ./guest
@@ -42,6 +42,7 @@ AnyPS5's libraries call the runtime's `GuestCpu` functions, so the program links
 
 | Option | Default | Effect |
 |---|---|---|
+| `--jobs` | the host's threads | Threads that lift and compile parts of the program at once. |
 | `--triple` | `aarch64-unknown-linux-gnu` | Target for the generated code. |
 | `--cpu` | `neoverse-v2` on aarch64 | Target CPU; `native` uses the host CPU and features. |
 | `--features` | none | LLVM target features, such as `-rcpc-immo`. |
@@ -49,10 +50,12 @@ AnyPS5's libraries call the runtime's `GuestCpu` functions, so the program links
 | `--float exact\|fast` | `exact` | `exact` reproduces x86 NaN, min/max, DAZ and conversion results bit for bit; `fast` leaves NaN payloads to the host. |
 | `--preserve-flags` | off | Keeps the status flags across calls and returns, for hand-written assembly that relies on them. |
 | `--import-nids` | off | Imports a plain symbol name as its NID, so a guest built for Linux calls AnyPS5's exports. |
-| `--emit-ir file.ll` | none | Writes the optimized LLVM IR. |
+| `--emit-ir prefix` | none | Writes the optimized LLVM IR of each part to `prefix.<n>.ll`. |
 | `-O0` | optimized | Skips the LLVM optimization pipeline. |
 
-The lifter prints how many functions and instructions it lifted and lists every unsupported instruction it found. Reaching one at run time stops the program with its address.
+The output is a static archive with one object per part of the program: the functions in address order, about 50000 instructions to a part, and a last part with the image's segments and tables. Each part is lifted, optimized and compiled on a thread of its own, and calls between parts are relocations the linker resolves, with range-extension thunks where a call is too far for a direct branch. The parts depend only on the program, so the output does not depend on `--jobs`.
+
+The lifter prints how many functions and instructions it lifted, how many jump tables it recovered and how many of them it sized by the data around them, and lists every unsupported instruction it found. Reaching one at run time stops the program with its address.
 
 ## Import bridges
 

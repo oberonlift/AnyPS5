@@ -13,8 +13,8 @@ eboot.bin + sce_module/*.prx
   -> AnyPS5 relinker SELF unwrapping, SCE dynamic tables and modules converted to a Linux x86-64 ELF whose imports are named by NID
   -> GuestImage      AnyPS5 ElfReader: segments, PT_TLS, the dynamic segment's symbols and relocations, applied statically; eh_frame function starts
   -> Discovery       Zydis recursive descent from every known start; call targets become new starts until a fixpoint; jump tables
-  -> Lifter          one LLVM function per guest function, void guest_<address>(Ps5LiftState*)
-  -> Codegen         LLVM O2, then an object file for the target triple and CPU
+  -> Lifter          one LLVM function per guest function, void guest_<address>(Ps5LiftState*), in parts of about 50000 instructions
+  -> Codegen         each part on a thread of its own: LLVM O2, then an object for the target triple and CPU; one archive of all parts
   -> link            with the runtime, the import bridges and the native AnyPS5 libraries
 ```
 

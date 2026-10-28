@@ -6,9 +6,8 @@
 
 AnyPS5's `tools/audit_dump.py` accepts v0.13.0: the relinker converts its `eboot.bin` and the `libc.prx` it ships, and the libraries implement 523 of its 532 imports. Six are partial (`scePadOpen`, `sceSystemServiceLoadExec`, `sceSystemServiceKillApp`, `sceSystemServiceGetAppId`, `__tls_get_addr`), `getcontext` is a stub and two libSceLibcInternal NIDs (`gNQ1V2vfXDE`, `lKEN2IebgJ0`) are absent.
 
-Its relinked executable lifts: 55518 functions, 5.1 million instructions and 1331 jump tables, 197 of them sized by layout. In order:
+Its relinked executable lifts in under two minutes on the GB10's 20 cores: 55518 functions, 5.1 million instructions and 1331 jump tables, 197 of them sized by layout. In order:
 
-- Lift in parallel. One module takes 17.5 minutes and 35 GB on one core, about 12 minutes of it optimization and 5 code generation, and at `-O0` the code outgrows the ±128 MB reach of a direct call between functions of one object. Lifting, optimizing and compiling parts of the program on separate threads, each its own object, fixes both.
 - Answer `cpuid` and `xgetbv` as Zen 2 does. Most of the 144246 unsupported instructions are AVX-512, VAES and VPCLMULQDQ on paths that code choosing an implementation by CPU feature never takes on the console.
 - Lift the Zen 2 instructions it uses that the lifter does not: `movbe`, `bswap`, `shld`, `shrd`, `adcx`, `adox`, `lea` with 32-bit addressing, AES-NI, SHA, SSE4a's `extrq` and `insertq`, and MMX, which FFmpeg's assembly uses.
 - Seed discovery from `DT_INIT_ARRAY` and `DT_FINI_ARRAY`.

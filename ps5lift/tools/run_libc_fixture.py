@@ -97,7 +97,7 @@ def main():
             if native and platform.machine() == "x86_64":
                 failures += not compare(expected, run([guest], env={**os.environ, "LD_LIBRARY_PATH": str(work)}).stdout, f"native {optimization}")
             label = f"{triple} {optimization}"
-            lifted = work / f"{guest.name}.o"
+            lifted = work / f"{guest.name}.a"
             report = run([args.ps5lift, guest, "-o", lifted, "--triple", triple, *lift_flags, *lifter_target(triple, runner)]).stderr
             program = work / f"{guest.name}-lifted"
             run([args.clangxx, f"--target={triple}", "-std=c++20", "-O1", f"-I{ROOT / 'runtime' / 'include'}", "-fuse-ld=lld", lifted, bridges, *host_sources,

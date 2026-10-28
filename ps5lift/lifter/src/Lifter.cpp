@@ -104,9 +104,7 @@ bool IsSetcc(const ZydisMnemonic mnemonic) {
 class ModuleLifter {
 public:
     ModuleLifter(llvm::LLVMContext& context, const GuestImage& image, const std::map<std::uint64_t, GuestFunction>& functions, const LiftOptions& options, LiftReport& report)
-        : _context(context), _image(image), _functions(functions), _options(options), _report(report), _module(std::make_unique<llvm::Module>("ps5lift", context)) {}
-
-    std::unique_ptr<llvm::Module> Lift() {
+        : _context(context), _image(image), _functions(functions), _options(options), _report(report), _module(std::make_unique<llvm::Module>("ps5lift", context)) {
         llvm::MDBuilder metadata(_context);
         auto* root = metadata.createTBAARoot("ps5lift");
         auto* stateType = metadata.createTBAAScalarTypeNode("state", root);
@@ -115,26 +113,31 @@ public:
         _guestTag = metadata.createTBAAStructTagNode(guestType, guestType, 0);
         _pointer = llvm::PointerType::get(_context, 0);
         _guestType = llvm::FunctionType::get(llvm::Type::getVoidTy(_context), {_pointer}, false);
-        for (const auto& [address, function] : _functions) {
-            auto* host = llvm::Function::Create(_guestType, llvm::GlobalValue::InternalLinkage, GuestSymbol(address), *_module);
-            host->addParamAttr(0, llvm::Attribute::NoAlias);
-            host->addParamAttr(0, llvm::Attribute::NoUndef);
-        }
-        for (const auto& [address, function] : _functions) {
+    }
+
+    std::unique_ptr<llvm::Module> LiftFunctions(const std::span<const std::uint64_t> addresses) {
+        for (const auto address : addresses) {
+            const auto& function = _functions.at(address);
             if (function.Import) LiftImport(function);
             else LiftFunction(function);
             ++_report.Functions;
         }
-        EmitImage();
-        std::string errors;
-        llvm::raw_string_ostream stream(errors);
-        if (llvm::verifyModule(*_module, &stream)) throw std::runtime_error("Lifted module does not verify: " + stream.str());
-        return std::move(_module);
+        return Verified();
     }
 
-    llvm::Function* Guest(const std::uint64_t address) const {
-        auto* function = _module->getFunction(GuestSymbol(address));
-        if (function == nullptr) throw std::runtime_error("Call to undiscovered guest function 0x" + Hex(address));
+    std::unique_ptr<llvm::Module> LiftTables() {
+        EmitImage();
+        return Verified();
+    }
+
+    llvm::Function* Guest(const std::uint64_t address) {
+        const auto symbol = GuestSymbol(address);
+        if (auto* function = _module->getFunction(symbol)) return function;
+        if (!_functions.contains(address)) throw std::runtime_error("Call to undiscovered guest function 0x" + Hex(address));
+        auto* function = llvm::Function::Create(_guestType, llvm::GlobalValue::ExternalLinkage, symbol, *_module);
+        function->setVisibility(llvm::GlobalValue::HiddenVisibility);
+        function->addParamAttr(0, llvm::Attribute::NoAlias);
+        function->addParamAttr(0, llvm::Attribute::NoUndef);
         return function;
     }
 
@@ -165,6 +168,13 @@ private:
     llvm::FunctionType* _guestType = nullptr;
     llvm::MDNode* _stateTag = nullptr;
     llvm::MDNode* _guestTag = nullptr;
+
+    std::unique_ptr<llvm::Module> Verified() {
+        std::string errors;
+        llvm::raw_string_ostream stream(errors);
+        if (llvm::verifyModule(*_module, &stream)) throw std::runtime_error("Lifted module does not verify: " + stream.str());
+        return std::move(_module);
+    }
 
     void LiftFunction(const GuestFunction& function);
 
@@ -2663,8 +2673,14 @@ void ModuleLifter::LiftFunction(const GuestFunction& function) {
 
 }
 
-std::unique_ptr<llvm::Module> LiftImage(llvm::LLVMContext& context, const GuestImage& image, const std::map<std::uint64_t, GuestFunction>& functions, const LiftOptions& options, LiftReport& report) {
-    return ModuleLifter(context, image, functions, options, report).Lift();
+std::unique_ptr<llvm::Module> LiftFunctions(llvm::LLVMContext& context, const GuestImage& image, const std::map<std::uint64_t, GuestFunction>& functions, const std::span<const std::uint64_t> addresses,
+                                            const LiftOptions& options, LiftReport& report) {
+    return ModuleLifter(context, image, functions, options, report).LiftFunctions(addresses);
+}
+
+std::unique_ptr<llvm::Module> LiftTables(llvm::LLVMContext& context, const GuestImage& image, const std::map<std::uint64_t, GuestFunction>& functions, const LiftOptions& options) {
+    LiftReport report;
+    return ModuleLifter(context, image, functions, options, report).LiftTables();
 }
 
 }
