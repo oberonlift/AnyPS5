@@ -23,10 +23,10 @@
 #include <filesystem>
 #else
 #include <dlfcn.h>
-#include <link.h>
 #include <mutex>
 #include <unistd.h>
 #include <unordered_map>
+#include "prx/libc/include/specifics/linux/ElfTypes.hpp"
 #endif
 
 extern "C" std::int32_t ModuleIdForImage_nid_no_patch(const void* native);
