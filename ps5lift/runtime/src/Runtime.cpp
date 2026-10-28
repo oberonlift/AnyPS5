@@ -23,6 +23,7 @@ constexpr std::uint64_t GuestStackSize = 8ull << 20;
 constexpr std::size_t HostStackSize = 512ull << 20;
 constexpr std::uint64_t TlsSize = 64ull << 10;
 constexpr std::uint32_t ConsoleMxcsr = 0x9fc0;
+constexpr std::uint16_t ConsoleX87Control = 0x037f;
 
 [[noreturn]] void Fail(const char* format, ...) __attribute__((format(printf, 1, 2)));
 
@@ -94,7 +95,8 @@ std::uint64_t PrepareThread(GuestThread& thread, Ps5LiftState& state) {
         std::memcpy(reinterpret_cast<void*>(threadPointer - offset), reinterpret_cast<const void*>(ps5lift_image.TlsAddress), ps5lift_image.TlsFileSize);
     }
     state.FsBase = threadPointer;
-    state.Mxcsr = thread.Mxcsr;
+    state.Mxcsr = thread.Mxcsr & ~0x3fu;
+    state.X87Control = ConsoleX87Control;
     ps5lift_apply_mxcsr(&state);
     return reinterpret_cast<std::uint64_t>(thread.Stack + GuestStackSize);
 }
@@ -141,6 +143,46 @@ void StartThread(GuestThread& thread) {
 
 }
 
+namespace {
+
+constexpr std::uint32_t MxcsrExceptions = 0x3f;
+
+#if defined(__aarch64__)
+constexpr std::uint64_t FpsrBits[6] = {1u << 0, 1u << 7, 1u << 1, 1u << 2, 1u << 3, 1u << 4};
+#endif
+
+std::uint32_t HostExceptions() {
+#if defined(__aarch64__)
+    std::uint64_t fpsr = 0;
+    __asm__ volatile("mrs %0, fpsr" : "=r"(fpsr));
+    std::uint32_t flags = 0;
+    for (unsigned i = 0; i < 6; ++i) {
+        if (fpsr & FpsrBits[i]) flags |= 1u << i;
+    }
+    return flags;
+#elif defined(__x86_64__)
+    return _mm_getcsr() & MxcsrExceptions;
+#else
+    return 0;
+#endif
+}
+
+void SetHostExceptions(const std::uint32_t flags) {
+#if defined(__aarch64__)
+    std::uint64_t fpsr = 0;
+    __asm__ volatile("mrs %0, fpsr" : "=r"(fpsr));
+    for (unsigned i = 0; i < 6; ++i) {
+        if (flags & (1u << i)) fpsr |= FpsrBits[i];
+        else fpsr &= ~FpsrBits[i];
+    }
+    __asm__ volatile("msr fpsr, %0" : : "r"(fpsr));
+#elif defined(__x86_64__)
+    _mm_setcsr((_mm_getcsr() & ~MxcsrExceptions) | (flags & MxcsrExceptions));
+#endif
+}
+
+}
+
 extern "C" void ps5lift_apply_mxcsr(Ps5LiftState* state) {
     const auto mxcsr = state->Mxcsr;
 #if defined(__aarch64__)
@@ -166,8 +208,13 @@ extern "C" void ps5lift_apply_mxcsr(Ps5LiftState* state) {
     }
     __asm__ volatile("msr fpcr, %0" : : "r"(fpcr));
 #elif defined(__x86_64__)
-    _mm_setcsr(mxcsr & ~0x3fu);
+    _mm_setcsr((mxcsr & ~MxcsrExceptions) | 0x1f80u);
 #endif
+    SetHostExceptions(mxcsr & MxcsrExceptions);
+}
+
+extern "C" std::uint32_t ps5lift_read_mxcsr(Ps5LiftState* state) {
+    return (state->Mxcsr & ~MxcsrExceptions) | HostExceptions();
 }
 
 extern "C" void ps5lift_dispatch(Ps5LiftState* state, const std::uint64_t target) {
@@ -204,7 +251,7 @@ extern "C" std::uint64_t ps5lift_thread_create(Ps5LiftState* parent, const std::
     auto* thread = new GuestThread;
     thread->Entry = entry;
     thread->Argument = argument;
-    thread->Mxcsr = parent->Mxcsr;
+    thread->Mxcsr = ps5lift_read_mxcsr(parent);
     StartThread(*thread);
     return reinterpret_cast<std::uint64_t>(thread);
 }

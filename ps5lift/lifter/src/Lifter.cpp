@@ -2058,9 +2058,11 @@ private:
             _builder.CreateCall(_module.Runtime("ps5lift_apply_mxcsr", llvm::FunctionType::get(_builder.getVoidTy(), {_module.Pointer()}, false)), {_state});
             return true;
         }
-        case ZYDIS_MNEMONIC_STMXCSR: case ZYDIS_MNEMONIC_VSTMXCSR:
-            Write(0, StateLoad(_builder.getInt32Ty(), offsetof(Ps5LiftState, Mxcsr)));
+        case ZYDIS_MNEMONIC_STMXCSR: case ZYDIS_MNEMONIC_VSTMXCSR: {
+            auto callee = _module.Runtime("ps5lift_read_mxcsr", llvm::FunctionType::get(_builder.getInt32Ty(), {_module.Pointer()}, false));
+            Write(0, _builder.CreateCall(callee, {_state}));
             return true;
+        }
         case ZYDIS_MNEMONIC_MOVHLPS: case ZYDIS_MNEMONIC_VMOVHLPS: case ZYDIS_MNEMONIC_MOVLHPS: case ZYDIS_MNEMONIC_VMOVLHPS:
         case ZYDIS_MNEMONIC_MOVHPS: case ZYDIS_MNEMONIC_VMOVHPS: case ZYDIS_MNEMONIC_MOVLPS: case ZYDIS_MNEMONIC_VMOVLPS:
         case ZYDIS_MNEMONIC_MOVHPD: case ZYDIS_MNEMONIC_VMOVHPD: case ZYDIS_MNEMONIC_MOVLPD: case ZYDIS_MNEMONIC_VMOVLPD:

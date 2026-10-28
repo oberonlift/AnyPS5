@@ -46,6 +46,8 @@ typedef struct Ps5LiftState {
     uint8_t Flags[PS5LIFT_FLAG_COUNT];
     uint8_t Padding[1];
     uint32_t Mxcsr;
+    uint16_t X87Control;
+    uint16_t X87Status;
     uint8_t Vector[16][32];
 } Ps5LiftState;
 
@@ -80,6 +82,7 @@ extern const Ps5LiftImage ps5lift_image;
 
 void ps5lift_dispatch(Ps5LiftState* state, uint64_t target);
 void ps5lift_apply_mxcsr(Ps5LiftState* state);
+uint32_t ps5lift_read_mxcsr(Ps5LiftState* state);
 uint64_t ps5lift_thread_create(Ps5LiftState* parent, uint64_t entry, uint64_t argument);
 uint64_t ps5lift_thread_join(uint64_t handle);
 Ps5LiftState* ps5lift_current_state(void);
