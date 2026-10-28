@@ -2640,6 +2640,13 @@ private:
         case ZYDIS_MNEMONIC_MFENCE:
             _builder.CreateFence(llvm::AtomicOrdering::SequentiallyConsistent);
             return;
+        case ZYDIS_MNEMONIC_CLFLUSH:
+        case ZYDIS_MNEMONIC_CLFLUSHOPT:
+        case ZYDIS_MNEMONIC_CLWB: {
+            const auto* name = mnemonic == ZYDIS_MNEMONIC_CLWB ? "ps5lift_write_back_cache_line" : "ps5lift_flush_cache_line";
+            _builder.CreateCall(_module.Runtime(name, llvm::FunctionType::get(_builder.getVoidTy(), {I64()}, false)), {Address(Operand(0))});
+            return;
+        }
         case ZYDIS_MNEMONIC_RDTSC: {
             auto* ticks = _builder.CreateCall(_module.Runtime("ps5lift_read_tsc", llvm::FunctionType::get(I64(), false)));
             SetGpr(PS5LIFT_RAX, _builder.CreateAnd(ticks, _builder.getInt64(0xffffffff)));

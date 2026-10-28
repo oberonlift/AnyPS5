@@ -248,6 +248,24 @@ extern "C" std::uint64_t ps5lift_read_tsc(void) {
 #endif
 }
 
+// clflush and clflushopt write a cache line back to memory and invalidate it, and clwb only writes it back; DC CIVAC
+// and DC CVAC to the point of coherency do the same on aarch64. An x86 host flushes for both, since clwb is optional there.
+extern "C" void ps5lift_flush_cache_line(const std::uint64_t address) {
+#if defined(__aarch64__)
+    asm volatile("dc civac, %0" : : "r"(address) : "memory");
+#else
+    _mm_clflush(reinterpret_cast<const void*>(address));
+#endif
+}
+
+extern "C" void ps5lift_write_back_cache_line(const std::uint64_t address) {
+#if defined(__aarch64__)
+    asm volatile("dc cvac, %0" : : "r"(address) : "memory");
+#else
+    _mm_clflush(reinterpret_cast<const void*>(address));
+#endif
+}
+
 extern "C" std::uint32_t ps5lift_read_mxcsr(Ps5LiftState* state) {
     return (state->Mxcsr & ~MxcsrExceptions) | HostExceptions();
 }
