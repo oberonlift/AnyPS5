@@ -4,6 +4,7 @@
 #include "prx/libc/include/exceptions/Runtime.hpp"
 #include "prx/libc/include/specifics/linux/ElfTypes.hpp"
 #include "prx/libc/src/specifics/x86_64/RegisterContext.cpp"
+#include "prx/libc/include/GuestCpu.hpp"
 
 #if defined(__linux__)
 #include <dlfcn.h>
@@ -147,8 +148,18 @@ Word ResolveStub(Word personality) {
 }
 #endif
 
+#ifdef ANYPS5_GUEST_LIFTED
+static Word ResolveImport(Word address) {
+    const char* name = GuestCpuImportName_nid_no_patch(address);
+    if (name == nullptr) return address;
+    if (std::strcmp(name, "__gxx_personality_v0") == 0 || std::strcmp(name, "XwLA5cTHjt4") == 0) return reinterpret_cast<Word>(__gxx_personality_v0_nid_postfix);
+    if (std::strcmp(name, "__gcc_personality_v0") == 0 || std::strcmp(name, "FW2QeoYK7-c") == 0) return reinterpret_cast<Word>(__gcc_personality_v0_nid_postfix);
+    return address;
+}
+#endif
+
 _Unwind_Reason_Code CallPersonality(Word personality, _Unwind_Action actions, _Unwind_Exception* exception, _Unwind_Context* context) {
-#ifdef _WIN32
+#if defined(_WIN32) || defined(ANYPS5_GUEST_LIFTED)
     personality = ResolveImport(personality);
 #endif
     if (personality == reinterpret_cast<Word>(__gxx_personality_v0_nid_postfix) || personality == reinterpret_cast<Word>(__gxx_personality_v0))
@@ -462,7 +473,12 @@ bool CompactRules(Frame& frame, Rules& rules) {
 
 bool DecodeFrame(_Unwind_Context& context, Frame& frame) {
     Lookup query {context.registers[16] - !context.signalFrame};
-#if defined(__linux__) || defined(__APPLE__)
+#if defined(ANYPS5_GUEST_LIFTED)
+    const void* header = nullptr;
+    if (!GuestCpuUnwindTables_nid_no_patch(query.pc, &header, &query.text, &query.data) || static_cast<const Byte*>(header)[0] != 1) return false;
+    SearchHeader(static_cast<const Byte*>(header), query);
+    return query.fde != nullptr && DecodeCandidate(context, frame, query);
+#elif defined(__linux__) || defined(__APPLE__)
 #ifdef LIBC_UNWIND_FIND_OBJECT
     if (!FindFrameFast(query))
 #endif
@@ -698,7 +714,11 @@ _Unwind_Reason_Code PhaseTwo(_Unwind_Context context, _Unwind_Exception* excepti
             } else if (context.cfa == exception->private_2) actions = _Unwind_Action(actions | _UA_HANDLER_FRAME);
             if (frame.personality) {
                 auto result = CallPersonality(frame.personality, actions, exception, &context);
+#ifdef ANYPS5_GUEST_LIFTED
+                if (result == _URC_INSTALL_CONTEXT) GuestCpuUnwindResume_nid_no_patch(context.registers);
+#else
                 if (result == _URC_INSTALL_CONTEXT) LibcRestoreRegisters(context.registers);
+#endif
                 if (result != _URC_CONTINUE_UNWIND) return _URC_FATAL_PHASE2_ERROR;
             }
         }
@@ -717,8 +737,12 @@ _Unwind_Reason_Code PhaseTwo(_Unwind_Context context, _Unwind_Exception* excepti
 extern "C" {
 _Unwind_Reason_Code APS5_VABI _Unwind_RaiseException_nid_postfix(_Unwind_Exception* exception) {
     _Unwind_Context start;
+#ifdef ANYPS5_GUEST_LIFTED
+    GuestCpuUnwindStart_nid_no_patch(start.registers);
+#else
     LibcCaptureRegisters(start.registers);
     if (!LibcUnwind::Step(start)) return _URC_FATAL_PHASE1_ERROR;
+#endif
     auto context = start;
     exception->private_1 = 0;
     for (unsigned depth = 0; depth < 65536; ++depth) {
@@ -738,7 +762,7 @@ _Unwind_Reason_Code APS5_VABI _Unwind_RaiseException_nid_postfix(_Unwind_Excepti
 }
 
 [[noreturn]] void APS5_VABI _Unwind_Resume_nid_postfix(_Unwind_Exception* exception) {
-#if defined(__linux__)
+#if defined(__linux__) && !defined(ANYPS5_GUEST_LIFTED)
     if (!LibcException::Native(exception->exception_class) && !exception->private_1) {
         using Resume = void (*)(_Unwind_Exception*);
         const auto resume = reinterpret_cast<Resume>(dlsym(RTLD_NEXT, "_Unwind_Resume"));
@@ -747,8 +771,12 @@ _Unwind_Reason_Code APS5_VABI _Unwind_RaiseException_nid_postfix(_Unwind_Excepti
     }
 #endif
     _Unwind_Context context;
+#ifdef ANYPS5_GUEST_LIFTED
+    GuestCpuUnwindStart_nid_no_patch(context.registers);
+#else
     LibcCaptureRegisters(context.registers);
     if (!LibcUnwind::Step(context)) std::abort();
+#endif
     LibcUnwind::PhaseTwo(context, exception);
     std::abort();
 }
@@ -788,8 +816,12 @@ _Unwind_Ptr APS5_VABI _Unwind_GetTextRelBase_nid_postfix(_Unwind_Context* contex
 _Unwind_Reason_Code APS5_VABI _Unwind_ForcedUnwind_nid_postfix(_Unwind_Exception* exception, _Unwind_Stop_Fn stop, void* argument) {
     if (!stop) return _URC_FATAL_PHASE2_ERROR;
     _Unwind_Context context;
+#ifdef ANYPS5_GUEST_LIFTED
+    GuestCpuUnwindStart_nid_no_patch(context.registers);
+#else
     LibcCaptureRegisters(context.registers);
     if (!LibcUnwind::Step(context)) return _URC_FATAL_PHASE2_ERROR;
+#endif
     exception->private_1 = reinterpret_cast<std::uintptr_t>(stop);
     exception->private_2 = reinterpret_cast<std::uintptr_t>(argument);
     return LibcUnwind::PhaseTwo(context, exception);
@@ -797,8 +829,12 @@ _Unwind_Reason_Code APS5_VABI _Unwind_ForcedUnwind_nid_postfix(_Unwind_Exception
 
 _Unwind_Reason_Code APS5_VABI _Unwind_Backtrace_nid_postfix(_Unwind_Trace_Fn trace, void* argument) {
     _Unwind_Context context;
+#ifdef ANYPS5_GUEST_LIFTED
+    GuestCpuUnwindStart_nid_no_patch(context.registers);
+#else
     LibcCaptureRegisters(context.registers);
     if (!LibcUnwind::Step(context)) return _URC_END_OF_STACK;
+#endif
     for (unsigned depth = 0; depth < 65536; ++depth) {
         LibcUnwind::Frame frame; LibcUnwind::Rules rules;
         if (!LibcUnwind::GetRules(context, frame, rules)) return _URC_END_OF_STACK;
