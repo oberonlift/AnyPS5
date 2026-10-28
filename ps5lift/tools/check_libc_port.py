@@ -13,29 +13,55 @@ ANYPS5 = ROOT / "3rdparty" / "anyps5"
 LIBS = ANYPS5 / "core" / "libs"
 
 
+SKIPPED_PLATFORMS = re.compile(r"\s*(WIN32|APPLE|MSVC)\s*")
+
+
+def cmake_commands(text):
+    text = re.sub(r"#[^\n]*", "", text)
+    for match in re.finditer(r"([A-Za-z_]+)\s*\(", text):
+        depth, position = 1, match.end()
+        while depth and position < len(text):
+            depth += {"(": 1, ")": -1}.get(text[position], 0)
+            position += 1
+        yield match.start(), position, match.group(1).lower(), text[match.end():position - 1].split()
+
+
 def sources(library):
+    directory = LIBS / "prx" / library
+    listing = directory / "CMakeLists.txt"
+    if not listing.exists():
+        return [directory / "Export.cpp"]
     found = set()
     skipped = []
-    for line in (LIBS / "prx" / library / "CMakeLists.txt").read_text().splitlines():
-        condition = re.match(r"\s*(if|elseif|else|endif)\s*\((.*)\)", line)
-        if condition:
-            keyword, expression = condition.groups()
-            if keyword == "if":
-                skipped.append(bool(re.fullmatch(r"\s*(WIN32|APPLE|MSVC)\s*", expression)))
-            elif keyword == "endif":
-                skipped.pop()
-            elif skipped:
-                skipped[-1] = False
+    consumed = 0
+    for start, end, command, arguments in cmake_commands(listing.read_text()):
+        if start < consumed:
             continue
-        if any(skipped):
-            continue
-        found.update(LIBS / "prx" / library / path for path in re.findall(r"\$\{CMAKE_CURRENT_SOURCE_DIR\}/([^\s)]+\.cpp)", line))
-        found.update(LIBS / path for path in re.findall(r"\$\{LIBS_INCLUDE_DIR\}/([^\s)]+\.cpp)", line) if not path.startswith("tests/"))
+        consumed = end
+        if command == "if":
+            skipped.append(bool(SKIPPED_PLATFORMS.fullmatch(" ".join(arguments))))
+        elif command in ("elseif", "else") and skipped:
+            skipped[-1] = False
+        elif command == "endif" and skipped:
+            skipped.pop()
+        elif command in ("add_library", "target_sources") and arguments and arguments[0] == library and not any(skipped):
+            for argument in arguments[1:]:
+                if not argument.endswith(".cpp"):
+                    continue
+                path = argument.replace("${CMAKE_CURRENT_SOURCE_DIR}", str(directory)).replace("${LIBS_INCLUDE_DIR}", str(LIBS))
+                path = Path(path) if Path(path).is_absolute() else directory / path
+                if "tests" not in path.relative_to(LIBS).parts:
+                    found.add(path)
     return sorted(found)
 
 
+THIRD_PARTY_INCLUDES = ["SDL2/include", "Vulkan-Headers/include", "VulkanMemoryAllocator/include", "stb", "freetype/include", "mbedtls/include", "zstd/lib",
+                        "ogg/include", "opus/include", "vorbis/include", "nghttp2/lib/includes", "SPIRV-Headers/include", "LibAtrac9/C/src"]
+
+
 def include_flags(library):
-    return [f"-I{LIBS}", f"-I{LIBS / 'nid' / 'include'}", f"-I{LIBS / 'prx' / library / 'include'}", f"-I{LIBS / 'prx' / 'libc' / 'include'}",
+    third_party = [f"-I{ANYPS5 / '3rdparty' / path}" for path in THIRD_PARTY_INCLUDES if (ANYPS5 / "3rdparty" / path).is_dir()]
+    return third_party + [f"-I{LIBS}", f"-I{LIBS / 'nid' / 'include'}", f"-I{LIBS / 'prx' / library / 'include'}", f"-I{LIBS / 'prx' / 'libc' / 'include'}",
             f"-I{ANYPS5 / '3rdparty' / 'ZArchive' / 'include'}", f"-I{ROOT / 'runtime' / 'include'}"]
 
 

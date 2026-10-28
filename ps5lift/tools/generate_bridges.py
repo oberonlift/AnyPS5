@@ -2,6 +2,7 @@
 import argparse
 import base64
 import collections
+import concurrent.futures
 import hashlib
 import os
 import re
@@ -185,7 +186,39 @@ class Definitions:
         return text[position:position + 1] == b"{"
 
 
-def collect(library, index):
+def scan_source(job):
+    source, library, explicit = job
+    unit = cindex.Index.create().parse(str(source), args=translation_unit_arguments(library), options=cindex.TranslationUnit.PARSE_SKIP_FUNCTION_BODIES)
+    errors = sum(1 for diagnostic in unit.diagnostics if diagnostic.severity >= cindex.Diagnostic.Error)
+    defined = Definitions()
+    candidates = []
+    stack = [unit.cursor]
+    while stack:
+        cursor = stack.pop()
+        if cursor.kind in (cindex.CursorKind.TRANSLATION_UNIT, cindex.CursorKind.LINKAGE_SPEC, cindex.CursorKind.NAMESPACE, cindex.CursorKind.UNEXPOSED_DECL):
+            stack.extend(cursor.get_children())
+            continue
+        if cursor.kind not in (cindex.CursorKind.FUNCTION_DECL, cindex.CursorKind.VAR_DECL) or cursor.linkage != cindex.LinkageKind.EXTERNAL:
+            continue
+        name = cursor.spelling
+        c_linkage = cursor.mangled_name in (name, "_" + name)
+        if name.endswith(POSTFIX) or name in explicit:
+            marked = True
+        elif not name.endswith("_nid_no_patch") and not name.startswith("SDL_") and c_linkage and defined(cursor):
+            marked = False
+        else:
+            continue
+        candidate = {"name": name, "marked": marked, "c_linkage": c_linkage, "data": cursor.kind == cindex.CursorKind.VAR_DECL}
+        if c_linkage and not candidate["data"]:
+            try:
+                candidate["export"] = describe(cursor, name)
+            except Unsupported as reason:
+                candidate["reason"] = str(reason)
+        candidates.append(candidate)
+    return errors, candidates
+
+
+def collect(library, pool):
     explicit = {}
     for source in library_sources(library):
         for nid, function in EXPORT_PATTERN.findall(source.read_text(errors="replace")):
@@ -195,41 +228,25 @@ def collect(library, index):
     data = {}
     unsupported = {}
     parse_errors = 0
-    defined = Definitions()
-    units = []
     candidates = []
-    for source in library_sources(library):
-        unit = index.parse(str(source), args=translation_unit_arguments(library), options=cindex.TranslationUnit.PARSE_SKIP_FUNCTION_BODIES)
-        units.append(unit)
-        parse_errors += sum(1 for diagnostic in unit.diagnostics if diagnostic.severity >= cindex.Diagnostic.Error)
-        stack = [unit.cursor]
-        while stack:
-            cursor = stack.pop()
-            if cursor.kind in (cindex.CursorKind.TRANSLATION_UNIT, cindex.CursorKind.LINKAGE_SPEC, cindex.CursorKind.NAMESPACE, cindex.CursorKind.UNEXPOSED_DECL):
-                stack.extend(cursor.get_children())
-                continue
-            if cursor.kind not in (cindex.CursorKind.FUNCTION_DECL, cindex.CursorKind.VAR_DECL) or cursor.linkage != cindex.LinkageKind.EXTERNAL:
-                continue
-            name = cursor.spelling
-            if name.endswith(POSTFIX) or name in explicit:
-                candidates.append((cursor, True))
-            elif not name.endswith("_nid_no_patch") and not name.startswith("SDL_") and cursor.mangled_name in (name, "_" + name) and defined(cursor):
-                candidates.append((cursor, False))
-    named = {cursor.spelling for cursor, _ in candidates}
-    for cursor, marked in candidates:
-        name = cursor.spelling
+    for errors, found in pool.map(scan_source, [(source, library, explicit) for source in library_sources(library)]):
+        parse_errors += errors
+        candidates.extend(found)
+    named = {candidate["name"] for candidate in candidates}
+    for candidate in candidates:
+        name = candidate["name"]
         if name in explicit:
             nid = explicit[name]
-        elif marked:
+        elif candidate["marked"]:
             nid = compute_nid(export_base(name))
         elif name + POSTFIX in named:
             continue
         else:
             nid = compute_nid(export_base(name))
-        if cursor.mangled_name not in (name, "_" + name):
+        if not candidate["c_linkage"]:
             unsupported.setdefault(nid, (name, "C++ linkage"))
             continue
-        if cursor.kind == cindex.CursorKind.VAR_DECL:
+        if candidate["data"]:
             data.setdefault(nid, name)
             continue
         if nid in exports or nid in unsupported:
@@ -237,11 +254,10 @@ def collect(library, index):
         if export_base(name) in GUEST_STATE_EXPORTS:
             unsupported[nid] = (name, "saves or restores the guest's own registers")
             continue
-        try:
-            exports[nid] = describe(cursor, name)
-            exports[nid]["name"] = name
-        except Unsupported as reason:
-            unsupported[nid] = (name, str(reason))
+        if "export" in candidate:
+            exports[nid] = dict(candidate["export"], name=name)
+        else:
+            unsupported[nid] = (name, candidate["reason"])
     by_name = {export["name"]: export for export in exports.values()}
     for nid in [nid for nid, export in exports.items() if export["variadic"]]:
         export = exports.pop(nid)
@@ -311,17 +327,18 @@ def main():
     parser.add_argument("-o", "--output", required=True)
     parser.add_argument("--libclang", default="/usr/lib/llvm-18/lib/libclang-18.so.1")
     parser.add_argument("--report", action="store_true", help="list every export without a bridge and why")
+    parser.add_argument("--jobs", type=int, default=os.cpu_count())
     args = parser.parse_args()
 
     if os.path.exists(args.libclang):
         cindex.Config.set_library_file(args.libclang)
-    index = cindex.Index.create()
+    pool = concurrent.futures.ProcessPoolExecutor(args.jobs)
     exports, data, unsupported, parse_errors = {}, {}, {}, 0
     for name in args.library:
         library = ANYPS5_LIBS / "prx" / name
         if not library.is_dir():
             raise SystemExit(f"{library} is not an AnyPS5 library directory")
-        library_exports, library_data, library_unsupported, library_errors = collect(library, index)
+        library_exports, library_data, library_unsupported, library_errors = collect(library, pool)
         for nid, export in library_exports.items():
             exports.setdefault(nid, export)
         for nid, symbol in library_data.items():

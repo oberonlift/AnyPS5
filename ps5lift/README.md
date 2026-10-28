@@ -61,6 +61,8 @@ python3 tools/generate_bridges.py libc -o libc_bridges.cpp
 
 Function-pointer parameters become native thunks that call back into the guest (see [the design](docs/DESIGN.md#callbacks)), `long double` values cross between the guest's x87 format and the host's, and a variadic export calls its `v` sibling with a SysV `va_list` built from the guest's registers (see [variadic imports](docs/DESIGN.md#variadic-imports)). It prints how many exports it could not bridge and why; `--report` lists them. For libc it writes 1395 bridges and leaves 33 exports: records passed or returned by value (21), complex values (6), function pointers as return values (4) and `setjmp`/`longjmp`, which need the guest's own registers.
 
+Several libraries can go into one file (`generate_bridges.py libc libkernel -o bridges.cpp`); a NID that more than one exports gets the first one's bridge. `tools/survey_libraries.py` compiles every AnyPS5 library for a lifted aarch64 guest and generates its bridges, and reports what fails for each (`--json` keeps the details).
+
 The bridges call AnyPS5's libc built for the lifted guest (`-DANYPS5_GUEST_LIFTED`). `tools/run_libc_tests.py --triple aarch64-unknown-linux-gnu` builds it and runs upstream's libc tests against it, and `tools/run_libc_fixture.py` lifts a guest that calls it through the generated bridges; ctest runs both for each target.
 
 ## Benchmark

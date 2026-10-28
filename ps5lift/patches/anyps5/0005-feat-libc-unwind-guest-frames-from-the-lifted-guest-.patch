@@ -1,7 +1,7 @@
 From d938f74d71d206fee1eaff7bb8b814e8e92aa45c Mon Sep 17 00:00:00 2001
 From: Claude <noreply@anthropic.com>
 Date: Wed, 28 Oct 2026 08:45:16 +0000
-Subject: [PATCH 5/7] feat(libc): unwind guest frames from the lifted guest
+Subject: [PATCH 5/8] feat(libc): unwind guest frames from the lifted guest
  state
 
 In a lifted build the DWARF unwinder starts from the guest frame that
