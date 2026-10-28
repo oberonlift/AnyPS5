@@ -300,6 +300,45 @@ std::optional<std::string> CalledImport(const GuestImage& image, const Decoder& 
     return name->second;
 }
 
+bool PassesArgument(const ZydisRegister reg) {
+    switch (Enclosing(reg)) {
+    case ZYDIS_REGISTER_RDI:
+    case ZYDIS_REGISTER_RSI:
+    case ZYDIS_REGISTER_RDX:
+    case ZYDIS_REGISTER_RCX:
+    case ZYDIS_REGISTER_R8:
+    case ZYDIS_REGISTER_R9:
+        return true;
+    default:
+        return false;
+    }
+}
+
+// Position-independent code takes a function's address with a RIP-relative lea, which needs no relocation. Code also
+// keeps strings and tables among its instructions and takes their addresses the same way, so an address counts as a
+// function's only if the code stores it, branches to it or passes it to a call before it reads memory through it.
+std::optional<std::uint64_t> TakenFunctionAddress(const GuestImage& image, const GuestFunction& function, const Instruction& lea) {
+    const auto address = RipRelativeAddress(lea);
+    if (!address || !image.IsExecutable(*address)) return std::nullopt;
+    const auto reg = lea.Operands[0].reg.value;
+    auto next = function.Instructions.find(lea.Next());
+    for (int depth = 0; depth < 16 && next != function.Instructions.end(); ++depth, next = function.Instructions.find(next->second.Next())) {
+        const auto& instruction = next->second;
+        const auto mnemonic = instruction.Info.mnemonic;
+        const auto& target = instruction.Operands[0];
+        for (std::uint8_t i = 0; i < instruction.Info.operand_count_visible; ++i) {
+            const auto& operand = instruction.Operands[i];
+            if (operand.type == ZYDIS_OPERAND_TYPE_MEMORY && (Enclosing(operand.mem.base) == Enclosing(reg) || Enclosing(operand.mem.index) == Enclosing(reg))) return std::nullopt;
+        }
+        if ((mnemonic == ZYDIS_MNEMONIC_CALL || mnemonic == ZYDIS_MNEMONIC_JMP) && target.type == ZYDIS_OPERAND_TYPE_REGISTER && target.reg.value == reg) return address;
+        if (mnemonic == ZYDIS_MNEMONIC_CALL) return PassesArgument(reg) ? address : std::nullopt;
+        if (mnemonic == ZYDIS_MNEMONIC_MOV && target.type == ZYDIS_OPERAND_TYPE_MEMORY && instruction.Operands[1].type == ZYDIS_OPERAND_TYPE_REGISTER && instruction.Operands[1].reg.value == reg)
+            return address;
+        if (WritesRegister(instruction, reg) || EndsFlow(instruction) || IsConditionalJump(mnemonic)) return std::nullopt;
+    }
+    return std::nullopt;
+}
+
 Instruction DecodeReached(const GuestImage& image, const Decoder& decoder, const std::uint64_t entry, const std::uint64_t address, const std::uint64_t start, const std::uint64_t from) {
     try {
         return decoder.Decode(image, address);
@@ -310,7 +349,7 @@ Instruction DecodeReached(const GuestImage& image, const Decoder& decoder, const
 }
 
 GuestFunction DiscoverFunction(const GuestImage& image, const Decoder& decoder, const std::set<std::uint64_t>& references, const std::uint64_t entry, const std::set<std::uint64_t>& starts,
-                               std::set<std::uint64_t>& callTargets) {
+                               std::set<std::uint64_t>& reachedStarts) {
     GuestFunction function;
     function.Entry = entry;
     const auto symbol = image.FunctionSymbols().find(entry);
@@ -343,7 +382,7 @@ GuestFunction DiscoverFunction(const GuestImage& image, const Decoder& decoder, 
                 function.Instructions.emplace(address, instruction);
                 const auto target = DirectTarget(instruction);
                 const auto mnemonic = instruction.Info.mnemonic;
-                if (mnemonic == ZYDIS_MNEMONIC_CALL && target) callTargets.insert(*target);
+                if (mnemonic == ZYDIS_MNEMONIC_CALL && target) reachedStarts.insert(*target);
                 if (mnemonic == ZYDIS_MNEMONIC_CALL) {
                     if (const auto import = CalledImport(image, decoder, instruction); import && ReturnsTwice(*import)) {
                         function.ResumePoints.insert(instruction.Next());
@@ -382,6 +421,9 @@ GuestFunction DiscoverFunction(const GuestImage& image, const Decoder& decoder, 
         }
         if (unresolved.size() == indirectJumps.size()) break;
         indirectJumps = std::move(unresolved);
+    }
+    for (const auto& [address, instruction] : function.Instructions) {
+        if (const auto taken = TakenFunctionAddress(image, function, instruction)) reachedStarts.insert(*taken);
     }
     const auto predecessors = PredecessorsOf(function);
     for (const auto& [jump, targets] : function.JumpTables) {
@@ -515,10 +557,10 @@ std::map<std::uint64_t, GuestFunction> DiscoverFunctions(const GuestImage& image
 
     while (true) {
         std::map<std::uint64_t, GuestFunction> functions;
-        std::set<std::uint64_t> callTargets;
-        for (const auto entry : starts) functions.emplace(entry, DiscoverFunction(image, decoder, references, entry, starts, callTargets));
+        std::set<std::uint64_t> reachedStarts;
+        for (const auto entry : starts) functions.emplace(entry, DiscoverFunction(image, decoder, references, entry, starts, reachedStarts));
         const auto before = starts.size();
-        starts.insert(callTargets.begin(), callTargets.end());
+        starts.insert(reachedStarts.begin(), reachedStarts.end());
         if (starts.size() == before) return functions;
     }
 }
