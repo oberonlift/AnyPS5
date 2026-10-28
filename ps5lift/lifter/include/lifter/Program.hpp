@@ -14,6 +14,7 @@ struct GuestProgram {
     std::vector<std::size_t> Initialization;
 
     static GuestProgram Load(const std::string& executable);
+    std::string LoaderName(std::size_t index) const;
 };
 
 }

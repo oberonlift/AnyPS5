@@ -28,3 +28,7 @@ long module_tls(void) {
 long (*module_function(void))(long) {
     return module_value;
 }
+
+long* module_local_address(void) {
+    return &module_local;
+}

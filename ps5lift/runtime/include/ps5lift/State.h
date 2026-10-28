@@ -137,9 +137,13 @@ typedef struct Ps5LiftImport {
 } Ps5LiftImport;
 
 typedef struct Ps5LiftImage {
-    const char* Path;
+    const char* Name;
+    uint64_t LoadBias;
+    uint64_t ProgramHeaders;
+    uint64_t ProgramHeaderCount;
     const Ps5LiftSegment* Segments;
     uint64_t SegmentCount;
+    uint64_t TlsModule;
     uint64_t TlsAddress;
     uint64_t TlsFileSize;
     uint64_t TlsMemorySize;
@@ -149,7 +153,6 @@ typedef struct Ps5LiftImage {
     uint64_t DataImportCount;
     const Ps5LiftImport* Imports;
     uint64_t ImportCount;
-    uint64_t EhFrameHeader;
     uint64_t Init;
     uint64_t InitArray;
     uint64_t InitCount;

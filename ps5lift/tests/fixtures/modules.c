@@ -6,6 +6,38 @@ extern long module_counter;
 long module_value(long x);
 long (*module_function(void))(long);
 long module_tls(void);
+long* module_local_address(void);
+
+struct program_header {
+    unsigned int type;
+    unsigned int flags;
+    unsigned long offset;
+    unsigned long address;
+    unsigned long physical_address;
+    unsigned long file_size;
+    unsigned long memory_size;
+    unsigned long alignment;
+};
+
+struct dl_phdr_info {
+    unsigned long dlpi_addr;
+    const char* dlpi_name;
+    const struct program_header* dlpi_phdr;
+    unsigned short dlpi_phnum;
+    unsigned long long dlpi_adds;
+    unsigned long long dlpi_subs;
+    unsigned long dlpi_tls_modid;
+    void* dlpi_tls_data;
+};
+
+int dl_iterate_phdr(int (*callback)(struct dl_phdr_info*, unsigned long, void*), void* data);
+
+static struct image_search {
+    long executables;
+    long main_found;
+    long module_found;
+    long module_tls_found;
+} search;
 
 static __thread long executable_local = 100;
 
@@ -40,6 +72,46 @@ static void line(const char* name, i64 value) {
     print("\n");
 }
 
+static int ends_with(const char* text, const char* suffix) {
+    const unsigned long text_length = length_of(text);
+    const unsigned long suffix_length = length_of(suffix);
+    if (suffix_length > text_length) return 0;
+    for (unsigned long index = 0; index < suffix_length; ++index) {
+        if (text[text_length - suffix_length + index] != suffix[index]) return 0;
+    }
+    return 1;
+}
+
+static int contains(const struct dl_phdr_info* image, const void* address) {
+    for (unsigned short index = 0; index < image->dlpi_phnum; ++index) {
+        const struct program_header* header = &image->dlpi_phdr[index];
+        if (header->type == 1 && (unsigned long)address - (image->dlpi_addr + header->address) < header->memory_size) return 1;
+    }
+    return 0;
+}
+
+int main(void);
+
+static int visit_image(struct dl_phdr_info* image, unsigned long size, void* data) {
+    struct image_search* search = data;
+    if (size < sizeof(*image)) return -1;
+    if (image->dlpi_name[0] == 0) {
+        ++search->executables;
+        search->main_found += contains(image, (const void*)main);
+    } else if (ends_with(image->dlpi_name, "libguestmodule.so")) {
+        search->module_found += contains(image, (const void*)module_value);
+        search->module_tls_found += image->dlpi_tls_modid != 0 && image->dlpi_tls_data == module_local_address();
+    }
+    return 0;
+}
+
+static int stop_at_first(struct dl_phdr_info* image, unsigned long size, void* data) {
+    (void)image;
+    (void)size;
+    (void)data;
+    return 5;
+}
+
 int main(void) {
     line("module counter", module_counter);
     line("module value(5)", module_value(5));
@@ -50,6 +122,12 @@ int main(void) {
     line("module tls again", module_tls());
     executable_local += module_tls();
     line("executable tls", executable_local);
+    line("iteration result", dl_iterate_phdr(visit_image, &search));
+    line("executable images", search.executables);
+    line("main in the executable", search.main_found);
+    line("module_value in its module", search.module_found);
+    line("module tls block", search.module_tls_found);
+    line("iteration stops with", dl_iterate_phdr(stop_at_first, 0));
     return 0;
 }
 

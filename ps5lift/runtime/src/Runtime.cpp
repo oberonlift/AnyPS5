@@ -101,7 +101,7 @@ std::uint64_t PrepareThread(GuestThread& thread, Ps5LiftState& state) {
     for (std::uint64_t i = 0; i < ps5lift_program.ImageCount; ++i) {
         const auto& image = ps5lift_program.Images[i];
         if (image.TlsMemorySize == 0) continue;
-        if (image.TlsOffset > TlsSize / 2) ps5lift_fail("the static TLS of %s does not fit", image.Path);
+        if (image.TlsOffset > TlsSize / 2) ps5lift_fail("the static TLS of image %llu does not fit", static_cast<unsigned long long>(i));
         std::memcpy(reinterpret_cast<void*>(threadPointer - image.TlsOffset), reinterpret_cast<const void*>(image.TlsAddress), image.TlsFileSize);
     }
     state.FsBase = threadPointer;
