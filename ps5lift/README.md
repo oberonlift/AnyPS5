@@ -6,35 +6,39 @@ Status: **milestone 2 in progress**. Guest code built for Zen 2, including SSE, 
 
 ## Build
 
-Requirements: CMake 3.22+, Ninja, Clang and LLD, LLVM 18 or newer with development files (`llvm-18-dev libzstd-dev zlib1g-dev` on Ubuntu 24.04 / DGX OS), Python 3. The PS5 fixture tests also need GCC (for the AnyPS5 relinker) and the bridge generator needs the libclang Python bindings (`python3-clang-18`).
+Requirements: CMake 3.22+, Ninja, Clang and LLD, LLVM 18 or newer with development files (`llvm-18-dev libzstd-dev zlib1g-dev` on Ubuntu 24.04 / DGX OS), Python 3. The build also builds AnyPS5 for a lifted guest, which has [its own requirements](3rdparty/anyps5/docs/dev/BUILD.md#requirements), among them SDL's X11, Wayland and audio development files. The bridge generator needs the libclang Python bindings (`python3-clang-18`).
 
 ```sh
-git submodule update --init
-git -C 3rdparty/zydis submodule update --init
-git -C 3rdparty/anyps5 submodule update --init 3rdparty/ZArchive
+git submodule update --init --recursive
 cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ -DLLVM_DIR=/usr/lib/llvm-18/lib/cmake/llvm
 ninja -C build
 ctest --test-dir build --output-on-failure
 ```
 
-When the tests run lifted code natively they lift it for the host CPU (`--cpu native`), since the `neoverse-v2` default uses SVE, which CPUs such as Apple's do not have; `run_fixture.py --cpu` lifts for another CPU. On an aarch64 host the test lifts the fixture and runs it natively; building the x86-64 guests there needs an x86-64 cross toolchain and libraries (`g++-x86-64-linux-gnu` on Ubuntu). On an x86-64 host it also runs it natively and, when `qemu-aarch64` and an aarch64 sysroot are installed (`qemu-user g++-aarch64-linux-gnu`), lifts it for aarch64 and runs it under qemu. The AnyPS5 submodule points at the `aarch64-host` branch of [oberonlift/AnyPS5](https://github.com/oberonlift/AnyPS5), which carries the changes that build AnyPS5's libraries for a lifted guest on top of upstream. The libc tests reserve the PS5 user address range, about 1 TiB of address space, so they fail under a `ulimit -v` limit.
+When the tests run lifted code natively they lift it for the host CPU (`--cpu native`), since the `neoverse-v2` default uses SVE, which CPUs such as Apple's do not have; `run_fixture.py --cpu` lifts for another CPU. On an aarch64 host the test lifts the fixture and runs it natively; building the x86-64 guests there needs an x86-64 cross toolchain and libraries (`g++-x86-64-linux-gnu` on Ubuntu). On an x86-64 host it also runs it natively and, when `qemu-aarch64` and an aarch64 sysroot are installed (`qemu-user g++-aarch64-linux-gnu`), lifts it for aarch64 and runs it under qemu. The AnyPS5 submodule points at the `aarch64-host` branch of [oberonlift/AnyPS5](https://github.com/oberonlift/AnyPS5), which carries the changes that build AnyPS5's libraries for a lifted guest on top of upstream. AnyPS5 is built for the host, so the tests that use its libraries run for the host's architecture only. The libc tests reserve the PS5 user address range, about 1 TiB of address space, so they fail under a `ulimit -v` limit.
 
 `tools/build_runtime.py` builds the runtime and [Berkeley SoftFloat](https://github.com/ucb-bar/berkeley-softfloat-3) (a submodule, for x87) into a static library per target; the tests build and cache it in `build/runtime-<arch>`.
 
 ## Use
 
-A PS5 executable goes through the AnyPS5 relinker first, which the test build compiles as `build/anyps5-relinker/core/relinker/relinker`:
+A PS5 executable goes through the AnyPS5 relinker first, which the test build compiles as `build/anyps5/core/relinker/relinker`:
 
 ```sh
-build/anyps5-relinker/core/relinker/relinker eboot.bin eboot.elf
+build/anyps5/core/relinker/relinker eboot.bin eboot.elf
 ```
 
 ```sh
 build/lifter/ps5lift eboot.elf -o guest.o --cpu native
+python3 tools/generate_bridges.py libc libkernel --anyps5-build build/anyps5 -o bridges.cpp
 python3 tools/build_runtime.py --triple aarch64-unknown-linux-gnu --output build/runtime-aarch64
-clang++ -O2 -Iruntime/include bridges.cpp guest.o build/runtime-aarch64/libps5lift_runtime.a build/runtime-aarch64/libps5lift_main.a -fuse-ld=lld -pthread -o guest
+L=build/anyps5/core/libs/libs/unpatched
+clang++ -O2 -Iruntime/include guest.o bridges.cpp $L/libc.prx $L/libkernel.prx -Wl,-rpath,$PWD/$L \
+    -Wl,--undefined-glob='GuestCpu*_nid_no_patch' -Wl,--export-dynamic-symbol='GuestCpu*_nid_no_patch' \
+    build/runtime-aarch64/libps5lift_runtime.a build/runtime-aarch64/libps5lift_main.a -fuse-ld=lld -latomic -pthread -ldl -o guest
 ./guest
 ```
+
+AnyPS5's libraries call the runtime's `GuestCpu` functions, so the program links all of them and exports them, including when only a library's own dependency needs them.
 
 | Option | Default | Effect |
 |---|---|---|
@@ -52,17 +56,17 @@ The lifter prints how many functions and instructions it lifted and lists every 
 
 ## Import bridges
 
-`tools/generate_bridges.py` reads an AnyPS5 library's sources with libclang and writes one bridge per export: a function named after the export's NID that takes the arguments from the guest's SysV registers and stack and calls the native implementation through its C prototype, so the host compiler produces the native call.
+`tools/generate_bridges.py` reads an AnyPS5 library's sources with libclang, with the compile commands of AnyPS5's build, and writes one bridge per export: a function named after the export's NID that takes the arguments from the guest's SysV registers and stack and calls the native implementation through its C prototype, so the host compiler produces the native call.
 
 ```sh
 python3 tools/generate_bridges.py libc -o libc_bridges.cpp
 ```
 
-Function-pointer parameters become native thunks that call back into the guest (see [the design](docs/DESIGN.md#callbacks)), `long double` values cross between the guest's x87 format and the host's, and a variadic export calls its `v` sibling with a SysV `va_list` built from the guest's registers (see [variadic imports](docs/DESIGN.md#variadic-imports)). It prints how many exports it could not bridge and why; `--report` lists them. For libc it writes 1395 bridges and leaves 33 exports: records passed or returned by value (21), complex values (6), function pointers as return values (4) and `setjmp`/`longjmp`, which need the guest's own registers.
+Function-pointer parameters become native thunks that call back into the guest (see [the design](docs/DESIGN.md#callbacks)), `long double` values cross between the guest's x87 format and the host's, and a variadic export calls its `v` sibling with a SysV `va_list` built from the guest's registers (see [variadic imports](docs/DESIGN.md#variadic-imports)). It prints how many exports it could not bridge and why; `--report` lists them. For libc it writes 1421 bridges and leaves 33 exports: records passed or returned by value (21), complex values (6), function pointers as return values (4) and `setjmp`/`longjmp`, which need the guest's own registers.
 
-Several libraries can go into one file (`generate_bridges.py libc libkernel -o bridges.cpp`); a NID that more than one exports gets the first one's bridge. `tools/survey_libraries.py` compiles every AnyPS5 library for a lifted aarch64 guest and generates its bridges, and reports what fails for each (`--json` keeps the details).
+Several libraries can go into one file (`generate_bridges.py libc libkernel --anyps5-build build/anyps5 -o bridges.cpp`); a NID that more than one exports gets the first one's bridge. `tools/survey_libraries.py --anyps5-build build/anyps5` generates the bridges of every AnyPS5 library and reports how many exports each covers (`--json` keeps the details).
 
-The bridges call AnyPS5's libc built for the lifted guest (`-DANYPS5_GUEST_LIFTED`). `tools/run_libc_tests.py --triple aarch64-unknown-linux-gnu` builds it and runs upstream's libc tests against it, and `tools/run_libc_fixture.py` lifts a guest that calls it through the generated bridges; ctest runs both for each target.
+The bridges call AnyPS5's libraries as AnyPS5's own CMake build makes them with `ANYPS5_GUEST_LIFTED`: the test build builds AnyPS5 in `build/anyps5`, whose `core/libs/libs/unpatched` holds each library as a shared object before NID patching. `tools/run_libc_tests.py` runs upstream's libc tests against that libc, and `tools/run_libc_fixture.py` lifts a guest that calls the libraries through the generated bridges; ctest runs both.
 
 ## Benchmark
 

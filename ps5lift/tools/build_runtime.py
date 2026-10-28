@@ -11,6 +11,7 @@ ROOT = Path(__file__).resolve().parent.parent
 SOFTFLOAT = ROOT / "3rdparty" / "softfloat"
 RUNTIME_SOURCES = ["runtime/src/Runtime.cpp", "runtime/src/GuestCpu.cpp", "runtime/src/X87.cpp", "runtime/src/Jump.cpp"]
 MAIN_SOURCE = "runtime/src/Main.cpp"
+GUEST_CPU_INTERFACE = "GuestCpu*_nid_no_patch"
 SOFTFLOAT_FLAGS = [
     "-DSOFTFLOAT_FAST_INT64", "-DSOFTFLOAT_ROUND_ODD", "-DINLINE_LEVEL=5", "-DSOFTFLOAT_FAST_DIV32TO16", "-DSOFTFLOAT_FAST_DIV64TO32",
     "-DTHREAD_LOCAL=_Thread_local", f"-I{SOFTFLOAT / 'build' / 'Linux-x86_64-GCC'}", f"-I{SOFTFLOAT / 'source' / '8086-SSE'}", f"-I{SOFTFLOAT / 'source' / 'include'}",
@@ -62,6 +63,11 @@ def build(triple, output_directory, clang, clangxx, jobs):
                 subprocess.run([archiver, "crs", str(temporary), *(str(unit[2]) for unit in members)], check=True)
                 temporary.replace(archive)
     return library, main_library
+
+
+def link_arguments(library, main_library=None):
+    # AnyPS5's lifted libraries import GuestCpu from the program, also when a library needs it only as another library's dependency.
+    return [f"-Wl,--undefined-glob={GUEST_CPU_INTERFACE}", f"-Wl,--export-dynamic-symbol={GUEST_CPU_INTERFACE}", str(library), *([str(main_library)] if main_library else [])]
 
 
 def main():

@@ -33,10 +33,10 @@ def run(command, **kwargs):
     return result
 
 
-def runtime_library(ps5lift, triple, clang, clangxx):
-    from build_runtime import build
+def runtime_link_arguments(ps5lift, triple, clang, clangxx):
+    from build_runtime import build, link_arguments
     directory = Path(ps5lift).resolve().parent.parent / f"runtime-{triple.split('-')[0]}"
-    return build(triple, directory, clang, clangxx, os.cpu_count())
+    return link_arguments(*build(triple, directory, clang, clangxx, os.cpu_count()))
 
 
 def host_triple():
@@ -133,7 +133,7 @@ def main():
                 lifted = work / f"{guest.name}-{memory}.o"
                 report = run([args.ps5lift, guest, "-o", lifted, "--triple", args.triple, "--memory", memory, *lifter_target(args.triple, runner, args.cpu)]).stderr
                 program = work / f"{guest.name}-{memory}"
-                run([args.clangxx, f"--target={args.triple}", "-std=c++20", "-O2", f"-I{ROOT / 'runtime' / 'include'}", FIXTURES / "host_bridge.cpp", lifted, *runtime_library(args.ps5lift, args.triple, args.clang, args.clangxx), "-fuse-ld=lld", "-pthread", "-o", program])
+                run([args.clangxx, f"--target={args.triple}", "-std=c++20", "-O2", f"-I{ROOT / 'runtime' / 'include'}", FIXTURES / "host_bridge.cpp", lifted, *runtime_link_arguments(args.ps5lift, args.triple, args.clang, args.clangxx), "-fuse-ld=lld", "-pthread", "-o", program])
                 result = subprocess.run([*runner, program], capture_output=True, text=True)
                 ok = result.returncode == 0 and compare(expected, result.stdout, label)
                 if result.returncode != 0:
