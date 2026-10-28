@@ -73,8 +73,8 @@ LIBRARIES = {"libc": ["libc"], "exceptions": ["libc"], "kernel": ["libc", "libke
 def main():
     parser = argparse.ArgumentParser(description="Lift a guest that calls AnyPS5's libc through generated bridges and compare its output")
     parser.add_argument("--ps5lift", required=True)
-    parser.add_argument("--clang", default="clang")
-    parser.add_argument("--clangxx", default="clang++")
+    parser.add_argument("--clang", required=True)
+    parser.add_argument("--clangxx", required=True)
     parser.add_argument("--anyps5-build", required=True, help="AnyPS5's build directory, configured with ANYPS5_GUEST_LIFTED")
     parser.add_argument("--fixture", choices=sorted(GUESTS), default="libc")
     parser.add_argument("--optimization", action="append")

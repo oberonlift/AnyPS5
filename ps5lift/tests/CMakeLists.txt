@@ -50,6 +50,7 @@ foreach(triple IN LISTS PS5LIFT_TEST_TRIPLES)
                 COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tools/run_ps5_fixture.py
                         --ps5lift $<TARGET_FILE:ps5lift>
                         --relinker ${PS5LIFT_ANYPS5_BUILD}/core/relinker/relinker
+                        --clang ${CMAKE_C_COMPILER}
                         --clangxx ${CMAKE_CXX_COMPILER}
                         --triple ${triple}
                         --fixture ${fixture})
@@ -63,6 +64,7 @@ if(PS5LIFT_HAVE_LIBCLANG_PYTHON EQUAL 0)
                 COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tools/run_libc_fixture.py
                         --ps5lift $<TARGET_FILE:ps5lift>
                         --anyps5-build ${PS5LIFT_ANYPS5_BUILD}
+                        --clang ${CMAKE_C_COMPILER}
                         --clangxx ${CMAKE_CXX_COMPILER}
                         --fixture ${fixture})
     endforeach()
@@ -73,5 +75,6 @@ endif()
 add_test(NAME libc_upstream_${PS5LIFT_HOST_ARCH}
         COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tools/run_libc_tests.py
                 --anyps5-build ${PS5LIFT_ANYPS5_BUILD}
+                --clang ${CMAKE_C_COMPILER}
                 --clangxx ${CMAKE_CXX_COMPILER}
                 --build ${CMAKE_BINARY_DIR})

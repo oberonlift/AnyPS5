@@ -111,8 +111,8 @@ def compare(expected, actual, label):
 def main():
     parser = argparse.ArgumentParser(description="Lift an x86-64 fixture, build it for a target and compare its output")
     parser.add_argument("--ps5lift", required=True)
-    parser.add_argument("--clang", default="clang")
-    parser.add_argument("--clangxx", default="clang++")
+    parser.add_argument("--clang", required=True)
+    parser.add_argument("--clangxx", required=True)
     parser.add_argument("--triple", default=host_triple())
     parser.add_argument("--fixture", default="basic")
     parser.add_argument("--optimization", action="append")
