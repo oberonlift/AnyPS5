@@ -1,0 +1,98 @@
+#ifndef CORE_LIBS_PRX_LIBC_INCLUDE_GUESTCPU_HPP
+#define CORE_LIBS_PRX_LIBC_INCLUDE_GUESTCPU_HPP
+
+#include <array>
+#include <cstdint>
+
+#ifdef ANYPS5_GUEST_LIFTED
+
+extern "C" {
+std::uint32_t GuestCpuMxcsr_nid_no_patch(void);
+void GuestCpuSetMxcsr_nid_no_patch(std::uint32_t value);
+std::uint16_t GuestCpuX87Control_nid_no_patch(void);
+void GuestCpuSetX87Control_nid_no_patch(std::uint16_t value);
+std::uint16_t GuestCpuX87Status_nid_no_patch(void);
+void GuestCpuSetX87Status_nid_no_patch(std::uint16_t value);
+void GuestCpuX87Wait_nid_no_patch(void);
+std::uint32_t GuestCpuMxcsrMask_nid_no_patch(void);
+}
+
+namespace GuestCpu {
+
+inline std::uint32_t Mxcsr() { return GuestCpuMxcsr_nid_no_patch(); }
+inline void SetMxcsr(const std::uint32_t value) { GuestCpuSetMxcsr_nid_no_patch(value); }
+inline std::uint16_t X87Control() { return GuestCpuX87Control_nid_no_patch(); }
+inline void SetX87Control(const std::uint16_t value) { GuestCpuSetX87Control_nid_no_patch(value); }
+inline std::uint16_t X87Status() { return GuestCpuX87Status_nid_no_patch(); }
+inline void SetX87Status(const std::uint16_t value) { GuestCpuSetX87Status_nid_no_patch(value); }
+inline void X87ClearExceptions() { SetX87Status(static_cast<std::uint16_t>(X87Status() & 0x7f00)); }
+inline void X87Wait() { GuestCpuX87Wait_nid_no_patch(); }
+inline std::uint32_t MxcsrMask() { return GuestCpuMxcsrMask_nid_no_patch(); }
+
+inline std::array<std::uint32_t, 7> X87Environment() {
+    return {0xffff0000u | X87Control(), 0xffff0000u | X87Status(), 0xffffffffu, 0, 0, 0, 0xffff0000u};
+}
+
+inline void SetX87Environment(const std::array<std::uint32_t, 7>& environment) {
+    SetX87Control(static_cast<std::uint16_t>(environment[0]));
+    SetX87Status(static_cast<std::uint16_t>(environment[1]));
+}
+
+}
+
+#else
+
+#include <xmmintrin.h>
+
+namespace GuestCpu {
+
+inline std::uint32_t Mxcsr() { return _mm_getcsr(); }
+inline void SetMxcsr(const std::uint32_t value) { _mm_setcsr(value); }
+
+inline std::uint16_t X87Control() {
+    std::uint16_t control;
+    asm volatile("fnstcw %0" : "=m"(control));
+    return control;
+}
+
+inline void SetX87Control(const std::uint16_t value) {
+    asm volatile("fldcw %0" : : "m"(value));
+}
+
+inline std::uint16_t X87Status() {
+    std::uint16_t status;
+    asm volatile("fnstsw %0" : "=am"(status));
+    return status;
+}
+
+inline void SetX87Status(const std::uint16_t value) {
+    std::array<std::uint32_t, 7> environment;
+    asm volatile("fnstenv %0" : "=m"(environment));
+    environment[1] = (environment[1] & 0xffff0000u) | value;
+    asm volatile("fldenv %0" : : "m"(environment));
+}
+
+inline void X87ClearExceptions() { asm volatile("fnclex"); }
+inline void X87Wait() { asm volatile("fwait"); }
+
+inline std::uint32_t MxcsrMask() {
+    alignas(16) std::array<std::uint32_t, 128> state;
+    asm volatile("fxsave %0" : "=m"(state));
+    return state[7] != 0 ? state[7] : 0xffbfu;
+}
+
+inline std::array<std::uint32_t, 7> X87Environment() {
+    std::array<std::uint32_t, 7> environment;
+    asm volatile("fnstenv %0\n\tfldcw %0" : "+m"(environment));
+    return environment;
+}
+
+inline void SetX87Environment(const std::array<std::uint32_t, 7>& environment) {
+    asm volatile("fldenv %0" : : "m"(environment) : "st", "st(1)", "st(2)", "st(3)", "st(4)", "st(5)", "st(6)", "st(7)");
+}
+
+}
+
+#endif
+
+#endif
