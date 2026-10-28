@@ -51,12 +51,12 @@
 #include <cstdint>
 #include <fcntl.h>
 #include <fstream>
-#include <link.h>
 #include <pthread.h>
 #include <sstream>
 #include <sys/ioctl.h>
 #include <sys/uio.h>
 #include <unistd.h>
+#include "prx/libc/include/specifics/linux/ElfTypes.hpp"
 #include "prx/libc/include/specifics/linux/HostMapping.hpp"
 #endif
 

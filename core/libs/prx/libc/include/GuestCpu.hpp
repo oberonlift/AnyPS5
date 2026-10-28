@@ -16,7 +16,6 @@ void GuestCpuSetX87Status_nid_no_patch(std::uint16_t value);
 void GuestCpuX87Wait_nid_no_patch(void);
 std::uint32_t GuestCpuMxcsrMask_nid_no_patch(void);
 void GuestCpuUnwindStart_nid_no_patch(std::uint64_t* registers);
-bool GuestCpuUnwindTables_nid_no_patch(std::uint64_t pc, const void** header, std::uint64_t* text, std::uint64_t* data);
 const char* GuestCpuImportName_nid_no_patch(std::uint64_t address);
 [[noreturn]] void GuestCpuUnwindResume_nid_no_patch(const std::uint64_t* registers);
 std::uint64_t GuestCpuReadTsc_nid_no_patch(void);
