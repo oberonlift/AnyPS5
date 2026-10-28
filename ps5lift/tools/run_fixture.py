@@ -69,6 +69,7 @@ def lifter_target(triple, runner, cpu=None):
     return flags
 
 
+CONSOLE_OUTPUT = {"cpu"}
 HOST_LIBRARIES = {"threads": ("hostthread", "host_thread.c"), "callbacks": ("hostcallbacks", "host_callbacks.c"), "x87": ("hostx87", "host_x87.c"), "setjmp": ("hostsetjmp", "host_setjmp.c")}
 
 
@@ -125,7 +126,7 @@ def main():
         for optimization in optimizations:
             expected = expected_for(optimization)
             guest = build_guest(args.clang, work, args.fixture, optimization, ["-DPS5LIFT_EMULATED"] if runner else [])
-            if platform.machine() == "x86_64":
+            if platform.machine() == "x86_64" and args.fixture not in CONSOLE_OUTPUT:
                 native = run([guest], env={**os.environ, "LD_LIBRARY_PATH": str(work)}).stdout
                 failures += not compare(expected, native, f"native {optimization}")
             for memory in memories:

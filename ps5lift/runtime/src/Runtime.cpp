@@ -31,19 +31,6 @@ constexpr std::uint64_t TlsSize = 64ull << 10;
 constexpr std::uint32_t ConsoleMxcsr = 0x9fc0;
 constexpr std::uint16_t ConsoleX87Control = 0x037f;
 
-[[noreturn]] void Fail(const char* format, ...) __attribute__((format(printf, 1, 2)));
-
-void Fail(const char* format, ...) {
-    va_list arguments;
-    va_start(arguments, format);
-    std::fputs("ps5lift: ", stderr);
-    std::vfprintf(stderr, format, arguments);
-    std::fputc('\n', stderr);
-    va_end(arguments);
-    std::fflush(stdout);
-    std::_Exit(70);
-}
-
 std::uint64_t PageSize() {
     return static_cast<std::uint64_t>(sysconf(_SC_PAGESIZE));
 }
@@ -57,7 +44,7 @@ void BindDataImports(const Ps5LiftImage& image) {
 }
 
 void MapSegments(const Ps5LiftImage& image) {
-    if (image.SegmentCount == 0) Fail("the image has no segments");
+    if (image.SegmentCount == 0) ps5lift_fail("the image has no segments");
     const auto page = PageSize();
     auto begin = ~std::uint64_t{0};
     std::uint64_t end = 0;
@@ -73,14 +60,14 @@ void MapSegments(const Ps5LiftImage& image) {
         return;
     }
     auto* mapped = mmap(start, end - begin, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED_NOREPLACE, -1, 0);
-    if (mapped != start) Fail("cannot map the guest image at 0x%" PRIx64 "-0x%" PRIx64 ": %s", begin, end, std::strerror(errno));
+    if (mapped != start) ps5lift_fail("cannot map the guest image at 0x%" PRIx64 "-0x%" PRIx64 ": %s", begin, end, std::strerror(errno));
     for (std::uint64_t i = 0; i < image.SegmentCount; ++i) std::memcpy(reinterpret_cast<void*>(image.Segments[i].GuestAddress), image.Segments[i].Data, image.Segments[i].FileSize);
     BindDataImports(image);
 }
 
 void* MapAnonymous(const std::uint64_t size) {
     auto* mapped = mmap(nullptr, size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-    if (mapped == MAP_FAILED) Fail("cannot allocate %" PRIu64 " bytes: %s", size, std::strerror(errno));
+    if (mapped == MAP_FAILED) ps5lift_fail("cannot allocate %" PRIu64 " bytes: %s", size, std::strerror(errno));
     return mapped;
 }
 
@@ -113,7 +100,7 @@ std::uint64_t PrepareThread(GuestThread& thread, Ps5LiftState& state) {
     if (ps5lift_image.TlsMemorySize != 0) {
         const auto alignment = ps5lift_image.TlsAlignment;
         const auto offset = (ps5lift_image.TlsMemorySize + alignment - 1) / alignment * alignment;
-        if (offset > TlsSize / 2) Fail("the static TLS block of %" PRIu64 " bytes does not fit", ps5lift_image.TlsMemorySize);
+        if (offset > TlsSize / 2) ps5lift_fail("the static TLS block of %" PRIu64 " bytes does not fit", ps5lift_image.TlsMemorySize);
         std::memcpy(reinterpret_cast<void*>(threadPointer - offset), reinterpret_cast<const void*>(ps5lift_image.TlsAddress), ps5lift_image.TlsFileSize);
     }
     state.FsBase = threadPointer;
@@ -129,7 +116,7 @@ void* RunThread(void* argument) {
     const auto top = PrepareThread(thread, state);
     CurrentState = &state;
     const auto function = Lookup(thread.Entry);
-    if (function == nullptr) Fail("the thread entry 0x%" PRIx64 " was not lifted", thread.Entry);
+    if (function == nullptr) ps5lift_fail("the thread entry 0x%" PRIx64 " was not lifted", thread.Entry);
 
     if (thread.Main) {
         static constexpr char ProgramName[] = "eboot.bin";
@@ -140,7 +127,7 @@ void* RunThread(void* argument) {
         std::memcpy(reinterpret_cast<void*>(rsp), entryStack, sizeof(entryStack));
         state.Gpr[PS5LIFT_RSP] = rsp;
         function(&state);
-        if (state.Unwinding) Fail("nothing on the main thread's guest stack resumes at 0x%" PRIx64, state.ResumeRip);
+        if (state.Unwinding) ps5lift_fail("nothing on the main thread's guest stack resumes at 0x%" PRIx64, state.ResumeRip);
         std::fflush(stdout);
         std::_Exit(static_cast<int>(state.Gpr[PS5LIFT_RAX] & 0xff));
     }
@@ -151,7 +138,7 @@ void* RunThread(void* argument) {
     state.Gpr[PS5LIFT_RSP] = rsp;
     state.Gpr[PS5LIFT_RDI] = thread.Argument;
     function(&state);
-    if (state.Unwinding) Fail("nothing on a guest thread's stack resumes at 0x%" PRIx64, state.ResumeRip);
+    if (state.Unwinding) ps5lift_fail("nothing on a guest thread's stack resumes at 0x%" PRIx64, state.ResumeRip);
     thread.Result = state.Gpr[PS5LIFT_RAX];
     return nullptr;
 }
@@ -162,7 +149,7 @@ void StartThread(GuestThread& thread) {
     pthread_attr_setstacksize(&attributes, HostStackSize);
     const auto error = pthread_create(&thread.Handle, &attributes, RunThread, &thread);
     pthread_attr_destroy(&attributes);
-    if (error != 0) Fail("cannot start a guest thread: %s", std::strerror(error));
+    if (error != 0) ps5lift_fail("cannot start a guest thread: %s", std::strerror(error));
 }
 
 }
@@ -253,16 +240,27 @@ extern "C" std::uint32_t ps5lift_read_mxcsr(Ps5LiftState* state) {
 
 extern "C" void ps5lift_dispatch(Ps5LiftState* state, const std::uint64_t target) {
     const auto function = Lookup(target);
-    if (function == nullptr) Fail("indirect branch to 0x%" PRIx64 ", which was not lifted", target);
+    if (function == nullptr) ps5lift_fail("indirect branch to 0x%" PRIx64 ", which was not lifted", target);
     function(state);
 }
 
+extern "C" void ps5lift_fail(const char* format, ...) {
+    va_list arguments;
+    va_start(arguments, format);
+    std::fputs("ps5lift: ", stderr);
+    std::vfprintf(stderr, format, arguments);
+    std::fputc('\n', stderr);
+    va_end(arguments);
+    std::fflush(stdout);
+    std::_Exit(70);
+}
+
 extern "C" void ps5lift_unsupported(Ps5LiftState*, const std::uint64_t address, const char* mnemonic) {
-    Fail("reached unsupported instruction %s at 0x%" PRIx64, mnemonic, address);
+    ps5lift_fail("reached unsupported instruction %s at 0x%" PRIx64, mnemonic, address);
 }
 
 extern "C" void ps5lift_trap(Ps5LiftState*, const std::uint64_t address) {
-    Fail("guest trap at 0x%" PRIx64, address);
+    ps5lift_fail("guest trap at 0x%" PRIx64, address);
 }
 
 extern "C" void ps5lift_string_op(Ps5LiftState* state, const std::uint32_t operation, const std::uint32_t width, const std::uint32_t repeat) {
@@ -310,7 +308,7 @@ extern "C" Ps5LiftState* ps5lift_current_state(void) {
 extern "C" std::uint64_t ps5lift_thread_join(const std::uint64_t handle) {
     auto* thread = reinterpret_cast<GuestThread*>(handle);
     const auto error = pthread_join(thread->Handle, nullptr);
-    if (error != 0) Fail("cannot join a guest thread: %s", std::strerror(error));
+    if (error != 0) ps5lift_fail("cannot join a guest thread: %s", std::strerror(error));
     const auto result = thread->Result;
     munmap(thread->Stack, GuestStackSize);
     munmap(thread->Tls, TlsSize);
