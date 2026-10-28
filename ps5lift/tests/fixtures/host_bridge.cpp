@@ -64,6 +64,12 @@ extern "C" void ps5lift_import_host__on__thread(Ps5LiftState* state) {
     Return(state, call.Result);
 }
 
+extern "C" int GuestCpuIterateImages_nid_no_patch(int (*callback)(void*, std::size_t, void*), void* data);
+
+extern "C" void ps5lift_import_dl__iterate__phdr(Ps5LiftState* state) {
+    Return(state, GuestCpuIterateImages_nid_no_patch(Callback<int(void*, std::size_t, void*)>(Integer<std::uint64_t>(state, 0)), Integer<void*>(state, 1)));
+}
+
 extern "C" void ps5lift_import_host__call__eight(Ps5LiftState* state) {
     auto* function = Callback<long(long, long, long, long, long, long, long, long)>(Integer<std::uint64_t>(state, 0));
     Return(state, function(1, 2, 3, 4, 5, 6, 7, 8) + function(10, 20, 30, 40, 50, 60, 70, 80));

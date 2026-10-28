@@ -18,8 +18,8 @@ constexpr std::uint16_t ElfExecutable = 2;
 constexpr std::uint16_t ElfShared = 3;
 constexpr std::uint32_t ProgramLoad = 1;
 constexpr std::uint32_t ProgramDynamic = 2;
+constexpr std::uint32_t ProgramProgramHeaders = 6;
 constexpr std::uint32_t ProgramTls = 7;
-constexpr std::uint32_t ProgramEhFrame = 0x6474e550;
 constexpr std::uint32_t SectionSymbolTable = 2;
 constexpr std::uint32_t SectionDynamicSymbols = 11;
 constexpr std::uint8_t SymbolObject = 1;
@@ -99,6 +99,18 @@ struct Relocation {
     std::int64_t Addend;
 };
 
+std::uint64_t MappedProgramHeaders(const std::string& path, const Domain::ElfHeader& header, const std::vector<Domain::ProgramHeader>& programs) {
+    for (const auto& program : programs) {
+        if (program.Type == ProgramProgramHeaders) return program.MappedAddress;
+    }
+    const std::uint64_t size = std::uint64_t{header.ProgramHeaderEntrySize} * programs.size();
+    for (const auto& program : programs) {
+        if (program.Type == ProgramLoad && header.ProgramHeaderOffset >= program.Offset && header.ProgramHeaderOffset - program.Offset + size <= program.FileSize)
+            return program.MappedAddress + (header.ProgramHeaderOffset - program.Offset);
+    }
+    throw std::runtime_error("No loadable segment of " + path + " maps its program headers");
+}
+
 bool Exported(const Symbol& symbol) {
     constexpr std::uint8_t Hidden = 2;
     constexpr std::uint8_t Internal = 1;
@@ -127,9 +139,10 @@ GuestImage GuestImage::Read(const std::string& path, const std::optional<std::ui
 
     GuestImage image;
     image._path = path;
+    image._loadBias = bias;
     image._entry = header.EntryPoint == 0 ? 0 : header.EntryPoint + bias;
+    image._programHeaders = {MappedProgramHeaders(path, header, programs) + bias, programs.size()};
     for (const auto& program : programs) {
-        if (program.Type == ProgramEhFrame) image._ehFrameHeader = program.MappedAddress + bias;
         if (program.Type == ProgramTls) image._tls = {program.MappedAddress + bias, program.FileSize, program.MemorySize, std::max<std::uint64_t>(program.Alignment, 1)};
         if (program.Type != ProgramLoad || program.MemorySize == 0) continue;
         GuestSegment segment;
@@ -287,6 +300,14 @@ std::uint64_t GuestImage::End() const {
     return AlignUp(_mappedEnd, ImportAlignment) + _importCount * ImportStride;
 }
 
+std::uint64_t GuestImage::LoadBias() const {
+    return _loadBias;
+}
+
+const GuestArray& GuestImage::ProgramHeaders() const {
+    return _programHeaders;
+}
+
 std::optional<std::uint64_t> GuestImage::Export(const std::string& name) const {
     const auto found = _exports.find(name);
     if (found == _exports.end()) return std::nullopt;
@@ -384,9 +405,6 @@ const std::vector<GuestDataImport>& GuestImage::DataImports() const {
     return _dataImports;
 }
 
-std::uint64_t GuestImage::EhFrameHeader() const {
-    return _ehFrameHeader;
-}
 
 const GuestTls& GuestImage::Tls() const {
     return _tls;

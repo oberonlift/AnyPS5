@@ -69,4 +69,9 @@ GuestProgram GuestProgram::Load(const std::string& executable) {
     return program;
 }
 
+std::string GuestProgram::LoaderName(const std::size_t index) const {
+    if (index == 0) return "";
+    return std::filesystem::relative(Images[index].Path(), std::filesystem::absolute(Images.front().Path()).parent_path()).generic_string();
+}
+
 }

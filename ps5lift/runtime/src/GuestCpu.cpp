@@ -59,8 +59,18 @@ constexpr int DwarfRegisters[16] = {PS5LIFT_RAX, PS5LIFT_RDX, PS5LIFT_RCX, PS5LI
                                     PS5LIFT_R8, PS5LIFT_R9, PS5LIFT_R10, PS5LIFT_R11, PS5LIFT_R12, PS5LIFT_R13, PS5LIFT_R14, PS5LIFT_R15};
 constexpr int DwarfRsp = 7;
 constexpr int DwarfRip = 16;
-constexpr std::uint32_t SegmentExecute = 1;
-constexpr std::uint32_t SegmentWrite = 2;
+
+// The layout of glibc's and FreeBSD's dl_phdr_info, which AnyPS5's libraries hand to dl_iterate_phdr callbacks.
+struct LoadedImage {
+    std::uint64_t Address;
+    const char* Name;
+    const void* ProgramHeaders;
+    std::uint16_t ProgramHeaderCount;
+    unsigned long long Loads;
+    unsigned long long Unloads;
+    std::size_t TlsModule;
+    void* TlsData;
+};
 
 }
 
@@ -71,25 +81,15 @@ extern "C" void GuestCpuUnwindStart_nid_no_patch(std::uint64_t* registers) {
     registers[DwarfRsp] += 8;
 }
 
-extern "C" bool GuestCpuUnwindTables_nid_no_patch(const std::uint64_t pc, const void** header, std::uint64_t* text, std::uint64_t* data) {
+extern "C" int GuestCpuIterateImages_nid_no_patch(int (*callback)(LoadedImage*, std::size_t, void*), void* data) {
+    const auto* state = ps5lift_current_state();
     for (std::uint64_t index = 0; index < ps5lift_program.ImageCount; ++index) {
         const auto& image = ps5lift_program.Images[index];
-        bool contains = false;
-        for (std::uint64_t i = 0; i < image.SegmentCount; ++i) {
-            const auto& segment = image.Segments[i];
-            if (pc >= segment.GuestAddress && pc - segment.GuestAddress < segment.MemorySize) contains = true;
-        }
-        if (!contains) continue;
-        if (image.EhFrameHeader == 0) return false;
-        for (std::uint64_t i = 0; i < image.SegmentCount; ++i) {
-            const auto& segment = image.Segments[i];
-            if (segment.Protection & SegmentExecute) *text = segment.GuestAddress;
-            if (segment.Protection & SegmentWrite) *data = segment.GuestAddress;
-        }
-        *header = reinterpret_cast<const void*>(image.EhFrameHeader);
-        return true;
+        LoadedImage loaded{image.LoadBias, image.Name, reinterpret_cast<const void*>(image.ProgramHeaders), static_cast<std::uint16_t>(image.ProgramHeaderCount), ps5lift_program.ImageCount, 0, image.TlsModule,
+            image.TlsModule == 0 ? nullptr : reinterpret_cast<void*>(state->FsBase - image.TlsOffset)};
+        if (const int result = callback(&loaded, sizeof(loaded), data); result != 0) return result;
     }
-    return false;
+    return 0;
 }
 
 extern "C" const char* GuestCpuImportName_nid_no_patch(const std::uint64_t address) {

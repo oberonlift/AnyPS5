@@ -91,7 +91,7 @@ def build_guest(clang, work, name, optimization, defines=(), vectorize=False, su
         module = work / f"lib{module_name}.so"
         if not module.exists():
             run([clang, *GUEST_FLAGS, "-O2", "-fPIC", "-shared", f"-Wl,-soname,$ORIGIN/lib{module_name}.so", FIXTURES / source, f"-L{work}", "-lhost", "-o", module])
-        extra = [f"-l{module_name}", "-Wl,--allow-shlib-undefined"]
+        extra = [f"-l{module_name}", "-lc", "-Wl,--allow-shlib-undefined"]
         code = ["-fpie"]
     guest = work / f"{name}{optimization}{suffix}"
     vector_flags = [] if vectorize else ["-fno-vectorize", "-fno-slp-vectorize"]

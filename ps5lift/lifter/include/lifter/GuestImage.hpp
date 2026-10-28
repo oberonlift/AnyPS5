@@ -62,6 +62,8 @@ public:
     const std::string& Path() const;
     const std::vector<std::string>& Needed() const;
     std::uint64_t End() const;
+    std::uint64_t LoadBias() const;
+    const GuestArray& ProgramHeaders() const;
     std::optional<std::uint64_t> Export(const std::string& name) const;
     const std::map<std::string, std::uint64_t>& Exports() const;
     std::uint64_t Init() const;
@@ -78,7 +80,6 @@ public:
     const std::set<std::uint64_t>& ExceptionFunctionStarts() const;
     const std::map<std::uint64_t, std::set<std::uint64_t>>& LandingPads() const;
     const std::vector<GuestDataImport>& DataImports() const;
-    std::uint64_t EhFrameHeader() const;
     const GuestTls& Tls() const;
 
 private:
@@ -87,6 +88,8 @@ private:
     std::map<std::string, std::uint64_t> _exports;
     std::vector<GuestRelocation> _relocations;
     std::uint64_t _mappedEnd = 0;
+    std::uint64_t _loadBias = 0;
+    GuestArray _programHeaders;
     std::uint64_t _importCount = 0;
     std::uint64_t _init = 0;
     GuestArray _initArray;
@@ -99,7 +102,6 @@ private:
     std::set<std::uint64_t> _exceptionStarts;
     std::map<std::uint64_t, std::set<std::uint64_t>> _landingPads;
     std::vector<GuestDataImport> _dataImports;
-    std::uint64_t _ehFrameHeader = 0;
     GuestTls _tls;
 
     void Write64(std::uint64_t address, std::uint64_t value);
