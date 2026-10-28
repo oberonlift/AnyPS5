@@ -130,6 +130,7 @@ void* RunThread(void* argument) {
         std::memcpy(reinterpret_cast<void*>(rsp), entryStack, sizeof(entryStack));
         state.Gpr[PS5LIFT_RSP] = rsp;
         function(&state);
+        if (state.Unwinding) Fail("nothing on the main thread's guest stack resumes at 0x%" PRIx64, state.ResumeRip);
         std::fflush(stdout);
         std::_Exit(static_cast<int>(state.Gpr[PS5LIFT_RAX] & 0xff));
     }
@@ -140,6 +141,7 @@ void* RunThread(void* argument) {
     state.Gpr[PS5LIFT_RSP] = rsp;
     state.Gpr[PS5LIFT_RDI] = thread.Argument;
     function(&state);
+    if (state.Unwinding) Fail("nothing on a guest thread's stack resumes at 0x%" PRIx64, state.ResumeRip);
     thread.Result = state.Gpr[PS5LIFT_RAX];
     return nullptr;
 }

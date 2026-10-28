@@ -201,6 +201,7 @@ R CallGuest(const std::uint64_t target, Args... arguments) {
     state->Gpr[PS5LIFT_RSP] = rsp;
     state->Gpr[PS5LIFT_RAX] = static_cast<std::uint64_t>(floats);
     ps5lift_dispatch(state, target);
+    if (state->Unwinding) ps5lift_unsupported(state, state->ResumeRip, "longjmp or an exception across native code");
     state->Gpr[PS5LIFT_RSP] = savedRsp;
     if constexpr (!std::is_void_v<R>) return GuestResult<R>(state);
 }

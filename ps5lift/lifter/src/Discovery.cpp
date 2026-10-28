@@ -1,5 +1,10 @@
 #include <lifter/Discovery.hpp>
 
+#include <llvm/Support/Base64.h>
+#include <llvm/Support/SHA1.h>
+
+#include <algorithm>
+#include <array>
 #include <deque>
 #include <sstream>
 #include <stdexcept>
@@ -112,6 +117,22 @@ std::vector<std::uint64_t> RecoverJumpTable(const GuestImage& image, const Guest
     return targets;
 }
 
+std::optional<std::string> CalledImport(const GuestImage& image, const Decoder& decoder, const Instruction& instruction) {
+    auto import = ImportTarget(image, instruction);
+    if (const auto target = DirectTarget(instruction); !import && target) {
+        if (image.Imports().contains(*target)) {
+            import = *target;
+        } else if (!image.CodeAt(*target).empty()) {
+            const auto stub = decoder.Decode(image, *target);
+            if (stub.Info.mnemonic == ZYDIS_MNEMONIC_JMP) import = ImportTarget(image, stub);
+        }
+    }
+    if (!import) return std::nullopt;
+    const auto name = image.Imports().find(*import);
+    if (name == image.Imports().end()) return std::nullopt;
+    return name->second;
+}
+
 GuestFunction DiscoverFunction(const GuestImage& image, const Decoder& decoder, const std::uint64_t entry, const std::set<std::uint64_t>& starts, std::set<std::uint64_t>& callTargets) {
     GuestFunction function;
     function.Entry = entry;
@@ -134,6 +155,12 @@ GuestFunction DiscoverFunction(const GuestImage& image, const Decoder& decoder, 
             const auto target = DirectTarget(instruction);
             const auto mnemonic = instruction.Info.mnemonic;
             if (mnemonic == ZYDIS_MNEMONIC_CALL && target) callTargets.insert(*target);
+            if (mnemonic == ZYDIS_MNEMONIC_CALL) {
+                if (const auto import = CalledImport(image, decoder, instruction); import && ReturnsTwice(*import)) {
+                    function.ResumePoints.insert(instruction.Next());
+                    function.Leaders.insert(instruction.Next());
+                }
+            }
             if (mnemonic == ZYDIS_MNEMONIC_JMP && !target && ImportTarget(image, instruction)) break;
             if ((mnemonic == ZYDIS_MNEMONIC_JMP || IsConditionalJump(mnemonic)) && target && !(starts.contains(*target) && *target != entry)) {
                 function.Leaders.insert(*target);
@@ -230,6 +257,32 @@ std::string BridgeSymbol(const std::string& import) {
         else throw std::runtime_error("Import name " + import + " has a character a bridge symbol cannot carry");
     }
     return symbol;
+}
+
+std::string Nid(const std::string_view name) {
+    static constexpr std::uint8_t Suffix[] = {0x51, 0x8D, 0x64, 0xA6, 0x35, 0xDE, 0xD8, 0xC1, 0xE6, 0xB0, 0x39, 0xB1, 0xC3, 0xE5, 0x52, 0x30};
+    llvm::SHA1 sha;
+    sha.update(llvm::StringRef(name.data(), name.size()));
+    sha.update(llvm::ArrayRef<std::uint8_t>(Suffix));
+    const auto digest = sha.final();
+    std::array<std::uint8_t, 8> prefix{};
+    std::copy_n(digest.begin(), prefix.size(), prefix.begin());
+    std::reverse(prefix.begin(), prefix.end());
+    auto encoded = llvm::encodeBase64(prefix);
+    std::replace(encoded.begin(), encoded.end(), '/', '-');
+    return encoded.substr(0, 11);
+}
+
+bool ReturnsTwice(const std::string& import) {
+    static const std::set<std::string> Names = [] {
+        std::set<std::string> names;
+        for (const std::string name : {"setjmp", "_setjmp", "sigsetjmp", "__sigsetjmp"}) {
+            names.insert(name);
+            names.insert(Nid(name));
+        }
+        return names;
+    }();
+    return Names.contains(import);
 }
 
 std::map<std::uint64_t, GuestFunction> DiscoverFunctions(const GuestImage& image) {

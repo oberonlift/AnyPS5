@@ -171,6 +171,13 @@ private:
         llvm::IRBuilder<> builder(llvm::BasicBlock::Create(_context, "entry", host));
         auto* state = host->getArg(0);
         builder.CreateCall(Runtime(BridgeSymbol(*function.Import), _guestType), {state});
+        auto* unwinding = builder.CreateLoad(builder.getInt8Ty(), builder.CreateConstGEP1_64(builder.getInt8Ty(), state, offsetof(Ps5LiftState, Unwinding)));
+        unwinding->setMetadata(llvm::LLVMContext::MD_tbaa, _stateTag);
+        auto* returned = llvm::BasicBlock::Create(_context, "returned", host);
+        auto* unwind = llvm::BasicBlock::Create(_context, "unwind", host);
+        builder.CreateCondBr(builder.CreateICmpNE(unwinding, builder.getInt8(0)), unwind, returned, llvm::MDBuilder(_context).createBranchWeights(1, 1u << 20));
+        llvm::IRBuilder<>(unwind).CreateRetVoid();
+        builder.SetInsertPoint(returned);
         auto* rsp = builder.CreateConstGEP1_64(builder.getInt8Ty(), state, offsetof(Ps5LiftState, Gpr) + 8 * PS5LIFT_RSP);
         auto* load = builder.CreateLoad(builder.getInt64Ty(), rsp);
         load->setMetadata(llvm::LLVMContext::MD_tbaa, _stateTag);
@@ -226,6 +233,7 @@ public:
             if (_usedVectors[i]) _vectors[i] = _builder.CreateAlloca(Int(256), nullptr, "ymm" + std::to_string(i));
         }
         Reload();
+        _entryRsp = Gpr(PS5LIFT_RSP);
         for (const auto leader : _function.Leaders) _blocks[leader] = llvm::BasicBlock::Create(Context(), "b_" + Hex(leader), _host);
         _builder.CreateBr(_blocks.at(_function.Entry));
 
@@ -268,6 +276,8 @@ private:
     bool _usesFlags = false;
     std::map<std::uint64_t, llvm::BasicBlock*> _blocks;
     const Instruction* _instruction = nullptr;
+    llvm::Value* _entryRsp = nullptr;
+    llvm::BasicBlock* _unwind = nullptr;
 
     llvm::LLVMContext& Context() { return _module.Context(); }
     llvm::IntegerType* I64() { return _builder.getInt64Ty(); }
@@ -587,7 +597,44 @@ private:
         arguments.insert(arguments.end(), extra.begin(), extra.end());
         if (auto* function = llvm::dyn_cast<llvm::Function>(callee)) _builder.CreateCall(function, arguments);
         else _builder.CreateCall(_module.GuestType(), callee, arguments);
+        auto* returned = llvm::BasicBlock::Create(Context(), "returned", _host);
+        auto* unwinding = _builder.CreateICmpNE(StateLoad(_builder.getInt8Ty(), offsetof(Ps5LiftState, Unwinding)), _builder.getInt8(0));
+        _builder.CreateCondBr(unwinding, UnwindBlock(), returned, llvm::MDBuilder(Context()).createBranchWeights(1, 1u << 20));
+        _builder.SetInsertPoint(returned);
         Reload();
+    }
+
+    llvm::BasicBlock* UnwindBlock() {
+        if (_unwind) return _unwind;
+        const llvm::IRBuilderBase::InsertPointGuard guard(_builder);
+        _unwind = llvm::BasicBlock::Create(Context(), "unwind", _host);
+        _builder.SetInsertPoint(_unwind);
+        if (_function.ResumePoints.empty()) {
+            _builder.CreateRetVoid();
+            return _unwind;
+        }
+        auto* resume = llvm::BasicBlock::Create(Context(), "resume", _host);
+        auto* leave = llvm::BasicBlock::Create(Context(), "leave", _host);
+        auto* target = StateLoad(I64(), offsetof(Ps5LiftState, ResumeRsp));
+        _builder.CreateCondBr(_builder.CreateICmpUGE(_entryRsp, target), resume, leave);
+        _builder.SetInsertPoint(leave);
+        _builder.CreateRetVoid();
+        _builder.SetInsertPoint(resume);
+        auto* unknown = llvm::BasicBlock::Create(Context(), "unknown_resume", _host);
+        auto* selector = _builder.CreateSwitch(StateLoad(I64(), offsetof(Ps5LiftState, ResumeRip)), unknown, static_cast<unsigned>(_function.ResumePoints.size()));
+        for (const auto point : _function.ResumePoints) {
+            auto* block = llvm::BasicBlock::Create(Context(), "resume_" + Hex(point), _host);
+            selector->addCase(_builder.getInt64(point), block);
+            _builder.SetInsertPoint(block);
+            StateStore(_builder.getInt8(0), offsetof(Ps5LiftState, Unwinding));
+            Reload();
+            _builder.CreateBr(_blocks.at(point));
+        }
+        _builder.SetInsertPoint(unknown);
+        auto callee = _module.Runtime("ps5lift_unsupported", llvm::FunctionType::get(_builder.getVoidTy(), {_module.Pointer(), I64(), _module.Pointer()}, false));
+        _builder.CreateCall(callee, {_state, StateLoad(I64(), offsetof(Ps5LiftState, ResumeRip)), _builder.CreateGlobalStringPtr("resume at an address this frame cannot continue from")})->setDoesNotReturn();
+        _builder.CreateUnreachable();
+        return _unwind;
     }
 
     llvm::FunctionCallee DispatchCallee() {

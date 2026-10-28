@@ -11,6 +11,7 @@
 #include <optional>
 #include <set>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace Ps5Lift {
@@ -30,6 +31,7 @@ struct GuestFunction {
     std::map<std::uint64_t, Instruction> Instructions;
     std::set<std::uint64_t> Leaders;
     std::map<std::uint64_t, std::vector<std::uint64_t>> JumpTables;
+    std::set<std::uint64_t> ResumePoints;
 };
 
 class Decoder {
@@ -45,6 +47,8 @@ bool IsConditionalJump(ZydisMnemonic mnemonic);
 std::optional<std::uint64_t> DirectTarget(const Instruction& instruction);
 std::optional<std::uint64_t> ImportTarget(const GuestImage& image, const Instruction& instruction);
 std::string BridgeSymbol(const std::string& import);
+std::string Nid(std::string_view name);
+bool ReturnsTwice(const std::string& import);
 
 std::map<std::uint64_t, GuestFunction> DiscoverFunctions(const GuestImage& image);
 

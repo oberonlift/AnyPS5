@@ -52,6 +52,10 @@ typedef struct Ps5LiftState {
     uint8_t X87Padding[7];
     uint8_t X87Registers[8][16];
     uint8_t Vector[16][32];
+    uint64_t ResumeRip;
+    uint64_t ResumeRsp;
+    uint8_t Unwinding;
+    uint8_t UnwindPadding[7];
 } Ps5LiftState;
 
 enum Ps5LiftX87Operation {

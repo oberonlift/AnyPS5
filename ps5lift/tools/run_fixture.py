@@ -66,7 +66,7 @@ def lifter_features(triple, runner):
     return []
 
 
-HOST_LIBRARIES = {"threads": ("hostthread", "host_thread.c"), "callbacks": ("hostcallbacks", "host_callbacks.c"), "x87": ("hostx87", "host_x87.c")}
+HOST_LIBRARIES = {"threads": ("hostthread", "host_thread.c"), "callbacks": ("hostcallbacks", "host_callbacks.c"), "x87": ("hostx87", "host_x87.c"), "setjmp": ("hostsetjmp", "host_setjmp.c")}
 
 
 def build_guest(clang, work, name, optimization, defines=(), vectorize=False, suffix=""):
