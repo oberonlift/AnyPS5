@@ -62,10 +62,10 @@ The lifter prints how many functions and instructions it lifted, how many jump t
 `tools/generate_bridges.py` reads an AnyPS5 library's sources with libclang, with the compile commands of AnyPS5's build, and writes one bridge per export: a function named after the export's NID that takes the arguments from the guest's SysV registers and stack and calls the native implementation through its C prototype, so the host compiler produces the native call.
 
 ```sh
-python3 tools/generate_bridges.py libc -o libc_bridges.cpp
+python3 tools/generate_bridges.py libc --anyps5-build build/anyps5 -o libc_bridges.cpp
 ```
 
-Function-pointer parameters become native thunks that call back into the guest (see [the design](docs/DESIGN.md#callbacks)), `long double` values cross between the guest's x87 format and the host's, and a variadic export calls its `v` sibling with a SysV `va_list` built from the guest's registers (see [variadic imports](docs/DESIGN.md#variadic-imports)). It prints how many exports it could not bridge and why; `--report` lists them. For libc it writes 1421 bridges and leaves 33 exports: records passed or returned by value (21), complex values (6), function pointers as return values (4) and `setjmp`/`longjmp`, which need the guest's own registers.
+Function-pointer parameters become native thunks that call back into the guest (see [the design](docs/DESIGN.md#callbacks)), `long double` values cross between the guest's x87 format and the host's, and a variadic export calls its `v` sibling with a SysV `va_list` built from the guest's registers (see [variadic imports](docs/DESIGN.md#variadic-imports)). It prints how many exports it could not bridge and why; `--report` lists them. For libc it writes 1513 bridges and leaves 40 exports: records passed or returned by value (33), complex values (6) and one that passes a function pointer to a callback. `setjmp` and `longjmp`, which need the guest's own registers, are the runtime's.
 
 Several libraries can go into one file (`generate_bridges.py libc libkernel --anyps5-build build/anyps5 -o bridges.cpp`); a NID that more than one exports gets the first one's bridge. `tools/survey_libraries.py --anyps5-build build/anyps5` generates the bridges of every AnyPS5 library and reports how many exports each covers (`--json` keeps the details).
 
