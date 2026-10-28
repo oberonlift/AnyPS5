@@ -56,3 +56,21 @@ if(PS5LIFT_RELINKER_C_COMPILER AND PS5LIFT_RELINKER_CXX_COMPILER)
 else()
     message(STATUS "gcc and g++ were not found; the AnyPS5 relinker and the PS5 fixture tests are skipped")
 endif()
+
+execute_process(COMMAND ${Python3_EXECUTABLE} -c "import clang.cindex" RESULT_VARIABLE PS5LIFT_HAVE_LIBCLANG_PYTHON OUTPUT_QUIET ERROR_QUIET)
+if(PS5LIFT_HAVE_LIBCLANG_PYTHON EQUAL 0)
+    foreach(triple IN LISTS PS5LIFT_TEST_TRIPLES)
+        string(REGEX REPLACE "-.*" "" arch ${triple})
+        add_test(NAME bridges_libc_${arch}
+                COMMAND ${CMAKE_COMMAND}
+                        -DPYTHON=${Python3_EXECUTABLE}
+                        -DGENERATOR=${CMAKE_SOURCE_DIR}/tools/generate_bridges.py
+                        -DCOMPILER=${CMAKE_CXX_COMPILER}
+                        -DTRIPLE=${triple}
+                        -DINCLUDE=${CMAKE_SOURCE_DIR}/runtime/include
+                        -DOUTPUT=${CMAKE_CURRENT_BINARY_DIR}/libc_bridges_${arch}.cpp
+                        -P ${CMAKE_CURRENT_SOURCE_DIR}/CheckBridges.cmake)
+    endforeach()
+else()
+    message(STATUS "The libclang Python bindings were not found; the bridge generator tests are skipped")
+endif()

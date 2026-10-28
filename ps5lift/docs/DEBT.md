@@ -15,3 +15,4 @@
 - MXCSR exception flags are not tracked; `stmxcsr` returns the flags of the last `ldmxcsr`.
 - FTZ without DAZ, or DAZ without FTZ, is exact only on aarch64 CPUs with FEAT_AFP; elsewhere either bit flushes inputs and outputs. The fixtures only exercise both together.
 - LLVM assumes the default floating-point environment, so an operation it constant-folds uses round-to-nearest whatever the guest MXCSR says.
+- [The bridge generator](../tools/generate_bridges.py) skips exports that take or return `long double` or complex values, take callbacks, are variadic, or pass records by value, and it bridges only `extern "C"` exports. Records by value need the SysV classification of their fields, callbacks need native thunks that enter the guest, and variadic functions need AnyPS5's formatting to read a SysV `va_list`.

@@ -6,10 +6,12 @@ Status: **milestone 2 in progress**. Guest code built for Zen 2, including SSE, 
 
 ## Build
 
-Requirements: CMake 3.22+, Ninja, Clang and LLD, LLVM 18 or newer with development files (`llvm-18-dev libzstd-dev` on Ubuntu 24.04 / DGX OS), Python 3.
+Requirements: CMake 3.22+, Ninja, Clang and LLD, LLVM 18 or newer with development files (`llvm-18-dev libzstd-dev` on Ubuntu 24.04 / DGX OS), Python 3. The PS5 fixture tests also need GCC (for the AnyPS5 relinker) and the bridge generator needs the libclang Python bindings (`python3-clang-18`).
 
 ```sh
-git submodule update --init --recursive
+git submodule update --init
+git -C 3rdparty/zydis submodule update --init
+git -C 3rdparty/anyps5 submodule update --init 3rdparty/ZArchive
 cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ -DLLVM_DIR=/usr/lib/llvm-18/lib/cmake/llvm
 ninja -C build
 ctest --test-dir build --output-on-failure
@@ -43,6 +45,16 @@ clang++ -O2 -Iruntime/include runtime/src/Runtime.cpp bridges.cpp guest.o -fuse-
 | `-O0` | optimized | Skips the LLVM optimization pipeline. |
 
 The lifter prints how many functions and instructions it lifted and lists every unsupported instruction it found. Reaching one at run time stops the program with its address.
+
+## Import bridges
+
+`tools/generate_bridges.py` reads an AnyPS5 library's sources with libclang and writes one bridge per export: a function named after the export's NID that takes the arguments from the guest's SysV registers and stack and calls the native implementation through its C prototype, so the host compiler produces the native call.
+
+```sh
+python3 tools/generate_bridges.py libc -o libc_bridges.cpp
+```
+
+It prints how many exports it could not bridge and why; `--report` lists them. For libc it writes 1241 bridges and leaves 187 exports: `long double` (84, waiting for x87), callbacks (46), variadic functions (30) and records passed or returned by value (27).
 
 ## Benchmark
 
