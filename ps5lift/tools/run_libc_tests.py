@@ -14,9 +14,10 @@ from run_fixture import ROOT, host_triple
 TESTS = {
     "Formatting": ["libc"], "GuestStrings": ["libc", "libScePosixForWebKit"], "GuestWideFormatting": ["libc"], "GuestStdioVariadic": ["libc"],
     "GuestAllocatingStrings": ["libc"], "GuestSyslog": ["libc"], "GuestWideStreamScan": ["libc"],
-    "GuestNetworkOffline": ["libSceNetCtl", "libScePosixForWebKit", "libkernel", "libc"], "GuestTcp": ["libkernel", "libc"],
+    "GuestNetworkPolicy": ["libSceNetCtl", "libScePosixForWebKit", "libkernel", "libc"], "GuestTcp": ["libkernel", "libc"],
     "GuestSocketOptions": ["libkernel", "libc"], "GuestResolver": ["libScePosixForWebKit", "libSceNet", "libc"], "ResolverRaw": ["libScePosixForWebKit", "libc"],
 }
+RUNS = {"GuestNetworkPolicy": [["offline"], ["allow"], ["deny"]]}
 IMAGE_STUB = ROOT / "tests" / "libc" / "image_stub.cpp"
 
 
@@ -76,12 +77,13 @@ def main():
             print(f"FAIL {test}: link\n{linked.stderr[-2000:]}")
             failures += 1
             continue
-        result = subprocess.run([str(program)], capture_output=True, text=True, cwd=work, timeout=600)
-        ok = result.returncode == 0
-        print(f"{'PASS' if ok else 'FAIL'} {test}")
-        if not ok:
-            sys.stdout.write(f"exit code {result.returncode}\n{result.stdout[-2000:]}{result.stderr[-2000:]}")
-        failures += not ok
+        for arguments in RUNS.get(test, [[]]):
+            result = subprocess.run([str(program), *arguments], capture_output=True, text=True, cwd=work, timeout=600)
+            ok = result.returncode == 0
+            print(f"{'PASS' if ok else 'FAIL'} {' '.join([test, *arguments])}")
+            if not ok:
+                sys.stdout.write(f"exit code {result.returncode}\n{result.stdout[-2000:]}{result.stderr[-2000:]}")
+            failures += not ok
     return 1 if failures else 0
 
 
