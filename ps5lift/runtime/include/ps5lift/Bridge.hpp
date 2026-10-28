@@ -248,11 +248,24 @@ struct CallbackPool<R(Args...)> {
         Count.store(current + 1, std::memory_order_release);
         return Thunks[current];
     }
+
+    static std::uint64_t Guest(const Native native) {
+        const auto count = Count.load(std::memory_order_acquire);
+        for (std::size_t i = 0; i < count; ++i) {
+            if (Thunks[i] == native) return Targets[i].load(std::memory_order_relaxed);
+        }
+        return reinterpret_cast<std::uint64_t>(native);
+    }
 };
 
 template <typename Signature>
 auto Callback(const std::uint64_t target) {
     return CallbackPool<Signature>::For(target);
+}
+
+template <typename Signature>
+std::uint64_t GuestFunction(Signature* const native) {
+    return CallbackPool<Signature>::Guest(native);
 }
 
 }

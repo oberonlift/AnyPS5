@@ -12,6 +12,11 @@ int guest_usleep(unsigned int microseconds) __asm__(NID_sceKernelUsleep);
 unsigned long guest_process_time(void) __asm__(NID_sceKernelGetProcessTime);
 unsigned long guest_read_tsc(void) __asm__(NID_sceKernelReadTsc);
 unsigned long guest_tsc_frequency(void) __asm__(NID_sceKernelGetTscFrequency);
+void (*guest_signal(int number, void (*handler)(int)))(int) __asm__(NID_signal);
+
+static void interrupted(int number) {
+    (void)number;
+}
 
 enum { Threads = 4, Iterations = 10000 };
 
@@ -59,6 +64,8 @@ int main(void) {
     const unsigned long middle = rdtsc();
     const unsigned long last = guest_read_tsc();
     guest_printf("tsc %s, frequency %s\n", first <= middle && middle <= last ? "ordered" : "out of order", frequency > 1000000 ? "plausible" : "implausible");
+    guest_signal(2, interrupted);
+    guest_printf("signal returns the guest's handler %d\n", guest_signal(2, (void (*)(int))0) == interrupted);
     return 0;
 }
 
