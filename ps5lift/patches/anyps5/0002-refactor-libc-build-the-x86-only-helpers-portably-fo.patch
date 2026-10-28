@@ -1,7 +1,7 @@
 From 8da984b03972d6f51b5ab8a9ded71de93eac3190 Mon Sep 17 00:00:00 2001
 From: Claude <noreply@anthropic.com>
 Date: Wed, 28 Oct 2026 06:19:09 +0000
-Subject: [PATCH 02/10] refactor(libc): build the x86-only helpers portably for
+Subject: [PATCH 02/12] refactor(libc): build the x86-only helpers portably for
  a lifted guest
 
 Under ANYPS5_GUEST_LIFTED the soft-float builtins compute in the

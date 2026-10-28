@@ -57,11 +57,13 @@ def sources(library):
 
 THIRD_PARTY_INCLUDES = ["SDL2/include", "Vulkan-Headers/include", "VulkanMemoryAllocator/include", "stb", "freetype/include", "mbedtls/include", "zstd/lib",
                         "ogg/include", "opus/include", "vorbis/include", "nghttp2/lib/includes", "SPIRV-Headers/include", "LibAtrac9/C/src"]
+COMPILE_DEFINITIONS = ["-DAPS5_ENABLE_TIMING_LOG=0"]
 
 
 def include_flags(library):
     third_party = [f"-I{ANYPS5 / '3rdparty' / path}" for path in THIRD_PARTY_INCLUDES if (ANYPS5 / "3rdparty" / path).is_dir()]
-    return third_party + [f"-I{LIBS}", f"-I{LIBS / 'nid' / 'include'}", f"-I{LIBS / 'prx' / library / 'include'}", f"-I{LIBS / 'prx' / 'libc' / 'include'}",
+    decoders = [f"-I{path / 'include'}" for path in sorted((ANYPS5 / "core" / "Decoder").iterdir()) if (path / "include").is_dir()]
+    return COMPILE_DEFINITIONS + third_party + decoders + [f"-I{LIBS}", f"-I{LIBS / 'nid' / 'include'}", f"-I{LIBS / 'prx' / library / 'include'}", f"-I{LIBS / 'prx' / 'libc' / 'include'}",
             f"-I{ANYPS5 / '3rdparty' / 'ZArchive' / 'include'}", f"-I{ROOT / 'runtime' / 'include'}"]
 
 

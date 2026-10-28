@@ -1,7 +1,7 @@
 From 92332a6fd4254ec800fcb0385111f12af72c01bc Mon Sep 17 00:00:00 2001
 From: Claude <noreply@anthropic.com>
 Date: Wed, 28 Oct 2026 14:03:49 +0000
-Subject: [PATCH 10/10] feat(libSceFiber): switch fibers for a lifted guest on
+Subject: [PATCH 10/12] feat(libSceFiber): switch fibers for a lifted guest on
  aarch64
 
 A lifted build gives every fiber its own host stack, switches host

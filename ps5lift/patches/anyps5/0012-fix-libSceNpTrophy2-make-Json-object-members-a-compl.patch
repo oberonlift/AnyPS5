@@ -1,0 +1,48 @@
+From e7e4b5d4655ed96f65acd384b752048dff3788be Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Wed, 28 Oct 2026 14:13:50 +0000
+Subject: [PATCH 12/12] fix(libSceNpTrophy2): make Json object members a
+ complete type
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ core/libs/prx/libSceNpTrophy2/include/TrophyPackage.hpp | 9 ++++++++-
+ 1 file changed, 8 insertions(+), 1 deletion(-)
+
+diff --git a/core/libs/prx/libSceNpTrophy2/include/TrophyPackage.hpp b/core/libs/prx/libSceNpTrophy2/include/TrophyPackage.hpp
+index f493e67ea..d2e011b28 100644
+--- a/core/libs/prx/libSceNpTrophy2/include/TrophyPackage.hpp
++++ b/core/libs/prx/libSceNpTrophy2/include/TrophyPackage.hpp
+@@ -25,6 +25,8 @@ using UcpFiles = std::map<std::string, std::string_view, std::less<>>;
+ 
+ UcpFiles ReadUcp(std::string_view data);
+ 
++struct JsonMember;
++
+ class Json {
+ public:
+     enum class Kind { Null, Bool, Number, String, Array, Object };
+@@ -33,7 +35,7 @@ public:
+     bool boolean = false;
+     std::string text;
+     std::vector<Json> items;
+-    std::vector<std::pair<std::string, Json>> members;
++    std::vector<JsonMember> members;
+ 
+     const Json* Find(std::string_view key) const;
+     bool IsTrue() const;
+@@ -41,6 +43,11 @@ public:
+     std::optional<std::int32_t> Id() const;
+ };
+ 
++struct JsonMember {
++    std::string first;
++    Json second;
++};
++
+ Json ParseJson(std::string_view text);
+ 
+ inline constexpr std::int32_t GradePlatinum = 1;
+-- 
+2.43.0
+

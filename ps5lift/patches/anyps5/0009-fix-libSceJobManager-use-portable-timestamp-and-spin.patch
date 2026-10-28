@@ -1,7 +1,7 @@
 From 95d0af6c7000a0e80ea9184723a1bae64c64354d Mon Sep 17 00:00:00 2001
 From: Claude <noreply@anthropic.com>
 Date: Wed, 28 Oct 2026 13:53:59 +0000
-Subject: [PATCH 09/10] fix(libSceJobManager): use portable timestamp and spin
+Subject: [PATCH 09/12] fix(libSceJobManager): use portable timestamp and spin
  pause
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
