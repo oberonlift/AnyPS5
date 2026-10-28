@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import argparse
 import concurrent.futures
+import fcntl
 import os
 import subprocess
 import sys
@@ -46,15 +47,20 @@ def build(triple, output_directory, clang, clangxx, jobs):
     for relative in [*RUNTIME_SOURCES, MAIN_SOURCE]:
         path = ROOT / relative
         units.append(([clangxx, *target, "-std=c++20", f"-I{ROOT / 'runtime' / 'include'}", f"-I{SOFTFLOAT / 'source' / 'include'}", "-DTHREAD_LOCAL=thread_local", "-DSOFTFLOAT_FAST_INT64", "-DLITTLEENDIAN=1"], path, output_directory / "runtime" / (path.stem + ".o")))
-    stale = [unit for unit in units if needs_build(unit[1], unit[2], headers)]
-    if stale or not library.exists() or not main_library.exists():
-        with concurrent.futures.ThreadPoolExecutor(jobs) as pool:
-            list(pool.map(lambda unit: compile_one(*unit), stale))
-        archiver = os.environ.get("AR", "llvm-ar")
-        for archive, members in ((library, units[:-1]), (main_library, units[-1:])):
-            if archive.exists():
-                archive.unlink()
-            subprocess.run([archiver, "crs", str(archive), *(str(unit[2]) for unit in members)], check=True)
+    # Parallel tests share this directory: build under a lock, and replace archives whole so a link never sees one missing.
+    output_directory.mkdir(parents=True, exist_ok=True)
+    with open(output_directory / ".lock", "w") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        stale = [unit for unit in units if needs_build(unit[1], unit[2], headers)]
+        if stale or not library.exists() or not main_library.exists():
+            with concurrent.futures.ThreadPoolExecutor(jobs) as pool:
+                list(pool.map(lambda unit: compile_one(*unit), stale))
+            archiver = os.environ.get("AR", "llvm-ar")
+            for archive, members in ((library, units[:-1]), (main_library, units[-1:])):
+                temporary = archive.with_suffix(".a.tmp")
+                temporary.unlink(missing_ok=True)
+                subprocess.run([archiver, "crs", str(temporary), *(str(unit[2]) for unit in members)], check=True)
+                temporary.replace(archive)
     return library, main_library
 
 
