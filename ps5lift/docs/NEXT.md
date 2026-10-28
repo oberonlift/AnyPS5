@@ -8,7 +8,7 @@ AnyPS5's `tools/audit_dump.py` accepts v0.13.0: the relinker converts its `eboot
 
 Its relinked executable lifts in under two minutes on the GB10's 20 cores: 55518 functions, 5.1 million instructions and 1331 jump tables, 197 of them sized by layout. In order:
 
-- Lift the Zen 2 instructions it uses that the lifter does not, since `cpuid` now keeps it off the AVX-512, VAES and VPCLMULQDQ paths that make up most of its 144246 unsupported instructions: `movbe`, `bswap`, `shld`, `shrd`, `adcx`, `adox`, `lea` with 32-bit addressing, AES-NI, SHA, SSE4a's `extrq` and `insertq`, and MMX, which FFmpeg's assembly uses.
+- Lift the Zen 2 instructions it uses that the lifter does not, since `cpuid` now keeps it off the AVX-512, VAES and VPCLMULQDQ paths that make up most of its unsupported instructions: MMX, which FFmpeg's assembly uses, the SSSE3 and AVX2 forms `pmaddubsw`, `pmulhrsw`, `vphaddd`, `vpsadbw` and `vptest`, AES-NI, SHA, and SSE4a's `extrq` and `insertq`.
 - Seed discovery from `DT_INIT_ARRAY` and `DT_FINI_ARRAY`.
 - Handle TLS relocations beyond static TLS.
 - Lift the bundled `sce_module` files the relinker converts, and link the bridges for every library a program imports.
