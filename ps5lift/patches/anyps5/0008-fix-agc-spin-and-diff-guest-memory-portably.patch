@@ -1,7 +1,7 @@
 From 80027559da101a0f75172d4a2ca309acee40b1ea Mon Sep 17 00:00:00 2001
 From: Claude <noreply@anthropic.com>
 Date: Wed, 28 Oct 2026 13:39:31 +0000
-Subject: [PATCH 8/8] fix(agc): spin and diff guest memory portably
+Subject: [PATCH 08/10] fix(agc): spin and diff guest memory portably
 
 Spin loops in the driver yield through PreciseSpinPause, which now uses
 the aarch64 yield hint, on every architecture, and WriteChanged falls

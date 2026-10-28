@@ -16,6 +16,7 @@ from run_libc_tests import build_libraries
 IMPORTS = ["printf", "snprintf", "vsnprintf", "sscanf", "puts", "strtold", "strtod", "modfl", "fabsl", "fprintf", "_Stdout"]
 KERNEL_IMPORTS = ["printf", "exit", "scePthreadCreate", "scePthreadJoin", "scePthreadMutexInit", "scePthreadMutexLock", "scePthreadMutexUnlock",
                   "scePthreadMutexDestroy", "sceKernelUsleep", "sceKernelGetProcessTime", "sceKernelReadTsc", "sceKernelGetTscFrequency"]
+FIBER_IMPORTS = ["printf", "exit", "_sceFiberInitializeImpl", "sceFiberFinalize", "sceFiberRun", "sceFiberSwitch", "sceFiberReturnToThread", "sceFiberGetSelf"]
 LOG_LINE = re.compile(r"^\[[^\]\s]+:\d+ [^\]]+\] .*\n", re.MULTILINE)
 GUEST_LINK = ["-no-pie", "-Wl,--image-base=0x20000000", "-Wl,--dynamic-linker=/lib64/ld-linux-x86-64.so.2"]
 
@@ -44,21 +45,29 @@ def build_exceptions_guest(args, work, optimization):
     return guest, True, [], ["--import-nids"]
 
 
-def build_kernel_guest(args, work, optimization):
-    (work / "kernel_nids.h").write_text("".join(f'#define NID_{name} "{compute_nid(name)}"\n' for name in KERNEL_IMPORTS))
-    stub = work / "kernel_stub.c"
-    stub.write_text("".join(f'void stub_{index}(void) __asm__("{compute_nid(name)}");\nvoid stub_{index}(void) {{}}\n' for index, name in enumerate(KERNEL_IMPORTS)))
-    library = work / "libkernelstub.so"
+def build_stubbed_guest(args, work, optimization, fixture, imports):
+    (work / f"{fixture}_nids.h").write_text("".join(f'#define NID_{name} "{compute_nid(name)}"\n' for name in imports))
+    stub = work / f"{fixture}_stub.c"
+    stub.write_text("".join(f'void stub_{index}(void) __asm__("{compute_nid(name)}");\nvoid stub_{index}(void) {{}}\n' for index, name in enumerate(imports)))
+    library = work / f"lib{fixture}stub.so"
     if not library.exists():
         run([args.clang, *GUEST_FLAGS, "-O2", "-fPIC", "-shared", stub, "-o", library])
-    guest = work / f"kernel{optimization}"
+    guest = work / f"{fixture}{optimization}"
     run([args.clang, optimization, *GUEST_FLAGS, "-fno-vectorize", "-fno-slp-vectorize", f"-I{work}", "-fpie", *GUEST_LINK,
-         FIXTURES / "kernel.c", f"-L{work}", "-lkernelstub", "-o", guest])
+         FIXTURES / f"{fixture}.c", f"-L{work}", f"-l{fixture}stub", "-o", guest])
     return guest, False, [], []
 
 
-GUESTS = {"libc": build_libc_guest, "exceptions": build_exceptions_guest, "kernel": build_kernel_guest}
-LIBRARIES = {"libc": ["libc"], "exceptions": ["libc"], "kernel": ["libc", "libkernel"]}
+def build_kernel_guest(args, work, optimization):
+    return build_stubbed_guest(args, work, optimization, "kernel", KERNEL_IMPORTS)
+
+
+def build_fiber_guest(args, work, optimization):
+    return build_stubbed_guest(args, work, optimization, "fiber", FIBER_IMPORTS)
+
+
+GUESTS = {"libc": build_libc_guest, "exceptions": build_exceptions_guest, "kernel": build_kernel_guest, "fiber": build_fiber_guest}
+LIBRARIES = {"libc": ["libc"], "exceptions": ["libc"], "kernel": ["libc", "libkernel"], "fiber": ["libc", "libkernel", "libSceFiber"]}
 
 
 def main():

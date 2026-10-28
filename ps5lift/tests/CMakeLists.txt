@@ -81,6 +81,13 @@ if(PS5LIFT_HAVE_LIBCLANG_PYTHON EQUAL 0)
                         --triple ${triple}
                         --fixture kernel)
         set_tests_properties(kernel_${arch} PROPERTIES RESOURCE_LOCK libc_${arch})
+        add_test(NAME fiber_${arch}
+                COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tools/run_libc_fixture.py
+                        --ps5lift $<TARGET_FILE:ps5lift>
+                        --clangxx ${CMAKE_CXX_COMPILER}
+                        --triple ${triple}
+                        --fixture fiber)
+        set_tests_properties(fiber_${arch} PROPERTIES RESOURCE_LOCK libc_${arch})
     endforeach()
 else()
     message(STATUS "The libclang Python bindings were not found; the libc bridge tests are skipped")

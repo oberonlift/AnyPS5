@@ -1,8 +1,8 @@
 From 7bc17893ccc96f2a98e4dbd7eafe99b8c1c328ee Mon Sep 17 00:00:00 2001
 From: Claude <noreply@anthropic.com>
 Date: Wed, 28 Oct 2026 09:54:29 +0000
-Subject: [PATCH 7/8] fix(libkernel): call a lifted thread entry as the native
- callback it is
+Subject: [PATCH 07/10] fix(libkernel): call a lifted thread entry as the
+ native callback it is
 
 The bridge already turns the guest entry point into a native thunk, so
 a lifted build calls it directly instead of through a GuestCpu call.

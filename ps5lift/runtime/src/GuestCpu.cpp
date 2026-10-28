@@ -124,3 +124,30 @@ extern "C" void GuestCpuInterruptedContext_nid_no_patch(std::uint64_t* registers
     for (int i = 0; i < PS5LIFT_FLAG_COUNT; ++i) value |= static_cast<std::uint64_t>(state->Flags[i] & 1) << FlagBits[i];
     *flags = value;
 }
+
+namespace {
+
+constexpr int FiberRegisters[] = {PS5LIFT_RBX, PS5LIFT_RBP, PS5LIFT_R12, PS5LIFT_R13, PS5LIFT_R14, PS5LIFT_R15, PS5LIFT_RSP};
+
+}
+
+extern "C" void GuestCpuSaveFiber_nid_no_patch(std::uint64_t* context) {
+    auto* state = ps5lift_current_state();
+    for (int i = 0; i < 7; ++i) context[i] = state->Gpr[FiberRegisters[i]];
+    context[7] = static_cast<std::uint64_t>(ps5lift_read_mxcsr(state)) | static_cast<std::uint64_t>(state->X87Control) << 32;
+}
+
+extern "C" void GuestCpuRestoreFiber_nid_no_patch(const std::uint64_t* context) {
+    auto* state = ps5lift_current_state();
+    for (int i = 0; i < 7; ++i) state->Gpr[FiberRegisters[i]] = context[i];
+    state->Mxcsr = static_cast<std::uint32_t>(context[7]);
+    state->X87Control = static_cast<std::uint16_t>(context[7] >> 32);
+    state->Unwinding = 0;
+    ps5lift_apply_mxcsr(state);
+}
+
+extern "C" void GuestCpuStartFiber_nid_no_patch(const std::uint64_t stackTop) {
+    auto* state = ps5lift_current_state();
+    if (stackTop != 0) state->Gpr[PS5LIFT_RSP] = stackTop & ~std::uint64_t{15};
+    state->Unwinding = 0;
+}
