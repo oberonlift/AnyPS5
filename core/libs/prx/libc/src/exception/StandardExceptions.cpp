@@ -266,7 +266,7 @@ static const char* APS5_VABI FutureCategoryName_nid_no_patch(const CategoryObjec
 static ErrorCode APS5_VABI CategoryCondition_nid_no_patch(const CategoryObject* self, int value) { return {0, value, self}; }
 static bool APS5_VABI CategoryEquivalentCondition_nid_no_patch(const CategoryObject* self, int value, const ErrorCode* condition) {
     using Condition = ErrorCode (APS5_VABI *)(const CategoryObject*, int);
-#ifdef __APPLE__
+#if defined(__APPLE__) || defined(__clang__)
     const auto mapped = reinterpret_cast<Condition>(const_cast<void*>(static_cast<const void* const*>(self->vtable)[4]))(self, value);
 #else
     const auto mapped = reinterpret_cast<Condition>(static_cast<const void* const*>(self->vtable)[4])(self, value);
