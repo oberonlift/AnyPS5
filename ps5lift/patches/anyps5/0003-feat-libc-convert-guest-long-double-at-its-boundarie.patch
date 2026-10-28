@@ -1,7 +1,7 @@
 From cf2f7419c4b07be0cde019abd9edb61eff57a852 Mon Sep 17 00:00:00 2001
 From: Claude <noreply@anthropic.com>
 Date: Wed, 28 Oct 2026 07:12:37 +0000
-Subject: [PATCH 3/5] feat(libc): convert guest long double at its boundaries
+Subject: [PATCH 3/7] feat(libc): convert guest long double at its boundaries
 
 Add GuestLongDouble to load and store the guest's x87 80-bit values,
 so the libc can compute with a host long double that is not x87

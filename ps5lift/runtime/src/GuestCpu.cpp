@@ -100,3 +100,27 @@ extern "C" [[noreturn]] void GuestCpuUnwindResume_nid_no_patch(const std::uint64
     state->Unwinding = 1;
     throw Ps5Lift::Bridge::GuestUnwind{};
 }
+
+extern "C" std::uint64_t GuestCpuReadTsc_nid_no_patch(void) {
+    return ps5lift_read_tsc();
+}
+
+extern "C" void GuestCpuCallInterrupted_nid_no_patch(const std::uint64_t target, const std::uint64_t first, const std::uint64_t second) {
+    constexpr std::uint64_t InterruptedStackGap = 64ull << 10;
+    auto* state = ps5lift_current_state();
+    const Ps5LiftState saved = *state;
+    state->Gpr[PS5LIFT_RSP] = (saved.Gpr[PS5LIFT_RSP] - InterruptedStackGap) & ~std::uint64_t{15};
+    state->Unwinding = 0;
+    Ps5Lift::Bridge::CallGuest<void>(target, first, second);
+    *state = saved;
+}
+
+extern "C" void GuestCpuInterruptedContext_nid_no_patch(std::uint64_t* registers, std::uint64_t* flags) {
+    static constexpr unsigned FlagBits[PS5LIFT_FLAG_COUNT] = {0, 2, 4, 6, 7, 11, 10};
+    const auto* state = ps5lift_current_state();
+    for (int i = 0; i < 16; ++i) registers[i] = state->Gpr[DwarfRegisters[i]];
+    registers[DwarfRip] = state->Rip;
+    std::uint64_t value = 0x202;
+    for (int i = 0; i < PS5LIFT_FLAG_COUNT; ++i) value |= static_cast<std::uint64_t>(state->Flags[i] & 1) << FlagBits[i];
+    *flags = value;
+}

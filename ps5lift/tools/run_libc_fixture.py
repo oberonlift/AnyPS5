@@ -2,6 +2,7 @@
 import argparse
 import os
 import platform
+import re
 import shutil
 import subprocess
 import sys
@@ -10,9 +11,12 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from run_fixture import FIXTURES, GUEST_FLAGS, ROOT, compare, host_triple, lifter_features, run, runner_for, runtime_library
-from run_libc_tests import build_libc
+from run_libc_tests import build_libraries
 
 IMPORTS = ["printf", "snprintf", "vsnprintf", "sscanf", "puts", "strtold", "strtod", "modfl", "fabsl", "fprintf", "_Stdout"]
+KERNEL_IMPORTS = ["printf", "exit", "scePthreadCreate", "scePthreadJoin", "scePthreadMutexInit", "scePthreadMutexLock", "scePthreadMutexUnlock",
+                  "scePthreadMutexDestroy", "sceKernelUsleep", "sceKernelGetProcessTime", "sceKernelReadTsc", "sceKernelGetTscFrequency"]
+LOG_LINE = re.compile(r"^\[[^\]\s]+:\d+ [^\]]+\] .*\n", re.MULTILINE)
 GUEST_LINK = ["-no-pie", "-Wl,--image-base=0x20000000", "-Wl,--dynamic-linker=/lib64/ld-linux-x86-64.so.2"]
 
 
@@ -40,7 +44,21 @@ def build_exceptions_guest(args, work, optimization):
     return guest, True, [], ["--import-nids"]
 
 
-GUESTS = {"libc": build_libc_guest, "exceptions": build_exceptions_guest}
+def build_kernel_guest(args, work, optimization):
+    (work / "kernel_nids.h").write_text("".join(f'#define NID_{name} "{compute_nid(name)}"\n' for name in KERNEL_IMPORTS))
+    stub = work / "kernel_stub.c"
+    stub.write_text("".join(f'void stub_{index}(void) __asm__("{compute_nid(name)}");\nvoid stub_{index}(void) {{}}\n' for index, name in enumerate(KERNEL_IMPORTS)))
+    library = work / "libkernelstub.so"
+    if not library.exists():
+        run([args.clang, *GUEST_FLAGS, "-O2", "-fPIC", "-shared", stub, "-o", library])
+    guest = work / f"kernel{optimization}"
+    run([args.clang, optimization, *GUEST_FLAGS, "-fno-vectorize", "-fno-slp-vectorize", f"-I{work}", "-fpie", *GUEST_LINK,
+         FIXTURES / "kernel.c", f"-L{work}", "-lkernelstub", "-o", guest])
+    return guest, False, [], []
+
+
+GUESTS = {"libc": build_libc_guest, "exceptions": build_exceptions_guest, "kernel": build_kernel_guest}
+LIBRARIES = {"libc": ["libc"], "exceptions": ["libc"], "kernel": ["libc", "libkernel"]}
 
 
 def main():
@@ -61,8 +79,8 @@ def main():
     failures = 0
     try:
         bridges = work / "bridges.cpp"
-        run([sys.executable, ROOT / "tools" / "generate_bridges.py", "libc", "-o", bridges])
-        libc = build_libc(args.triple, args.clangxx, build)
+        run([sys.executable, ROOT / "tools" / "generate_bridges.py", *LIBRARIES[args.fixture], "-o", bridges])
+        libraries = build_libraries(args.triple, args.clangxx, build, LIBRARIES[args.fixture])
         runtime = runtime_library(args.ps5lift, args.triple, args.clang, args.clangxx)
         for optimization in args.optimization or ["-O0", "-O2"]:
             guest, native, host_sources, lift_flags = GUESTS[args.fixture](args, work, optimization)
@@ -73,9 +91,9 @@ def main():
             report = run([args.ps5lift, guest, "-o", lifted, "--triple", args.triple, *lift_flags, *lifter_features(args.triple, runner)]).stderr
             program = work / f"{guest.name}-lifted"
             run([args.clangxx, f"--target={args.triple}", "-std=c++20", "-O1", f"-I{ROOT / 'runtime' / 'include'}", "-fuse-ld=lld", "-Wl,--gc-sections",
-                 lifted, bridges, *host_sources, *libc, *runtime, "-latomic", "-pthread", "-ldl", "-o", program])
+                 "-Wl,--allow-multiple-definition", lifted, bridges, *host_sources, *libraries, *runtime, "-latomic", "-pthread", "-ldl", "-o", program])
             result = subprocess.run([*runner, program], capture_output=True, text=True, timeout=600)
-            ok = result.returncode == 0 and compare(expected, result.stdout, label)
+            ok = result.returncode == 0 and compare(expected, LOG_LINE.sub("", result.stdout), label)
             if result.returncode != 0:
                 sys.stderr.write(f"{label}: exit code {result.returncode}\n{result.stderr}")
             print(f"{'PASS' if ok else 'FAIL'} {args.fixture} {label}: {report.strip()}")

@@ -2404,6 +2404,12 @@ private:
         case ZYDIS_MNEMONIC_MFENCE:
             _builder.CreateFence(llvm::AtomicOrdering::SequentiallyConsistent);
             return;
+        case ZYDIS_MNEMONIC_RDTSC: {
+            auto* ticks = _builder.CreateCall(_module.Runtime("ps5lift_read_tsc", llvm::FunctionType::get(I64(), false)));
+            SetGpr(PS5LIFT_RAX, _builder.CreateAnd(ticks, _builder.getInt64(0xffffffff)));
+            SetGpr(PS5LIFT_RDX, _builder.CreateLShr(ticks, _builder.getInt64(32)));
+            return;
+        }
         case ZYDIS_MNEMONIC_LFENCE:
         case ZYDIS_MNEMONIC_SFENCE:
             _builder.CreateFence(llvm::AtomicOrdering::AcquireRelease);

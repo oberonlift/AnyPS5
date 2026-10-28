@@ -1,0 +1,332 @@
+From 0fb8823d816330791fd58be344b18aaaba195fa8 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Wed, 28 Oct 2026 09:01:47 +0000
+Subject: [PATCH 6/7] feat(libkernel): build for a lifted guest
+
+Read the timestamp counter through GuestCpu, call guest thread entries
+and exception handlers through it, and leave out the x86 assembly for
+sigsetjmp, siglongjmp, getcontext and their kin in lifted builds, where
+the runtime provides the jumps and context switching reports itself as
+not implemented. A handler raised on a lifted thread sees the guest
+registers of the thread's last call. ParamJsonParser's object members
+become a complete type so that clang accepts the recursive value.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ core/libs/prx/libc/include/GuestCpu.hpp       |  8 ++++
+ .../AppMetadata/src/ParamJsonParser.cpp       |  8 +++-
+ .../libs/prx/libkernel/Pthread/src/Thread.cpp |  7 ++++
+ .../SyncOnAddress/src/SyncOnAddress.cpp       |  7 ++++
+ .../prx/libkernel/System/src/Exception.cpp    | 40 ++++++++++++++++++-
+ .../prx/libkernel/System/src/SignalSets.cpp   |  2 +
+ .../prx/libkernel/System/src/UserContext.cpp  | 27 +++++++++++++
+ core/libs/prx/libkernel/Time/Time.cpp         | 12 +++---
+ 8 files changed, 103 insertions(+), 8 deletions(-)
+
+diff --git a/core/libs/prx/libc/include/GuestCpu.hpp b/core/libs/prx/libc/include/GuestCpu.hpp
+index 5e85b1c93..dfe418d18 100644
+--- a/core/libs/prx/libc/include/GuestCpu.hpp
++++ b/core/libs/prx/libc/include/GuestCpu.hpp
+@@ -19,6 +19,10 @@ void GuestCpuUnwindStart_nid_no_patch(std::uint64_t* registers);
+ bool GuestCpuUnwindTables_nid_no_patch(std::uint64_t pc, const void** header, std::uint64_t* text, std::uint64_t* data);
+ const char* GuestCpuImportName_nid_no_patch(std::uint64_t address);
+ [[noreturn]] void GuestCpuUnwindResume_nid_no_patch(const std::uint64_t* registers);
++std::uint64_t GuestCpuReadTsc_nid_no_patch(void);
++std::uint64_t GuestCpuCall_nid_no_patch(std::uint64_t target, std::uint64_t first, std::uint64_t second);
++void GuestCpuCallInterrupted_nid_no_patch(std::uint64_t target, std::uint64_t first, std::uint64_t second);
++void GuestCpuInterruptedContext_nid_no_patch(std::uint64_t* registers, std::uint64_t* flags);
+ }
+ 
+ namespace GuestCpu {
+@@ -32,6 +36,7 @@ inline void SetX87Status(const std::uint16_t value) { GuestCpuSetX87Status_nid_n
+ inline void X87ClearExceptions() { SetX87Status(static_cast<std::uint16_t>(X87Status() & 0x7f00)); }
+ inline void X87Wait() { GuestCpuX87Wait_nid_no_patch(); }
+ inline std::uint32_t MxcsrMask() { return GuestCpuMxcsrMask_nid_no_patch(); }
++inline std::uint64_t ReadTsc() { return GuestCpuReadTsc_nid_no_patch(); }
+ 
+ inline std::array<std::uint32_t, 7> X87Environment() {
+     return {0xffff0000u | X87Control(), 0xffff0000u | X87Status(), 0xffffffffu, 0, 0, 0, 0xffff0000u};
+@@ -46,10 +51,13 @@ inline void SetX87Environment(const std::array<std::uint32_t, 7>& environment) {
+ 
+ #else
+ 
++#include <x86intrin.h>
+ #include <xmmintrin.h>
+ 
+ namespace GuestCpu {
+ 
++inline std::uint64_t ReadTsc() { return __rdtsc(); }
++
+ inline std::uint32_t Mxcsr() { return _mm_getcsr(); }
+ inline void SetMxcsr(const std::uint32_t value) { _mm_setcsr(value); }
+ 
+diff --git a/core/libs/prx/libkernel/AppMetadata/src/ParamJsonParser.cpp b/core/libs/prx/libkernel/AppMetadata/src/ParamJsonParser.cpp
+index 3150e1419..ff4fe2c60 100644
+--- a/core/libs/prx/libkernel/AppMetadata/src/ParamJsonParser.cpp
++++ b/core/libs/prx/libkernel/AppMetadata/src/ParamJsonParser.cpp
+@@ -16,9 +16,10 @@ namespace {
+ enum class JsonType { Null, Boolean, Number, String, Array, Object };
+ 
+ struct JsonValue;
++struct JsonMember;
+ 
+ using JsonArray = std::vector<JsonValue>;
+-using JsonObject = std::vector<std::pair<std::string, JsonValue>>;
++using JsonObject = std::vector<JsonMember>;
+ 
+ struct JsonValue {
+     JsonType type = JsonType::Null;
+@@ -30,6 +31,11 @@ struct JsonValue {
+     JsonObject objectValue;
+ };
+ 
++struct JsonMember {
++    std::string first;
++    JsonValue second;
++};
++
+ std::string readFileToString(const std::filesystem::path& path) {
+     std::ifstream file(path, std::ios::binary);
+     if (!file.is_open()) throw std::runtime_error("failed to open param.json");
+diff --git a/core/libs/prx/libkernel/Pthread/src/Thread.cpp b/core/libs/prx/libkernel/Pthread/src/Thread.cpp
+index 62dc543ec..4083ddb35 100644
+--- a/core/libs/prx/libkernel/Pthread/src/Thread.cpp
++++ b/core/libs/prx/libkernel/Pthread/src/Thread.cpp
+@@ -11,6 +11,7 @@
+ #include "prx/libc/include/general/AsmMacros.hpp"
+ #include "prx/libkernel/KernelErrors.hpp"
+ #include "prx/libc/include/CpuTopology.hpp"
++#include "prx/libc/include/GuestCpu.hpp"
+ #include "prx/libc/include/GuestAllocations.hpp"
+ #include "prx/libkernel/DirectMemory/DirectMemory.hpp"
+ #include <algorithm>
+@@ -762,6 +763,11 @@ void ThreadCancel::EndWait() {
+ 
+ extern "C" void* APS5_VABI Aps5CallGuestEntry_nid_no_patch(PthreadEntry entry, void* arg);
+ 
++#ifdef ANYPS5_GUEST_LIFTED
++extern "C" void* APS5_VABI Aps5CallGuestEntry_nid_no_patch(PthreadEntry entry, void* arg) {
++    return reinterpret_cast<void*>(GuestCpuCall_nid_no_patch(reinterpret_cast<std::uint64_t>(entry), reinterpret_cast<std::uint64_t>(arg), 0));
++}
++#else
+ asm(".text\n"
+     APS5_ASM_FUNCTION("Aps5CallGuestEntry_nid_no_patch") R"(
+     .cfi_startproc
+@@ -784,6 +790,7 @@ asm(".text\n"
+     ret
+     .cfi_endproc
+ )" APS5_ASM_FUNCTION_END("Aps5CallGuestEntry_nid_no_patch"));
++#endif
+ 
+ static void RunThread(std::unique_ptr<ThreadArgs> args) {
+     APS5_LOG_OUT("RunThread entry=0x%llx arg=%p self=%p", static_cast<unsigned long long>(reinterpret_cast<std::uintptr_t>(args->entry)), args->arg, static_cast<void*>(args->self));
+diff --git a/core/libs/prx/libkernel/SyncOnAddress/src/SyncOnAddress.cpp b/core/libs/prx/libkernel/SyncOnAddress/src/SyncOnAddress.cpp
+index 358c534ba..f4430c6a3 100644
+--- a/core/libs/prx/libkernel/SyncOnAddress/src/SyncOnAddress.cpp
++++ b/core/libs/prx/libkernel/SyncOnAddress/src/SyncOnAddress.cpp
+@@ -2,6 +2,7 @@
+ #include "prx/libc/include/Api.hpp"
+ #include <array>
+ #include <atomic>
++#include <cstring>
+ #include <chrono>
+ #include <cstdint>
+ #include <limits>
+@@ -134,7 +135,13 @@ template <class TValue>
+ TValue LoadAddressValue(TValue* address) {
+     if (reinterpret_cast<std::uintptr_t>(address) % alignof(TValue) == 0) return std::atomic_ref<TValue>(*address).load();
+     TValue value;
++#ifdef ANYPS5_GUEST_LIFTED
++    std::atomic_signal_fence(std::memory_order_seq_cst);
++    std::memcpy(&value, address, sizeof(value));
++    std::atomic_signal_fence(std::memory_order_seq_cst);
++#else
+     asm volatile("mov %1, %0" : "=r"(value) : "m"(*reinterpret_cast<const unsigned char (*)[sizeof(TValue)]>(address)));
++#endif
+     return value;
+ }
+ 
+diff --git a/core/libs/prx/libkernel/System/src/Exception.cpp b/core/libs/prx/libkernel/System/src/Exception.cpp
+index b0ec9a9df..b5860b634 100644
+--- a/core/libs/prx/libkernel/System/src/Exception.cpp
++++ b/core/libs/prx/libkernel/System/src/Exception.cpp
+@@ -3,6 +3,7 @@
+ #include <cstddef>
+ #include "SceTypes.hpp"
+ #include "prx/libc/include/General.hpp"
++#include "prx/libc/include/GuestCpu.hpp"
+ #include "prx/libkernel/KernelErrors.hpp"
+ #include "prx/libkernel/Pthread/include/Pthread.hpp"
+ #include "prx/libkernel/Time/include/TimedWait.hpp"
+@@ -187,7 +188,11 @@ void CallHandler(GuestExceptionHandler handler, int signum, GuestUcontext& ucont
+     auto& m = ucontext.mcontext;
+     const std::uint32_t mxcsrMask = FpWord(m, MxcsrMaskOffset);
+     LogGuestExceptionContext(signum, m);
++#ifdef ANYPS5_GUEST_LIFTED
++    GuestCpuCallInterrupted_nid_no_patch(reinterpret_cast<std::uint64_t>(handler), static_cast<std::uint64_t>(signum), reinterpret_cast<std::uint64_t>(&ucontext));
++#else
+     handler(signum, &ucontext);
++#endif
+     SetFpWord(m, MxcsrOffset, FpWord(m, MxcsrOffset) & (mxcsrMask != 0 ? mxcsrMask : DefaultMxcsrMask));
+     SetFpWord(m, MxcsrMaskOffset, mxcsrMask);
+ }
+@@ -872,6 +877,32 @@ bool RaiseOn(Pthread thread, GuestExceptionHandler handler, int signum) {
+ constexpr int HostSignal = SIGUSR1;
+ constexpr std::size_t FxsaveRegisterBytes = 416;
+ 
++#ifdef ANYPS5_GUEST_LIFTED
++void FromGuest(GuestMcontext& m) {
++    std::uint64_t registers[17];
++    std::uint64_t flags = 0;
++    GuestCpuInterruptedContext_nid_no_patch(registers, &flags);
++    m.rax = registers[0];
++    m.rdx = registers[1];
++    m.rcx = registers[2];
++    m.rbx = registers[3];
++    m.rsi = registers[4];
++    m.rdi = registers[5];
++    m.rbp = registers[6];
++    m.rsp = registers[7];
++    m.r8 = registers[8];
++    m.r9 = registers[9];
++    m.r10 = registers[10];
++    m.r11 = registers[11];
++    m.r12 = registers[12];
++    m.r13 = registers[13];
++    m.r14 = registers[14];
++    m.r15 = registers[15];
++    m.rip = registers[16];
++    m.rflags = flags;
++    m.len = sizeof(GuestMcontext);
++}
++#else
+ void FromHost(const mcontext_t& host, GuestMcontext& m) {
+     const auto* g = host.gregs;
+     m.rdi = g[REG_RDI];
+@@ -921,6 +952,7 @@ void ToHost(const GuestMcontext& m, mcontext_t& host) {
+     g[REG_EFL] = static_cast<greg_t>(m.rflags);
+     if (host.fpregs != nullptr) std::memcpy(host.fpregs, m.fpstate, FxsaveRegisterBytes);
+ }
++#endif
+ 
+ void Deliver(int signum, siginfo_t*, void* context) {
+     if (TimedWait::DeferDelivery(signum)) return;
+@@ -931,11 +963,17 @@ void Deliver(int signum, siginfo_t*, void* context) {
+         (void)written;
+         std::abort();
+     }
+-    auto& host = static_cast<ucontext_t*>(context)->uc_mcontext;
+     GuestUcontext ucontext{};
++#ifdef ANYPS5_GUEST_LIFTED
++    static_cast<void>(context);
++    FromGuest(ucontext.mcontext);
++    CallHandler(handler, RaisedSignal, ucontext);
++#else
++    auto& host = static_cast<ucontext_t*>(context)->uc_mcontext;
+     FromHost(host, ucontext.mcontext);
+     CallHandler(handler, RaisedSignal, ucontext);
+     ToHost(ucontext.mcontext, host);
++#endif
+ }
+ 
+ void InstallDelivery() {
+diff --git a/core/libs/prx/libkernel/System/src/SignalSets.cpp b/core/libs/prx/libkernel/System/src/SignalSets.cpp
+index 8444422f5..ddc5c90d0 100644
+--- a/core/libs/prx/libkernel/System/src/SignalSets.cpp
++++ b/core/libs/prx/libkernel/System/src/SignalSets.cpp
+@@ -58,6 +58,7 @@ int APS5_VABI sigismember_nid_postfix(const GuestSignalSet* set, int signal) {
+     return (set->bits[WordIndex(signal)] & Bit(signal)) != 0 ? 1 : 0;
+ }
+ }
++#ifndef ANYPS5_GUEST_LIFTED
+ #define APS5_SIGNAL_ASM_FUNCTION(name) APS5_ASM_FUNCTION(name)
+ #if defined(_WIN32) || defined(__APPLE__)
+ #define APS5_SIGNAL_ASM_CALL(name) "    call " APS5_ASM_SYMBOL(name) "\n"
+@@ -133,3 +134,4 @@ asm(".text\n"
+     "1:\n"
+     "    movq %rcx, 0(%rsp)\n"
+     "    ret\n");
++#endif
+diff --git a/core/libs/prx/libkernel/System/src/UserContext.cpp b/core/libs/prx/libkernel/System/src/UserContext.cpp
+index 1445055be..fab9bddaa 100644
+--- a/core/libs/prx/libkernel/System/src/UserContext.cpp
++++ b/core/libs/prx/libkernel/System/src/UserContext.cpp
+@@ -8,6 +8,31 @@
+ #include <cstddef>
+ #include <cstdint>
+ #include <cstring>
++
++#ifdef ANYPS5_GUEST_LIFTED
++
++extern "C" {
++
++int APS5_VABI getcontext_nid_postfix(UserUcontext*) {
++    NotImplemented_nid_no_patch("getcontext for a lifted guest, which needs guest context switching");
++}
++
++int APS5_VABI swapcontext_nid_postfix(UserUcontext*, const UserUcontext*) {
++    NotImplemented_nid_no_patch("swapcontext for a lifted guest, which needs guest context switching");
++}
++
++int APS5_VABI setcontext_nid_postfix(const UserUcontext*) {
++    NotImplemented_nid_no_patch("setcontext for a lifted guest, which needs guest context switching");
++}
++
++int SigreturnContext_nid_no_patch(const UserUcontext*) {
++    NotImplemented_nid_no_patch("sigreturn for a lifted guest, which needs guest context switching");
++}
++
++}
++
++#else
++
+ #include <immintrin.h>
+ 
+ namespace {
+@@ -281,3 +306,5 @@ int APS5_VABI Aps5SwapcontextFinish_nid_no_patch(UserUcontext* saved, const User
+ }
+ 
+ }
++
++#endif
+diff --git a/core/libs/prx/libkernel/Time/Time.cpp b/core/libs/prx/libkernel/Time/Time.cpp
+index 103338609..bac98a1f2 100644
+--- a/core/libs/prx/libkernel/Time/Time.cpp
++++ b/core/libs/prx/libkernel/Time/Time.cpp
+@@ -26,7 +26,7 @@
+ #include <stdexcept>
+ #include <string>
+ #include <system_error>
+-#include <x86intrin.h>
++#include "prx/libc/include/GuestCpu.hpp"
+ 
+ #ifdef _WIN32
+ #include <windows.h>
+@@ -815,19 +815,19 @@ int APS5_VABI sceKernelGettimezone(KernelTimezone* tz) {
+ }
+ 
+ uint64_t APS5_VABI sceKernelReadTsc(void) {
+-    if (TimeScale() == 1.0) return __rdtsc();
+-    static const std::uint64_t origin = __rdtsc();
+-    return origin + static_cast<std::uint64_t>(static_cast<double>(__rdtsc() - origin) * TimeScale());
++    if (TimeScale() == 1.0) return GuestCpu::ReadTsc();
++    static const std::uint64_t origin = GuestCpu::ReadTsc();
++    return origin + static_cast<std::uint64_t>(static_cast<double>(GuestCpu::ReadTsc() - origin) * TimeScale());
+ }
+ 
+ uint64_t APS5_VABI sceKernelGetTscFrequency(void) {
+     static const std::uint64_t frequency = [] {
+         const CurrentCpuPin pin;
+         const std::uint64_t startNanos = RawMonotonicNanos();
+-        const std::uint64_t startTicks = __rdtsc();
++        const std::uint64_t startTicks = GuestCpu::ReadTsc();
+         TimedWait::SleepNanos(20000000ULL);
+         const std::uint64_t elapsedNanos = RawMonotonicNanos() - startNanos;
+-        const std::uint64_t elapsedTicks = __rdtsc() - startTicks;
++        const std::uint64_t elapsedTicks = GuestCpu::ReadTsc() - startTicks;
+         return static_cast<std::uint64_t>(static_cast<long double>(elapsedTicks) * 1000000000.0L / static_cast<long double>(elapsedNanos));
+     }();
+     return frequency;
+-- 
+2.43.0
+

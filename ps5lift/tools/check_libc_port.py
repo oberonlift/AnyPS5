@@ -14,15 +14,34 @@ LIBS = ANYPS5 / "core" / "libs"
 
 
 def sources(library):
-    listing = (LIBS / "prx" / library / "CMakeLists.txt").read_text()
-    found = re.findall(r"\$\{CMAKE_CURRENT_SOURCE_DIR\}/([^\s)]+\.cpp)", listing)
-    return sorted({LIBS / "prx" / library / path for path in found})
+    found = set()
+    skipped = []
+    for line in (LIBS / "prx" / library / "CMakeLists.txt").read_text().splitlines():
+        condition = re.match(r"\s*(if|elseif|else|endif)\s*\((.*)\)", line)
+        if condition:
+            keyword, expression = condition.groups()
+            if keyword == "if":
+                skipped.append(bool(re.fullmatch(r"\s*(WIN32|APPLE|MSVC)\s*", expression)))
+            elif keyword == "endif":
+                skipped.pop()
+            elif skipped:
+                skipped[-1] = False
+            continue
+        if any(skipped):
+            continue
+        found.update(LIBS / "prx" / library / path for path in re.findall(r"\$\{CMAKE_CURRENT_SOURCE_DIR\}/([^\s)]+\.cpp)", line))
+        found.update(LIBS / path for path in re.findall(r"\$\{LIBS_INCLUDE_DIR\}/([^\s)]+\.cpp)", line) if not path.startswith("tests/"))
+    return sorted(found)
 
 
-def compile_one(compiler, flags, source, work):
+def include_flags(library):
+    return [f"-I{LIBS}", f"-I{LIBS / 'nid' / 'include'}", f"-I{LIBS / 'prx' / library / 'include'}", f"-I{LIBS / 'prx' / 'libc' / 'include'}",
+            f"-I{ANYPS5 / '3rdparty' / 'ZArchive' / 'include'}", f"-I{ROOT / 'runtime' / 'include'}"]
+
+
+def compile_one(compiler, library, flags, source, work):
     output = Path(work) / (source.name + ".o")
-    command = [compiler, "-std=c++20", "-O1", "-fPIC", "-c", "-DANYPS5_GUEST_LIFTED", f"-I{LIBS}", f"-I{LIBS / 'prx' / 'libc' / 'include'}",
-               f"-I{ANYPS5 / '3rdparty' / 'ZArchive' / 'include'}", f"-I{ROOT / 'runtime' / 'include'}", *flags, str(source), "-o", str(output)]
+    command = [compiler, "-std=c++20", "-O1", "-fPIC", "-c", "-DANYPS5_GUEST_LIFTED", *include_flags(library), *flags, str(source), "-o", str(output)]
     result = subprocess.run(command, capture_output=True, text=True)
     errors = [line for line in result.stderr.splitlines() if "error" in line]
     return source, result.returncode == 0, errors[:3]
@@ -39,7 +58,7 @@ def main():
     files = sources(args.library)
     failed = []
     with tempfile.TemporaryDirectory(prefix="ps5lift-port-") as work, concurrent.futures.ThreadPoolExecutor(args.jobs) as pool:
-        for source, ok, errors in pool.map(lambda path: compile_one(args.compiler, args.flag, path, work), files):
+        for source, ok, errors in pool.map(lambda path: compile_one(args.compiler, args.library, args.flag, path, work), files):
             if not ok:
                 failed.append((source, errors))
     print(f"{args.library} with {args.compiler}: {len(files) - len(failed)} of {len(files)} sources compile")

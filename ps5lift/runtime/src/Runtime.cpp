@@ -237,6 +237,16 @@ extern "C" void ps5lift_apply_mxcsr(Ps5LiftState* state) {
     SetHostExceptions(mxcsr & MxcsrExceptions);
 }
 
+extern "C" std::uint64_t ps5lift_read_tsc(void) {
+#if defined(__aarch64__)
+    std::uint64_t ticks;
+    asm volatile("isb\n\tmrs %0, cntvct_el0" : "=r"(ticks));
+    return ticks;
+#else
+    return __rdtsc();
+#endif
+}
+
 extern "C" std::uint32_t ps5lift_read_mxcsr(Ps5LiftState* state) {
     return (state->Mxcsr & ~MxcsrExceptions) | HostExceptions();
 }

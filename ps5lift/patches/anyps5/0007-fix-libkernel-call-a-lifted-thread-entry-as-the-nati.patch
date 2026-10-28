@@ -1,0 +1,51 @@
+From 7bc17893ccc96f2a98e4dbd7eafe99b8c1c328ee Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Wed, 28 Oct 2026 09:54:29 +0000
+Subject: [PATCH 7/7] fix(libkernel): call a lifted thread entry as the native
+ callback it is
+
+The bridge already turns the guest entry point into a native thunk, so
+a lifted build calls it directly instead of through a GuestCpu call.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ core/libs/prx/libc/include/GuestCpu.hpp        | 1 -
+ core/libs/prx/libkernel/Pthread/src/Thread.cpp | 3 +--
+ 2 files changed, 1 insertion(+), 3 deletions(-)
+
+diff --git a/core/libs/prx/libc/include/GuestCpu.hpp b/core/libs/prx/libc/include/GuestCpu.hpp
+index dfe418d18..f5102c78f 100644
+--- a/core/libs/prx/libc/include/GuestCpu.hpp
++++ b/core/libs/prx/libc/include/GuestCpu.hpp
+@@ -20,7 +20,6 @@ bool GuestCpuUnwindTables_nid_no_patch(std::uint64_t pc, const void** header, st
+ const char* GuestCpuImportName_nid_no_patch(std::uint64_t address);
+ [[noreturn]] void GuestCpuUnwindResume_nid_no_patch(const std::uint64_t* registers);
+ std::uint64_t GuestCpuReadTsc_nid_no_patch(void);
+-std::uint64_t GuestCpuCall_nid_no_patch(std::uint64_t target, std::uint64_t first, std::uint64_t second);
+ void GuestCpuCallInterrupted_nid_no_patch(std::uint64_t target, std::uint64_t first, std::uint64_t second);
+ void GuestCpuInterruptedContext_nid_no_patch(std::uint64_t* registers, std::uint64_t* flags);
+ }
+diff --git a/core/libs/prx/libkernel/Pthread/src/Thread.cpp b/core/libs/prx/libkernel/Pthread/src/Thread.cpp
+index 4083ddb35..3fd81f766 100644
+--- a/core/libs/prx/libkernel/Pthread/src/Thread.cpp
++++ b/core/libs/prx/libkernel/Pthread/src/Thread.cpp
+@@ -11,7 +11,6 @@
+ #include "prx/libc/include/general/AsmMacros.hpp"
+ #include "prx/libkernel/KernelErrors.hpp"
+ #include "prx/libc/include/CpuTopology.hpp"
+-#include "prx/libc/include/GuestCpu.hpp"
+ #include "prx/libc/include/GuestAllocations.hpp"
+ #include "prx/libkernel/DirectMemory/DirectMemory.hpp"
+ #include <algorithm>
+@@ -765,7 +764,7 @@ extern "C" void* APS5_VABI Aps5CallGuestEntry_nid_no_patch(PthreadEntry entry, v
+ 
+ #ifdef ANYPS5_GUEST_LIFTED
+ extern "C" void* APS5_VABI Aps5CallGuestEntry_nid_no_patch(PthreadEntry entry, void* arg) {
+-    return reinterpret_cast<void*>(GuestCpuCall_nid_no_patch(reinterpret_cast<std::uint64_t>(entry), reinterpret_cast<std::uint64_t>(arg), 0));
++    return entry(arg);
+ }
+ #else
+ asm(".text\n"
+-- 
+2.43.0
+

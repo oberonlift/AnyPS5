@@ -16,9 +16,8 @@ NID_SUFFIX = bytes([0x51, 0x8D, 0x64, 0xA6, 0x35, 0xDE, 0xD8, 0xC1, 0xE6, 0xB0, 
 NID_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+-"
 POSTFIX = "_nid_postfix"
 VARIADIC_SIBLINGS = {"libc_printf": "vprintf"}
-GUEST_STATE_EXPORTS = {"setjmp", "longjmp"}
+GUEST_STATE_EXPORTS = {"setjmp", "longjmp", "sigsetjmp", "siglongjmp", "_setjmp", "_longjmp"}
 EXPORT_PATTERN = re.compile(r'APS5_EXPORT\(\s*"([^"]+)"\s*,\s*(\w+)\s*\)')
-SKIPPED_DIRECTORIES = {"windows", "macos"}
 
 K = cindex.TypeKind
 INTEGER_KINDS = {
@@ -80,6 +79,8 @@ def classify(type_, role):
         return ("pointer", "void*")
     if kind == K.LONGDOUBLE:
         return ("extended", "long double")
+    if kind in (K.INCOMPLETEARRAY, K.CONSTANTARRAY) and role == "parameter":
+        return ("pointer", "void*")
     if kind == K.RECORD:
         raise Unsupported(f"{role} passed by value as a {canonical.get_size()}-byte record")
     if kind in (K.INT128, K.UINT128):
@@ -149,14 +150,39 @@ def describe(cursor, symbol):
 
 def translation_unit_arguments(library):
     third_party = ANYPS5_LIBS.parent.parent / "3rdparty"
-    return ["-x", "c++", "-std=c++20", f"-I{ANYPS5_LIBS}", f"-I{library / 'include'}", f"-I{third_party / 'ZArchive' / 'include'}", "-D__linux__", "-fno-delayed-template-parsing"]
+    return ["-x", "c++", "-std=c++20", f"-I{ANYPS5_LIBS}", f"-I{ANYPS5_LIBS / 'nid' / 'include'}", f"-I{library / 'include'}", f"-I{third_party / 'ZArchive' / 'include'}", "-D__linux__", "-fno-delayed-template-parsing"]
 
 
 def library_sources(library):
-    for path in sorted(library.rglob("*.cpp")):
-        if SKIPPED_DIRECTORIES.intersection(path.relative_to(library).parts):
-            continue
-        yield path
+    from check_libc_port import sources
+    return sources(library.name)
+
+
+DISAMBIGUATION = re.compile(r"_nid_disambig\d+$")
+
+
+def export_base(name):
+    if name.endswith(POSTFIX):
+        name = name[: -len(POSTFIX)]
+    return DISAMBIGUATION.sub("", name)
+
+
+class Definitions:
+    def __init__(self):
+        self.texts = {}
+
+    def __call__(self, cursor):
+        location = cursor.location.file
+        if location is None or not str(location).endswith(".cpp"):
+            return False
+        text = self.texts.setdefault(str(location), Path(str(location)).read_bytes())
+        if cursor.kind == cindex.CursorKind.VAR_DECL:
+            declaration = text[cursor.extent.start.offset:cursor.extent.end.offset]
+            return not declaration.lstrip().startswith(b"extern") or b"=" in declaration
+        position = cursor.extent.end.offset
+        while position < len(text) and text[position:position + 1] not in (b"{", b";", b"}"):
+            position += 1
+        return text[position:position + 1] == b"{"
 
 
 def collect(library, index):
@@ -169,8 +195,12 @@ def collect(library, index):
     data = {}
     unsupported = {}
     parse_errors = 0
+    defined = Definitions()
+    units = []
+    candidates = []
     for source in library_sources(library):
         unit = index.parse(str(source), args=translation_unit_arguments(library), options=cindex.TranslationUnit.PARSE_SKIP_FUNCTION_BODIES)
+        units.append(unit)
         parse_errors += sum(1 for diagnostic in unit.diagnostics if diagnostic.severity >= cindex.Diagnostic.Error)
         stack = [unit.cursor]
         while stack:
@@ -178,41 +208,53 @@ def collect(library, index):
             if cursor.kind in (cindex.CursorKind.TRANSLATION_UNIT, cindex.CursorKind.LINKAGE_SPEC, cindex.CursorKind.NAMESPACE, cindex.CursorKind.UNEXPOSED_DECL):
                 stack.extend(cursor.get_children())
                 continue
-            if cursor.kind not in (cindex.CursorKind.FUNCTION_DECL, cindex.CursorKind.VAR_DECL):
+            if cursor.kind not in (cindex.CursorKind.FUNCTION_DECL, cindex.CursorKind.VAR_DECL) or cursor.linkage != cindex.LinkageKind.EXTERNAL:
                 continue
             name = cursor.spelling
-            if name.endswith(POSTFIX):
-                nid = compute_nid(name[: -len(POSTFIX)])
-            elif name in explicit:
-                nid = explicit[name]
-            else:
-                continue
-            if cursor.mangled_name not in (name, "_" + name):
-                unsupported.setdefault(nid, (name, "C++ linkage"))
-                continue
-            if cursor.kind == cindex.CursorKind.VAR_DECL:
-                data.setdefault(nid, name)
-                continue
-            if nid in exports or nid in unsupported:
-                continue
-            if (name[: -len(POSTFIX)] if name.endswith(POSTFIX) else name) in GUEST_STATE_EXPORTS:
-                unsupported[nid] = (name, "saves or restores the guest's own registers")
-                continue
-            try:
-                exports[nid] = describe(cursor, name)
-                exports[nid]["name"] = name
-            except Unsupported as reason:
-                unsupported[nid] = (name, str(reason))
+            if name.endswith(POSTFIX) or name in explicit:
+                candidates.append((cursor, True))
+            elif not name.endswith("_nid_no_patch") and not name.startswith("SDL_") and cursor.mangled_name in (name, "_" + name) and defined(cursor):
+                candidates.append((cursor, False))
+    named = {cursor.spelling for cursor, _ in candidates}
+    for cursor, marked in candidates:
+        name = cursor.spelling
+        if name in explicit:
+            nid = explicit[name]
+        elif marked:
+            nid = compute_nid(export_base(name))
+        elif name + POSTFIX in named:
+            continue
+        else:
+            nid = compute_nid(export_base(name))
+        if cursor.mangled_name not in (name, "_" + name):
+            unsupported.setdefault(nid, (name, "C++ linkage"))
+            continue
+        if cursor.kind == cindex.CursorKind.VAR_DECL:
+            data.setdefault(nid, name)
+            continue
+        if nid in exports or nid in unsupported:
+            continue
+        if export_base(name) in GUEST_STATE_EXPORTS:
+            unsupported[nid] = (name, "saves or restores the guest's own registers")
+            continue
+        try:
+            exports[nid] = describe(cursor, name)
+            exports[nid]["name"] = name
+        except Unsupported as reason:
+            unsupported[nid] = (name, str(reason))
     by_name = {export["name"]: export for export in exports.values()}
     for nid in [nid for nid, export in exports.items() if export["variadic"]]:
         export = exports.pop(nid)
         base = export["name"][: -len(POSTFIX)] if export["name"].endswith(POSTFIX) else export["name"]
         sibling = by_name.get(VARIADIC_SIBLINGS.get(base, "v" + base) + POSTFIX)
         named = [spelling for spelling, _ in export["parameters"]]
-        if sibling is None or sibling["variadic"] or [spelling for spelling, _ in sibling["parameters"]] != named + ["void*"]:
-            unsupported[nid] = (export["name"], "variadic without a va_list sibling")
+        if sibling is not None and not sibling["variadic"] and [spelling for spelling, _ in sibling["parameters"]] == named + ["void*"]:
+            export["target"] = sibling["symbol"]
+        elif export["variadic"][0] < 6:
+            export["forward"] = True
+        else:
+            unsupported[nid] = (export["name"], "variadic without a va_list sibling or a free integer register")
             continue
-        export["target"] = sibling["symbol"]
         exports[nid] = export
     return exports, data, unsupported, parse_errors
 
@@ -225,10 +267,10 @@ def emit(exports, data, library_name):
     lines = [f"#include <ps5lift/Bridge.hpp>", "", "#include <cstddef>", "#include <cstdint>", "", "using namespace Ps5Lift::Bridge;", ""]
     for nid in sorted(exports):
         export = exports[nid]
-        if export["variadic"]:
+        if export["variadic"] and not export.get("forward"):
             continue
         return_class, return_spelling = export["return"]
-        declaration = ", ".join(spelling for spelling, _ in export["parameters"])
+        declaration = ", ".join([spelling for spelling, _ in export["parameters"]] + (["..."] if export.get("forward") else []))
         lines.append(f'extern "C" {return_spelling} {export["symbol"]}({declaration});')
     for nid in sorted(data):
         lines.append(f'extern "C" char {data[nid]};')
@@ -238,12 +280,14 @@ def emit(exports, data, library_name):
         export = exports[nid]
         return_class, _ = export["return"]
         accesses = [access for _, access in export["parameters"]]
-        if export["variadic"]:
+        if export.get("forward"):
+            accesses += [f"Integer<std::uint64_t>(state, {index})" for index in range(export["variadic"][0], 6)]
+        elif export["variadic"]:
             accesses.append("variadic.List()")
         call = f'{export.get("target", export["symbol"])}({", ".join(accesses)})'
         lines.append(f'extern "C" void {bridge_symbol(nid)}(Ps5LiftState* state) {{')
         lines.append("    try {")
-        if export["variadic"]:
+        if export["variadic"] and not export.get("forward"):
             integers, floats, stack = export["variadic"]
             lines.append(f"        VariadicArguments variadic(state, {integers}, {floats}, {stack});")
         if return_class == "extended" or any(access.startswith("Extended(") for _, access in export["parameters"]):
@@ -262,8 +306,8 @@ def emit(exports, data, library_name):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Generate SysV-to-native import bridges for an AnyPS5 library")
-    parser.add_argument("library", help="library directory name under core/libs/prx, such as libc")
+    parser = argparse.ArgumentParser(description="Generate SysV-to-native import bridges for AnyPS5 libraries")
+    parser.add_argument("library", nargs="+", help="library directory names under core/libs/prx, such as libc; for a NID that several export, the first one's export gets the bridge")
     parser.add_argument("-o", "--output", required=True)
     parser.add_argument("--libclang", default="/usr/lib/llvm-18/lib/libclang-18.so.1")
     parser.add_argument("--report", action="store_true", help="list every export without a bridge and why")
@@ -271,14 +315,27 @@ def main():
 
     if os.path.exists(args.libclang):
         cindex.Config.set_library_file(args.libclang)
-    library = ANYPS5_LIBS / "prx" / args.library
-    if not library.is_dir():
-        raise SystemExit(f"{library} is not an AnyPS5 library directory")
-    exports, data, unsupported, parse_errors = collect(library, cindex.Index.create())
-    Path(args.output).write_text(emit(exports, data, args.library))
+    index = cindex.Index.create()
+    exports, data, unsupported, parse_errors = {}, {}, {}, 0
+    for name in args.library:
+        library = ANYPS5_LIBS / "prx" / name
+        if not library.is_dir():
+            raise SystemExit(f"{library} is not an AnyPS5 library directory")
+        library_exports, library_data, library_unsupported, library_errors = collect(library, index)
+        for nid, export in library_exports.items():
+            exports.setdefault(nid, export)
+        for nid, symbol in library_data.items():
+            data.setdefault(nid, symbol)
+        for nid, entry in library_unsupported.items():
+            unsupported.setdefault(nid, entry)
+        parse_errors += library_errors
+    for nid in list(unsupported):
+        if nid in exports or nid in data:
+            del unsupported[nid]
+    Path(args.output).write_text(emit(exports, data, " ".join(args.library)))
 
     reasons = collections.Counter(re.sub(r"\d+-byte", "N-byte", reason) for _, reason in unsupported.values())
-    print(f"{args.library}: {len(exports)} bridges, {len(data)} data exports, {len(unsupported)} exports without one, {parse_errors} parse errors")
+    print(f"{' '.join(args.library)}: {len(exports)} bridges, {len(data)} data exports, {len(unsupported)} exports without one, {parse_errors} parse errors")
     for reason, count in reasons.most_common():
         print(f"  {count:5} {reason}")
     if args.report:

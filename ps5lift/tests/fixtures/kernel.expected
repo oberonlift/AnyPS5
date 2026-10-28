@@ -1,0 +1,5 @@
+mutex init 0
+counter 40000 results 30
+mutex destroy 0
+slept at least 20 ms
+tsc ordered, frequency plausible

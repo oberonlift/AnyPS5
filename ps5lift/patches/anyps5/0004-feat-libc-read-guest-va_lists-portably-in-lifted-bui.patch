@@ -1,7 +1,7 @@
 From d00d0e3b61029d3f9fcdfd2fb3cc59a7e0fce38d Mon Sep 17 00:00:00 2001
 From: Claude <noreply@anthropic.com>
 Date: Wed, 28 Oct 2026 08:04:04 +0000
-Subject: [PATCH 4/5] feat(libc): read guest va_lists portably in lifted builds
+Subject: [PATCH 4/7] feat(libc): read guest va_lists portably in lifted builds
 
 In a lifted build every VaList is a SysV va_list built by the guest or
 by a bridge, so the libc formats and scans through FormatArguments and

@@ -8,7 +8,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from build_runtime import build as build_runtime
-from check_libc_port import ANYPS5, LIBS, sources
+from check_libc_port import ANYPS5, LIBS, include_flags, sources
 from run_fixture import ROOT, host_triple, runner_for
 
 TESTS = [
@@ -34,8 +34,8 @@ def compile_all(clangxx, triple, units):
         if up_to_date(output):
             return None
         output.parent.mkdir(parents=True, exist_ok=True)
-        command = [clangxx, f"--target={triple}", "-std=c++20", "-O1", "-fPIC", "-ffunction-sections", "-fdata-sections", "-w", "-DANYPS5_GUEST_LIFTED", f"-I{LIBS}", f"-I{LIBS / 'prx' / 'libc' / 'include'}",
-                   f"-I{ANYPS5 / '3rdparty' / 'ZArchive' / 'include'}", f"-I{ROOT / 'runtime' / 'include'}", "-MMD", "-MF", str(output.with_suffix(".d")), "-c", str(source), "-o", str(output)]
+        command = [clangxx, f"--target={triple}", "-std=c++20", "-O1", "-fPIC", "-ffunction-sections", "-fdata-sections", "-w", "-DANYPS5_GUEST_LIFTED",
+                   *include_flags("libkernel"), "-MMD", "-MF", str(output.with_suffix(".d")), "-c", str(source), "-o", str(output)]
         result = subprocess.run(command, capture_output=True, text=True)
         return None if result.returncode == 0 else f"{source}:\n{result.stderr}"
     with concurrent.futures.ThreadPoolExecutor(os.cpu_count()) as pool:
@@ -44,16 +44,24 @@ def compile_all(clangxx, triple, units):
         raise SystemExit("\n".join(errors))
 
 
+def library_units(triple, build, library):
+    work = Path(build) / f"libc-{triple.split('-')[0]}"
+    return [(source, work / library / (str(source.relative_to(LIBS)).replace("/", "_") + ".o")) for source in sources(library)]
+
+
 def libc_units(triple, build):
     work = Path(build) / f"libc-{triple.split('-')[0]}"
-    units = [(source, work / "libc" / (str(source.relative_to(LIBS)).replace("/", "_") + ".o")) for source in sources("libc")]
-    return units + [(ZARCHIVE_STUB, work / "stubs" / "zarchive_stub.o")]
+    return library_units(triple, build, "libc") + [(ZARCHIVE_STUB, work / "stubs" / "zarchive_stub.o")]
+
+
+def build_libraries(triple, clangxx, build, libraries):
+    units = libc_units(triple, build) + [unit for library in libraries if library != "libc" for unit in library_units(triple, build, library)]
+    compile_all(clangxx, triple, units)
+    return [output for _, output in units]
 
 
 def build_libc(triple, clangxx, build):
-    units = libc_units(triple, build)
-    compile_all(clangxx, triple, units)
-    return [output for _, output in units]
+    return build_libraries(triple, clangxx, build, ["libc"])
 
 
 def main():
