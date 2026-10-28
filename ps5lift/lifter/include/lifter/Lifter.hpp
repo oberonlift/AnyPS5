@@ -7,6 +7,7 @@
 
 #include <llvm/IR/LLVMContext.h>
 #include <llvm/IR/Module.h>
+#include <llvm/TargetParser/Triple.h>
 
 #include <cstdint>
 #include <map>
@@ -41,7 +42,7 @@ struct LiftReport {
 };
 
 std::unique_ptr<llvm::Module> LiftFunctions(llvm::LLVMContext& context, const GuestImage& image, const std::map<std::uint64_t, GuestFunction>& functions, std::span<const std::uint64_t> addresses,
-                                            const LiftOptions& options, LiftReport& report);
+                                            const LiftOptions& options, const llvm::Triple& target, LiftReport& report);
 std::unique_ptr<llvm::Module> LiftTables(llvm::LLVMContext& context, const GuestProgram& program, const std::vector<std::map<std::uint64_t, GuestFunction>>& functions, const LiftOptions& options);
 
 }

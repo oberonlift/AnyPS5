@@ -8,11 +8,13 @@
 #include <llvm/Support/raw_ostream.h>
 #include <llvm/Target/TargetMachine.h>
 #include <llvm/Target/TargetOptions.h>
+#include <llvm/TargetParser/Triple.h>
 
 #include <memory>
 #include <mutex>
 #include <optional>
 #include <stdexcept>
+#include <string>
 
 namespace Ps5Lift {
 
@@ -32,13 +34,20 @@ void InitializeTargets() {
     });
 }
 
+// The Zen 2 instructions without a target-independent form need the target's own: AES-NI and PCLMULQDQ become the
+// aarch64 crypto extension, which LLVM's aes feature enables with PMULL, and stay AES-NI and PCLMULQDQ on x86-64.
+std::string Features(const CodegenOptions& options) {
+    const auto required = llvm::Triple(options.Triple).isAArch64() ? "+aes" : "+aes,+pclmul";
+    return options.Features.empty() ? required : options.Features + "," + required;
+}
+
 std::unique_ptr<llvm::TargetMachine> CreateTargetMachine(const CodegenOptions& options) {
     InitializeTargets();
     std::string error;
     const auto* target = llvm::TargetRegistry::lookupTarget(options.Triple, error);
     if (target == nullptr) throw std::runtime_error("Unknown target " + options.Triple + ": " + error);
     llvm::TargetOptions targetOptions;
-    auto* machine = target->createTargetMachine(options.Triple, options.Cpu, options.Features, targetOptions, llvm::Reloc::PIC_, std::nullopt, options.Optimize ? llvm::CodeGenOptLevel::Aggressive : llvm::CodeGenOptLevel::None);
+    auto* machine = target->createTargetMachine(options.Triple, options.Cpu, Features(options), targetOptions, llvm::Reloc::PIC_, std::nullopt, options.Optimize ? llvm::CodeGenOptLevel::Aggressive : llvm::CodeGenOptLevel::None);
     if (machine == nullptr) throw std::runtime_error("Cannot create a target machine for " + options.Triple);
     return std::unique_ptr<llvm::TargetMachine>(machine);
 }

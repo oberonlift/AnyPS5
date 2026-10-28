@@ -72,7 +72,7 @@ LiftReport CompileProgram(const GuestProgram& program, const std::vector<std::ma
             try {
                 llvm::LLVMContext context;
                 auto module = task < parts.size()
-                                  ? LiftFunctions(context, program.Images[parts[task].Image], functions[parts[task].Image], parts[task].Functions, lift, reports[task])
+                                  ? LiftFunctions(context, program.Images[parts[task].Image], functions[parts[task].Image], parts[task].Functions, lift, llvm::Triple(codegen.Triple), reports[task])
                                   : LiftTables(context, program, functions, lift);
                 Optimize(*module, codegen);
                 if (!options.IrPrefix.empty()) WriteIr(*module, options.IrPrefix + "." + std::to_string(task) + ".ll");

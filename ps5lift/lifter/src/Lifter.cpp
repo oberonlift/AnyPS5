@@ -6,6 +6,8 @@
 #include <llvm/IR/DerivedTypes.h>
 #include <llvm/IR/IRBuilder.h>
 #include <llvm/IR/Intrinsics.h>
+#include <llvm/IR/IntrinsicsAArch64.h>
+#include <llvm/IR/IntrinsicsX86.h>
 #include <llvm/IR/MDBuilder.h>
 #include <llvm/IR/Verifier.h>
 #include <llvm/Support/raw_ostream.h>
@@ -130,8 +132,11 @@ std::unique_ptr<llvm::Module> Verified(std::unique_ptr<llvm::Module> module) {
 
 class ModuleLifter {
 public:
-    ModuleLifter(llvm::LLVMContext& context, const GuestImage& image, const std::map<std::uint64_t, GuestFunction>& functions, const LiftOptions& options, LiftReport& report)
-        : _context(context), _image(image), _functions(functions), _options(options), _report(report), _module(std::make_unique<llvm::Module>("ps5lift", context)) {
+    ModuleLifter(llvm::LLVMContext& context, const GuestImage& image, const std::map<std::uint64_t, GuestFunction>& functions, const LiftOptions& options, const llvm::Triple& target,
+                 LiftReport& report)
+        : _context(context), _image(image), _functions(functions), _options(options), _target(target), _report(report), _module(std::make_unique<llvm::Module>("ps5lift", context)) {
+        if (!_target.isAArch64() && _target.getArch() != llvm::Triple::x86_64) throw std::runtime_error("ps5lift cannot lift for " + _target.str());
+        _module->setTargetTriple(_target.str());
         llvm::MDBuilder metadata(_context);
         auto* root = metadata.createTBAARoot("ps5lift");
         auto* stateType = metadata.createTBAAScalarTypeNode("state", root);
@@ -167,6 +172,7 @@ public:
     llvm::PointerType* Pointer() const { return _pointer; }
     llvm::FunctionType* GuestType() const { return _guestType; }
     const LiftOptions& Options() const { return _options; }
+    const llvm::Triple& Target() const { return _target; }
 
     std::string ImportName(const std::string& name) const { return Ps5Lift::ImportName(_options, name); }
     LiftReport& Report() { return _report; }
@@ -178,6 +184,7 @@ private:
     const GuestImage& _image;
     const std::map<std::uint64_t, GuestFunction>& _functions;
     const LiftOptions& _options;
+    const llvm::Triple _target;
     LiftReport& _report;
     std::unique_ptr<llvm::Module> _module;
     llvm::PointerType* _pointer = nullptr;
@@ -1470,6 +1477,86 @@ private:
         auto* clamped = _builder.CreateBinaryIntrinsic(llvm::Intrinsic::smax, wide, llvm::ConstantInt::get(type, low));
         clamped = _builder.CreateBinaryIntrinsic(llvm::Intrinsic::smin, clamped, llvm::ConstantInt::get(type, high));
         return _builder.CreateTrunc(clamped, llvm::FixedVectorType::get(Int(element), llvm::cast<llvm::FixedVectorType>(type)->getNumElements()));
+    }
+
+    // AES-NI and PCLMULQDQ have no target-independent form in LLVM, so they become the target's own instructions: on
+    // aarch64 the crypto extension's AESE, AESD, AESMC, AESIMC and PMULL. AESE and AESD add the round key before
+    // substituting bytes where x86 adds it after mixing columns, so they take a zero key and the round key follows.
+    bool EmitCrypto(const ZydisMnemonic mnemonic) {
+        switch (mnemonic) {
+        case ZYDIS_MNEMONIC_AESENC: case ZYDIS_MNEMONIC_VAESENC: case ZYDIS_MNEMONIC_AESENCLAST: case ZYDIS_MNEMONIC_VAESENCLAST:
+        case ZYDIS_MNEMONIC_AESDEC: case ZYDIS_MNEMONIC_VAESDEC: case ZYDIS_MNEMONIC_AESDECLAST: case ZYDIS_MNEMONIC_VAESDECLAST:
+        case ZYDIS_MNEMONIC_AESIMC: case ZYDIS_MNEMONIC_VAESIMC: case ZYDIS_MNEMONIC_AESKEYGENASSIST: case ZYDIS_MNEMONIC_VAESKEYGENASSIST:
+        case ZYDIS_MNEMONIC_PCLMULQDQ: case ZYDIS_MNEMONIC_VPCLMULQDQ:
+            break;
+        default:
+            return false;
+        }
+        if (Bits(0) != 128) throw UnsupportedInstruction("VAES and VPCLMULQDQ on 256-bit registers");
+        const bool arm = _module.Target().isAArch64();
+        auto* zero = llvm::Constant::getNullValue(llvm::FixedVectorType::get(Int(8), 16));
+        const auto bytes = [&](llvm::Value* value) { return AsVector(value, 8); };
+        const auto quads = [&](llvm::Value* value) { return AsVector(value, 64); };
+        const auto intrinsic = [&](const llvm::Intrinsic::ID id, std::initializer_list<llvm::Value*> arguments) { return _builder.CreateIntrinsic(id, {}, arguments); };
+        llvm::Value* result = nullptr;
+        switch (mnemonic) {
+        case ZYDIS_MNEMONIC_AESIMC:
+        case ZYDIS_MNEMONIC_VAESIMC:
+            result = arm ? intrinsic(llvm::Intrinsic::aarch64_crypto_aesimc, {bytes(ReadAs(1, 128))}) : intrinsic(llvm::Intrinsic::x86_aesni_aesimc, {quads(ReadAs(1, 128))});
+            break;
+        case ZYDIS_MNEMONIC_AESKEYGENASSIST:
+        case ZYDIS_MNEMONIC_VAESKEYGENASSIST: {
+            auto* source = ReadAs(1, 128);
+            const auto constant = Immediate(2);
+            if (!arm) {
+                result = intrinsic(llvm::Intrinsic::x86_aesni_aeskeygenassist, {quads(source), _builder.getInt8(static_cast<std::uint8_t>(constant))});
+                break;
+            }
+            // AESE shifts rows before it substitutes bytes, so the source is shifted back first.
+            static constexpr int InverseShiftRows[16] = {0, 13, 10, 7, 4, 1, 14, 11, 8, 5, 2, 15, 12, 9, 6, 3};
+            auto* unshifted = _builder.CreateShuffleVector(bytes(source), bytes(source), InverseShiftRows);
+            auto* substituted = AsVector(AsInteger(intrinsic(llvm::Intrinsic::aarch64_crypto_aese, {unshifted, zero})), 32);
+            auto* words = _builder.CreateShuffleVector(substituted, substituted, {1, 1, 3, 3});
+            auto* rotated = _builder.CreateIntrinsic(llvm::Intrinsic::fshr, {words->getType()}, {words, words, Splat(words, _builder.getInt32(8))});
+            auto* round = _builder.CreateXor(rotated, Splat(words, _builder.getInt32(static_cast<std::uint32_t>(constant & 0xff))));
+            result = _builder.CreateShuffleVector(words, round, {0, 5, 2, 7});
+            break;
+        }
+        case ZYDIS_MNEMONIC_PCLMULQDQ:
+        case ZYDIS_MNEMONIC_VPCLMULQDQ: {
+            const int base = Base(3);
+            auto* a = quads(ReadAs(base, 128));
+            auto* b = quads(ReadAs(base + 1, 128));
+            const auto select = Immediate(base + 2);
+            if (!arm) {
+                result = intrinsic(llvm::Intrinsic::x86_pclmulqdq, {a, b, _builder.getInt8(static_cast<std::uint8_t>(select))});
+                break;
+            }
+            result = intrinsic(llvm::Intrinsic::aarch64_neon_pmull64, {_builder.CreateExtractElement(a, _builder.getInt64(select & 1)), _builder.CreateExtractElement(b, _builder.getInt64((select >> 4) & 1))});
+            break;
+        }
+        default: {
+            const int base = Base(2);
+            auto* state = ReadAs(base, 128);
+            auto* key = ReadAs(base + 1, 128);
+            if (!arm) {
+                const auto id = mnemonic == ZYDIS_MNEMONIC_AESENC || mnemonic == ZYDIS_MNEMONIC_VAESENC         ? llvm::Intrinsic::x86_aesni_aesenc
+                                : mnemonic == ZYDIS_MNEMONIC_AESENCLAST || mnemonic == ZYDIS_MNEMONIC_VAESENCLAST ? llvm::Intrinsic::x86_aesni_aesenclast
+                                : mnemonic == ZYDIS_MNEMONIC_AESDEC || mnemonic == ZYDIS_MNEMONIC_VAESDEC         ? llvm::Intrinsic::x86_aesni_aesdec
+                                                                                                                  : llvm::Intrinsic::x86_aesni_aesdeclast;
+                result = intrinsic(id, {quads(state), quads(key)});
+                break;
+            }
+            const bool encrypt = mnemonic == ZYDIS_MNEMONIC_AESENC || mnemonic == ZYDIS_MNEMONIC_VAESENC || mnemonic == ZYDIS_MNEMONIC_AESENCLAST || mnemonic == ZYDIS_MNEMONIC_VAESENCLAST;
+            const bool last = mnemonic == ZYDIS_MNEMONIC_AESENCLAST || mnemonic == ZYDIS_MNEMONIC_VAESENCLAST || mnemonic == ZYDIS_MNEMONIC_AESDECLAST || mnemonic == ZYDIS_MNEMONIC_VAESDECLAST;
+            auto* round = intrinsic(encrypt ? llvm::Intrinsic::aarch64_crypto_aese : llvm::Intrinsic::aarch64_crypto_aesd, {bytes(state), zero});
+            if (!last) round = intrinsic(encrypt ? llvm::Intrinsic::aarch64_crypto_aesmc : llvm::Intrinsic::aarch64_crypto_aesimc, {round});
+            result = _builder.CreateXor(round, bytes(key));
+            break;
+        }
+        }
+        Write(0, AsInteger(result));
+        return true;
     }
 
     bool EmitVector(const ZydisMnemonic mnemonic) {
@@ -2923,6 +3010,7 @@ private:
             return;
         default:
             if (EmitVector(mnemonic)) return;
+            if (EmitCrypto(mnemonic)) return;
             if (EmitFloat(mnemonic)) return;
             if (EmitX87(mnemonic)) return;
             throw UnsupportedInstruction("");
@@ -2937,8 +3025,8 @@ void ModuleLifter::LiftFunction(const GuestFunction& function) {
 }
 
 std::unique_ptr<llvm::Module> LiftFunctions(llvm::LLVMContext& context, const GuestImage& image, const std::map<std::uint64_t, GuestFunction>& functions, const std::span<const std::uint64_t> addresses,
-                                            const LiftOptions& options, LiftReport& report) {
-    return ModuleLifter(context, image, functions, options, report).LiftFunctions(addresses);
+                                            const LiftOptions& options, const llvm::Triple& target, LiftReport& report) {
+    return ModuleLifter(context, image, functions, options, target, report).LiftFunctions(addresses);
 }
 
 std::unique_ptr<llvm::Module> LiftTables(llvm::LLVMContext& context, const GuestProgram& program, const std::vector<std::map<std::uint64_t, GuestFunction>>& functions, const LiftOptions& options) {

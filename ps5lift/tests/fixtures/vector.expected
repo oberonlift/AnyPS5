@@ -105,3 +105,15 @@ mulhrs16x 2e316a300b1b7a30
 hadd16x 835cdd7f877e1a90
 hsub32x 0fb3ff31a2f0bf60
 sad8x f9fe506e88478f88
+aes128 encrypt vex 69c4e0d86a7b0430d8cdb78070b4c55a
+aes128 decrypt vex 00112233445566778899aabbccddeeff
+aes128 encrypt sse 69c4e0d86a7b0430d8cdb78070b4c55a
+aes128 decrypt sse 00112233445566778899aabbccddeeff
+clmul vex 00 1032547698badcfe08192a3b4c5d6e7f
+clmul vex 01 f010c8289878a040b0508868d838e000
+clmul vex 10 ffffffffffffff7fffffffffffffff7f
+clmul vex 11 a5449978dd3ce100a5449978dd3ce100
+clmul sse 00 1032547698badcfe08192a3b4c5d6e7f
+clmul sse 01 f010c8289878a040b0508868d838e000
+clmul sse 10 ffffffffffffff7fffffffffffffff7f
+clmul sse 11 a5449978dd3ce100a5449978dd3ce100

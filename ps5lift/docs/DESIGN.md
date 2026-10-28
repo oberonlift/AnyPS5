@@ -81,6 +81,10 @@ Native code cannot call a guest address. A bridge that receives a function point
 
 The runtime keeps each guest thread's state in a thread-local. A native thread that calls a thunk without one, such as a thread a native library started, gets a guest stack, a TLS block and a state on its first call, which is how a native `pthread_create` or a worker pool can run guest code.
 
+## Target instructions
+
+AES-NI and `pclmulqdq` have no target-independent LLVM form, so the lifter, which knows the target triple, emits the target's own instructions and code generation enables them (`aes` on aarch64, which LLVM ties to `PMULL`; `aes` and `pclmul` on x86-64). On aarch64 `aesenc` is `AESMC(AESE(state, 0)) ^ key`: `AESE` adds its key before it shifts rows and substitutes bytes, while x86 adds the round key after mixing columns, so it takes a zero key and the round key follows. `aesdec` is `AESIMC(AESD(state, 0)) ^ key`, the `last` forms drop the column mix, `aeskeygenassist` shifts its source's rows back before `AESE` so that only the S-box applies, and `pclmulqdq` is `PMULL` on the selected halves. The runtime stops at start on a host without AES and PMULL, since its `cpuid` reports them.
+
 ## Memory ordering
 
 x86 is TSO; the GB10 cores have no TSO mode. With `--memory tso` every guest load except an `rsp`-based one is an acquire load and every store a release store. On a CPU with FEAT_LRCPC (`neoverse-v2`, the GB10) acquire loads become `LDAPR`, which is cheaper than `LDAR`. Both fault on an address that is not naturally aligned, which the GB10 relaxes only within 16 bytes, while x86 code may use any address, so each ordered access wider than a byte tests its alignment: an unaligned one is a plain access followed by `DMB ISHLD` for a load and preceded by `DMB ISH` for a store, which orders it as TSO requires. Locked instructions, `xchg` with memory, `xadd` and `cmpxchg` are sequentially consistent LLVM atomics, lowered to LSE. `mfence` is a full fence. `clflush` and `clflushopt` become `DC CIVAC` and `clwb` becomes `DC CVAC`, through the runtime, so a line the guest writes back for an observer that does not snoop its cache still reaches memory.
