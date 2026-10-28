@@ -56,7 +56,7 @@ def build(triple, output_directory, clang, clangxx, jobs):
         if stale or not library.exists() or not main_library.exists():
             with concurrent.futures.ThreadPoolExecutor(jobs) as pool:
                 list(pool.map(lambda unit: compile_one(*unit), stale))
-            archiver = os.environ.get("AR", "llvm-ar")
+            archiver = subprocess.run([clang, "--print-prog-name=llvm-ar"], capture_output=True, text=True, check=True).stdout.strip()
             for archive, members in ((library, units[:-1]), (main_library, units[-1:])):
                 temporary = archive.with_suffix(".a.tmp")
                 temporary.unlink(missing_ok=True)

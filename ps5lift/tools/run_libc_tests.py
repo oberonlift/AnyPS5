@@ -45,8 +45,8 @@ def compile_all(clangxx, units):
 def main():
     parser = argparse.ArgumentParser(description="Run upstream's libc tests against AnyPS5's libraries built for a lifted guest")
     parser.add_argument("--anyps5-build", required=True, help="AnyPS5's build directory, configured with ANYPS5_GUEST_LIFTED and BUILD_TESTING")
-    parser.add_argument("--clang", default="clang")
-    parser.add_argument("--clangxx", default="clang++")
+    parser.add_argument("--clang", required=True)
+    parser.add_argument("--clangxx", required=True)
     parser.add_argument("--build", default=str(ROOT / "build"))
     parser.add_argument("--test", action="append", choices=sorted(TESTS))
     args = parser.parse_args()
