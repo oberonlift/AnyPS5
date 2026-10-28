@@ -55,6 +55,11 @@ int VectorIndex(const ZydisRegister reg) {
     return -1;
 }
 
+int MmxIndex(const ZydisRegister reg) {
+    if (reg >= ZYDIS_REGISTER_MM0 && reg <= ZYDIS_REGISTER_MM7) return reg - ZYDIS_REGISTER_MM0;
+    return -1;
+}
+
 bool IsHighByte(const ZydisRegister reg) {
     return reg == ZYDIS_REGISTER_AH || reg == ZYDIS_REGISTER_CH || reg == ZYDIS_REGISTER_DH || reg == ZYDIS_REGISTER_BH;
 }
@@ -433,8 +438,26 @@ private:
         SetVector(index, _builder.CreateOr(_builder.CreateAnd(Vector(index), keep), wide));
     }
 
+    std::size_t MmxOffset(const int index) const {
+        return offsetof(Ps5LiftState, X87Registers) + 16 * static_cast<std::size_t>(index);
+    }
+
+    bool UsesMmx() const {
+        for (std::uint8_t i = 0; i < _instruction->Info.operand_count; ++i) {
+            if (Operand(i).type == ZYDIS_OPERAND_TYPE_REGISTER && MmxIndex(Operand(i).reg.value) >= 0) return true;
+        }
+        return false;
+    }
+
+    void EnterMmx() {
+        constexpr std::uint16_t Top = 7 << 11;
+        StateStore(_builder.CreateAnd(StateLoad(_builder.getInt16Ty(), offsetof(Ps5LiftState, X87Status)), _builder.getInt16(static_cast<std::uint16_t>(~Top))), offsetof(Ps5LiftState, X87Status));
+        StateStore(_builder.getInt8(0xff), offsetof(Ps5LiftState, X87Valid));
+    }
+
     llvm::Value* ReadRegister(const ZydisRegister reg) {
         if (reg == ZYDIS_REGISTER_RIP) return _builder.getInt64(_instruction->Next());
+        if (const auto mmx = MmxIndex(reg); mmx >= 0) return StateLoad(I64(), MmxOffset(mmx));
         const auto vector = VectorIndex(reg);
         if (vector >= 0) return _builder.CreateTrunc(Vector(vector), Int(ZydisRegisterGetWidth(ZYDIS_MACHINE_MODE_LONG_64, reg)));
         const auto index = GprIndex(reg);
@@ -447,6 +470,11 @@ private:
     }
 
     void WriteRegister(const ZydisRegister reg, llvm::Value* value) {
+        if (const auto mmx = MmxIndex(reg); mmx >= 0) {
+            StateStore(_builder.CreateZExtOrTrunc(value, I64()), MmxOffset(mmx));
+            StateStore(_builder.getInt16(0xffff), MmxOffset(mmx) + 8);
+            return;
+        }
         const auto vector = VectorIndex(reg);
         if (vector >= 0) {
             const bool vex = _instruction->Info.encoding == ZYDIS_INSTRUCTION_ENCODING_VEX;
@@ -1149,6 +1177,7 @@ private:
         using K = VectorKind;
 #define PS5LIFT_BOTH(name) case ZYDIS_MNEMONIC_##name: case ZYDIS_MNEMONIC_V##name
         switch (mnemonic) {
+        case ZYDIS_MNEMONIC_PSHUFW: return VectorSpec{K::ShuffleDwords, 16};
         PS5LIFT_BOTH(PADDB): return VectorSpec{K::Add, 8};
         PS5LIFT_BOTH(PADDW): return VectorSpec{K::Add, 16};
         PS5LIFT_BOTH(PADDD): return VectorSpec{K::Add, 32};
@@ -1373,9 +1402,10 @@ private:
         }
 
         const auto width = Bits(0);
-        const unsigned lanes = width / 128;
+        const unsigned laneBits = std::min(width, 128u);
+        const unsigned lanes = width / laneBits;
         const unsigned count = width / element;
-        const unsigned perLane = 128 / element;
+        const unsigned perLane = laneBits / element;
         llvm::Value* result = nullptr;
 
         switch (kind) {
@@ -1567,7 +1597,7 @@ private:
                 result = llvm::Constant::getNullValue(va->getType());
                 for (unsigned i = 0; i < count; ++i) {
                     auto* selector = _builder.CreateExtractElement(vb, _builder.getInt64(i));
-                    auto* index = _builder.CreateAdd(_builder.CreateZExt(_builder.CreateAnd(selector, 15), I64()), _builder.getInt64((i / 16) * 16));
+                    auto* index = _builder.CreateAdd(_builder.CreateZExt(_builder.CreateAnd(selector, perLane - 1), I64()), _builder.getInt64((i / perLane) * perLane));
                     auto* picked = _builder.CreateExtractElement(va, index);
                     auto* value = _builder.CreateSelect(_builder.CreateICmpSLT(selector, _builder.getInt8(0)), _builder.getInt8(0), picked);
                     result = _builder.CreateInsertElement(result, value, _builder.getInt64(i));
@@ -2421,6 +2451,7 @@ private:
     }
 
     void EmitSemantics(const ZydisMnemonic mnemonic) {
+        if (UsesMmx()) EnterMmx();
         if (IsConditionalJump(mnemonic)) {
             const auto target = *DirectTarget(*_instruction);
             llvm::Value* condition = nullptr;
@@ -2446,6 +2477,9 @@ private:
         case ZYDIS_MNEMONIC_PREFETCHT1:
         case ZYDIS_MNEMONIC_PREFETCHT2:
         case ZYDIS_MNEMONIC_PREFETCHNTA:
+            return;
+        case ZYDIS_MNEMONIC_EMMS:
+            StateStore(_builder.getInt8(0), offsetof(Ps5LiftState, X87Valid));
             return;
         case ZYDIS_MNEMONIC_MFENCE:
             _builder.CreateFence(llvm::AtomicOrdering::SequentiallyConsistent);
@@ -2644,7 +2678,7 @@ private:
         case ZYDIS_MNEMONIC_MOVSS: case ZYDIS_MNEMONIC_VMOVSS: case ZYDIS_MNEMONIC_VMOVSD:
         case ZYDIS_MNEMONIC_VMOVAPS: case ZYDIS_MNEMONIC_VMOVUPS: case ZYDIS_MNEMONIC_VMOVAPD: case ZYDIS_MNEMONIC_VMOVUPD:
         case ZYDIS_MNEMONIC_VMOVDQA: case ZYDIS_MNEMONIC_VMOVDQU: case ZYDIS_MNEMONIC_VMOVQ: case ZYDIS_MNEMONIC_VMOVD:
-        case ZYDIS_MNEMONIC_MOVNTDQ: case ZYDIS_MNEMONIC_VMOVNTDQ: case ZYDIS_MNEMONIC_MOVNTPS: case ZYDIS_MNEMONIC_VMOVNTPS:
+        case ZYDIS_MNEMONIC_MOVNTDQ: case ZYDIS_MNEMONIC_VMOVNTDQ: case ZYDIS_MNEMONIC_MOVNTPS: case ZYDIS_MNEMONIC_VMOVNTPS: case ZYDIS_MNEMONIC_MOVNTQ:
         case ZYDIS_MNEMONIC_MOVNTDQA: case ZYDIS_MNEMONIC_VMOVNTDQA: case ZYDIS_MNEMONIC_LDDQU: case ZYDIS_MNEMONIC_VLDDQU:
             if (_instruction->Info.operand_count_visible == 3 && (mnemonic == ZYDIS_MNEMONIC_VMOVSS || mnemonic == ZYDIS_MNEMONIC_VMOVSD)) {
                 const auto element = mnemonic == ZYDIS_MNEMONIC_VMOVSS ? 32u : 64u;
