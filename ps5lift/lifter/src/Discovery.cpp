@@ -32,15 +32,44 @@ bool EndsFlow(const Instruction& instruction) {
     }
 }
 
-const Instruction* Previous(const GuestFunction& function, const std::uint64_t address) {
-    auto found = function.Instructions.find(address);
-    if (found == function.Instructions.begin() || found == function.Instructions.end()) return nullptr;
-    --found;
-    return found->second.Next() == address ? &found->second : nullptr;
+using Predecessors = std::map<std::uint64_t, std::set<std::uint64_t>>;
+
+Predecessors PredecessorsOf(const GuestFunction& function) {
+    Predecessors predecessors;
+    for (const auto& [address, instruction] : function.Instructions) {
+        const auto mnemonic = instruction.Info.mnemonic;
+        if (!EndsFlow(instruction)) predecessors[instruction.Next()].insert(address);
+        if (const auto target = DirectTarget(instruction); target && (mnemonic == ZYDIS_MNEMONIC_JMP || IsConditionalJump(mnemonic))) predecessors[*target].insert(address);
+    }
+    for (const auto& [jump, targets] : function.JumpTables) {
+        for (const auto target : targets) predecessors[target].insert(jump);
+    }
+    return predecessors;
+}
+
+const Instruction* UniquePredecessor(const GuestFunction& function, const Predecessors& predecessors, const std::uint64_t address) {
+    const auto found = predecessors.find(address);
+    if (address == function.Entry || found == predecessors.end() || found->second.size() != 1) return nullptr;
+    return &function.Instructions.at(*found->second.begin());
 }
 
 ZydisRegister Enclosing(const ZydisRegister reg) {
     return ZydisRegisterGetLargestEnclosing(ZYDIS_MACHINE_MODE_LONG_64, reg);
+}
+
+bool ClobberedByCall(const ZydisRegister reg) {
+    switch (Enclosing(reg)) {
+    case ZYDIS_REGISTER_RBX:
+    case ZYDIS_REGISTER_RBP:
+    case ZYDIS_REGISTER_RSP:
+    case ZYDIS_REGISTER_R12:
+    case ZYDIS_REGISTER_R13:
+    case ZYDIS_REGISTER_R14:
+    case ZYDIS_REGISTER_R15:
+        return false;
+    default:
+        return true;
+    }
 }
 
 bool WritesRegister(const Instruction& instruction, const ZydisRegister reg) {
@@ -67,14 +96,86 @@ bool CopiesRegister(const Instruction& instruction, const ZydisRegister to, cons
            Enclosing(left.reg.value) == Enclosing(to) && Enclosing(right.reg.value) == Enclosing(from);
 }
 
-std::optional<std::uint64_t> TableBound(const GuestFunction& function, const std::uint64_t jump, ZydisRegister index) {
+// The instructions that set a register on the paths to an address, if one does on every path. A path from the entry,
+// from code without a known predecessor, or through a call that need not preserve the register has none.
+std::optional<std::vector<const Instruction*>> ReachingDefinitions(const GuestFunction& function, const Predecessors& predecessors, const std::uint64_t address,
+                                                                   const ZydisRegister reg) {
+    std::vector<const Instruction*> definitions;
+    std::set<std::uint64_t> visited{address};
+    std::vector<std::uint64_t> pending{address};
+    while (!pending.empty()) {
+        const auto current = pending.back();
+        pending.pop_back();
+        const auto found = predecessors.find(current);
+        if (current == function.Entry || found == predecessors.end()) return std::nullopt;
+        for (const auto predecessor : found->second) {
+            if (!visited.insert(predecessor).second) continue;
+            const auto& instruction = function.Instructions.at(predecessor);
+            if (WritesRegister(instruction, reg)) {
+                definitions.push_back(&instruction);
+            } else if (instruction.Info.mnemonic == ZYDIS_MNEMONIC_CALL && ClobberedByCall(reg)) {
+                return std::nullopt;
+            } else {
+                pending.push_back(predecessor);
+            }
+        }
+    }
+    return definitions;
+}
+
+const Instruction* SingleDefinition(const GuestFunction& function, const Predecessors& predecessors, const std::uint64_t address, const ZydisRegister reg) {
+    const auto definitions = ReachingDefinitions(function, predecessors, address, reg);
+    return definitions && definitions->size() == 1 ? definitions->front() : nullptr;
+}
+
+std::optional<std::uint64_t> RipRelativeAddress(const Instruction& instruction) {
+    const auto& source = instruction.Operands[1];
+    if (instruction.Info.mnemonic != ZYDIS_MNEMONIC_LEA || source.mem.base != ZYDIS_REGISTER_RIP || source.mem.index != ZYDIS_REGISTER_NONE) return std::nullopt;
+    return instruction.Next() + static_cast<std::uint64_t>(source.mem.disp.value);
+}
+
+std::optional<ZydisRegister> CopiedRegister(const Instruction& instruction) {
+    const auto& left = instruction.Operands[0];
+    const auto& right = instruction.Operands[1];
+    if (instruction.Info.mnemonic != ZYDIS_MNEMONIC_MOV || left.type != ZYDIS_OPERAND_TYPE_REGISTER || right.type != ZYDIS_OPERAND_TYPE_REGISTER || left.size != 64) return std::nullopt;
+    return right.reg.value;
+}
+
+// The address a register holds at an instruction, if every definition that reaches it loads the same RIP-relative
+// address or copies a register that does: the compiler may set the register again, or keep it in another, on a path
+// that reuses it.
+std::optional<std::uint64_t> RipRelativeValue(const GuestFunction& function, const Predecessors& predecessors, const std::uint64_t address, const ZydisRegister reg) {
+    std::optional<std::uint64_t> value;
+    std::set<std::pair<std::uint64_t, ZydisRegister>> visited;
+    std::vector<std::pair<std::uint64_t, ZydisRegister>> pending{{address, reg}};
+    while (!pending.empty()) {
+        const auto [at, current] = pending.back();
+        pending.pop_back();
+        if (!visited.emplace(at, current).second) continue;
+        const auto definitions = ReachingDefinitions(function, predecessors, at, current);
+        if (!definitions || definitions->empty()) return std::nullopt;
+        for (const auto* definition : *definitions) {
+            if (const auto loaded = RipRelativeAddress(*definition)) {
+                if (value && *value != *loaded) return std::nullopt;
+                value = loaded;
+            } else if (const auto source = CopiedRegister(*definition)) {
+                pending.emplace_back(definition->Address, *source);
+            } else {
+                return std::nullopt;
+            }
+        }
+    }
+    return value;
+}
+
+std::optional<std::uint64_t> TableBound(const GuestFunction& function, const Predecessors& predecessors, const std::uint64_t jump, ZydisRegister index) {
     struct Compared {
         ZydisRegister Register;
         std::uint64_t Bound;
     };
     std::optional<Compared> compared;
-    const auto* instruction = Previous(function, jump);
-    for (int depth = 0; instruction != nullptr && depth < 12; ++depth, instruction = Previous(function, instruction->Address)) {
+    const auto* instruction = UniquePredecessor(function, predecessors, jump);
+    for (int depth = 0; instruction != nullptr && depth < 12; ++depth, instruction = UniquePredecessor(function, predecessors, instruction->Address)) {
         const auto mnemonic = instruction->Info.mnemonic;
         const auto& left = instruction->Operands[0];
         if (mnemonic == ZYDIS_MNEMONIC_CMP || mnemonic == ZYDIS_MNEMONIC_SUB) {
@@ -102,31 +203,27 @@ struct TableShape {
     std::uint64_t BoundFrom;
 };
 
-std::optional<TableShape> MatchTable(const GuestFunction& function, const Instruction& jump) {
+std::optional<TableShape> MatchTable(const GuestFunction& function, const Predecessors& predecessors, const Instruction& jump) {
     const auto& target = jump.Operands[0];
     const auto absolute = [](const ZydisDecodedOperand& operand) {
         return operand.type == ZYDIS_OPERAND_TYPE_MEMORY && operand.mem.base == ZYDIS_REGISTER_NONE && operand.mem.index != ZYDIS_REGISTER_NONE && operand.mem.scale == 8;
     };
     if (absolute(target)) return TableShape{static_cast<std::uint64_t>(target.mem.disp.value), 8, target.mem.index, jump.Address};
     if (target.type != ZYDIS_OPERAND_TYPE_REGISTER) return std::nullopt;
-    const auto* previous = Previous(function, jump.Address);
-    if (previous == nullptr || !WritesRegister(*previous, target.reg.value)) return std::nullopt;
+    // The scheduler may move other instructions between the load of an entry, the addition of the base and the jump.
+    const auto* previous = SingleDefinition(function, predecessors, jump.Address, target.reg.value);
+    if (previous == nullptr) return std::nullopt;
     if (previous->Info.mnemonic == ZYDIS_MNEMONIC_MOV && absolute(previous->Operands[1]))
         return TableShape{static_cast<std::uint64_t>(previous->Operands[1].mem.disp.value), 8, previous->Operands[1].mem.index, previous->Address};
     if (previous->Info.mnemonic != ZYDIS_MNEMONIC_ADD || previous->Operands[1].type != ZYDIS_OPERAND_TYPE_REGISTER) return std::nullopt;
     const auto base = previous->Operands[1].reg.value;
-    const auto* load = Previous(function, previous->Address);
-    if (load == nullptr || load->Info.mnemonic != ZYDIS_MNEMONIC_MOVSXD || !WritesRegister(*load, target.reg.value)) return std::nullopt;
+    const auto* load = SingleDefinition(function, predecessors, previous->Address, target.reg.value);
+    if (load == nullptr || load->Info.mnemonic != ZYDIS_MNEMONIC_MOVSXD) return std::nullopt;
     const auto& entry = load->Operands[1];
     if (entry.type != ZYDIS_OPERAND_TYPE_MEMORY || entry.mem.base != base || entry.mem.scale != 4 || entry.mem.disp.value != 0) return std::nullopt;
-    for (const auto* instruction = Previous(function, load->Address); instruction != nullptr; instruction = Previous(function, instruction->Address)) {
-        if (!WritesRegister(*instruction, base)) continue;
-        const auto& source = instruction->Operands[1];
-        if (instruction->Info.mnemonic == ZYDIS_MNEMONIC_LEA && source.mem.base == ZYDIS_REGISTER_RIP && source.mem.index == ZYDIS_REGISTER_NONE)
-            return TableShape{instruction->Next() + static_cast<std::uint64_t>(source.mem.disp.value), 4, entry.mem.index, load->Address};
-        return std::nullopt;
-    }
-    return std::nullopt;
+    const auto table = RipRelativeValue(function, predecessors, load->Address, base);
+    if (!table || RipRelativeValue(function, predecessors, previous->Address, base) != table) return std::nullopt;
+    return TableShape{*table, 4, entry.mem.index, load->Address};
 }
 
 std::optional<std::uint64_t> MemoryReference(const Instruction& instruction, const ZydisDecodedOperand& operand) {
@@ -162,11 +259,12 @@ struct RecoveredTable {
     bool Guarded = false;
 };
 
-RecoveredTable RecoverJumpTable(const GuestImage& image, const GuestFunction& function, const Instruction& jump, const std::uint64_t limit, const std::set<std::uint64_t>& references) {
+RecoveredTable RecoverJumpTable(const GuestImage& image, const GuestFunction& function, const Predecessors& predecessors, const Instruction& jump, const std::uint64_t limit,
+                                const std::set<std::uint64_t>& references) {
     constexpr std::uint64_t MaximumEntries = 4096;
-    const auto shape = MatchTable(function, jump);
+    const auto shape = MatchTable(function, predecessors, jump);
     if (!shape) return {};
-    const auto bound = TableBound(function, shape->BoundFrom, shape->Index);
+    const auto bound = TableBound(function, predecessors, shape->BoundFrom, shape->Index);
     if (bound && *bound > MaximumEntries) return {};
     auto count = bound.value_or(MaximumEntries);
     if (const auto next = references.upper_bound(shape->Address); !bound && next != references.end()) count = std::min(count, (*next - shape->Address) / shape->EntrySize);
@@ -232,45 +330,63 @@ GuestFunction DiscoverFunction(const GuestImage& image, const Decoder& decoder, 
             pending.emplace_back(pad, entry);
         }
     }
-    while (!pending.empty()) {
-        const auto [start, from] = pending.front();
-        pending.pop_front();
-        auto address = start;
-        while (!function.Instructions.contains(address)) {
-            const auto instruction = DecodeReached(image, decoder, entry, address, start, from);
-            function.Instructions.emplace(address, instruction);
-            const auto target = DirectTarget(instruction);
-            const auto mnemonic = instruction.Info.mnemonic;
-            if (mnemonic == ZYDIS_MNEMONIC_CALL && target) callTargets.insert(*target);
-            if (mnemonic == ZYDIS_MNEMONIC_CALL) {
-                if (const auto import = CalledImport(image, decoder, instruction); import && ReturnsTwice(*import)) {
-                    function.ResumePoints.insert(instruction.Next());
-                    function.Leaders.insert(instruction.Next());
+    const auto next = starts.upper_bound(entry);
+    const auto limit = next == starts.end() ? ~std::uint64_t{0} : *next;
+    std::vector<std::uint64_t> indirectJumps;
+    while (true) {
+        while (!pending.empty()) {
+            const auto [start, from] = pending.front();
+            pending.pop_front();
+            auto address = start;
+            while (!function.Instructions.contains(address)) {
+                const auto instruction = DecodeReached(image, decoder, entry, address, start, from);
+                function.Instructions.emplace(address, instruction);
+                const auto target = DirectTarget(instruction);
+                const auto mnemonic = instruction.Info.mnemonic;
+                if (mnemonic == ZYDIS_MNEMONIC_CALL && target) callTargets.insert(*target);
+                if (mnemonic == ZYDIS_MNEMONIC_CALL) {
+                    if (const auto import = CalledImport(image, decoder, instruction); import && ReturnsTwice(*import)) {
+                        function.ResumePoints.insert(instruction.Next());
+                        function.Leaders.insert(instruction.Next());
+                    }
                 }
-            }
-            if (mnemonic == ZYDIS_MNEMONIC_JMP && !target && ImportTarget(image, instruction)) break;
-            if ((mnemonic == ZYDIS_MNEMONIC_JMP || IsConditionalJump(mnemonic)) && target && !(starts.contains(*target) && *target != entry)) {
-                function.Leaders.insert(*target);
-                pending.emplace_back(*target, address);
-            }
-            if (IsConditionalJump(mnemonic)) function.Leaders.insert(instruction.Next());
-            if (mnemonic == ZYDIS_MNEMONIC_JMP && !target && !ImportTarget(image, instruction)) {
-                const auto next = starts.upper_bound(entry);
-                auto table = RecoverJumpTable(image, function, instruction, next == starts.end() ? ~std::uint64_t{0} : *next, references);
-                for (const auto destination : table.Targets) {
-                    if (starts.contains(destination) && destination != entry) continue;
-                    function.Leaders.insert(destination);
-                    pending.emplace_back(destination, address);
+                if (mnemonic == ZYDIS_MNEMONIC_JMP && !target && ImportTarget(image, instruction)) break;
+                if ((mnemonic == ZYDIS_MNEMONIC_JMP || IsConditionalJump(mnemonic)) && target && !(starts.contains(*target) && *target != entry)) {
+                    function.Leaders.insert(*target);
+                    pending.emplace_back(*target, address);
                 }
-                if (!table.Targets.empty()) {
-                    function.JumpTables.emplace(address, std::move(table.Targets));
-                    if (!table.Guarded) function.UnguardedJumpTables.insert(address);
-                }
+                if (IsConditionalJump(mnemonic)) function.Leaders.insert(instruction.Next());
+                if (mnemonic == ZYDIS_MNEMONIC_JMP && !target) indirectJumps.push_back(address);
+                if (EndsFlow(instruction)) break;
+                address = instruction.Next();
+                if (starts.contains(address) && address != entry) break;
             }
-            if (EndsFlow(instruction)) break;
-            address = instruction.Next();
-            if (starts.contains(address) && address != entry) break;
         }
+        // A table's base or guard can lie on a path that only another table leads to, so tables are recovered once the
+        // code reached without them is known, and again after each round of code they reveal.
+        const auto predecessors = PredecessorsOf(function);
+        std::vector<std::uint64_t> unresolved;
+        for (const auto jump : indirectJumps) {
+            auto table = RecoverJumpTable(image, function, predecessors, function.Instructions.at(jump), limit, references);
+            if (table.Targets.empty()) {
+                unresolved.push_back(jump);
+                continue;
+            }
+            for (const auto destination : table.Targets) {
+                if (starts.contains(destination) && destination != entry) continue;
+                function.Leaders.insert(destination);
+                pending.emplace_back(destination, jump);
+            }
+            function.JumpTables.emplace(jump, std::move(table.Targets));
+            if (!table.Guarded) function.UnguardedJumpTables.insert(jump);
+        }
+        if (unresolved.size() == indirectJumps.size()) break;
+        indirectJumps = std::move(unresolved);
+    }
+    const auto predecessors = PredecessorsOf(function);
+    for (const auto& [jump, targets] : function.JumpTables) {
+        if (RecoverJumpTable(image, function, predecessors, function.Instructions.at(jump), limit, references).Targets != targets)
+            throw std::runtime_error("The jump table of the jump at 0x" + Hex(jump) + " in the function at 0x" + Hex(entry) + " reads differently once the code it leads to is known");
     }
     return function;
 }
