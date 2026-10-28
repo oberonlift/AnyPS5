@@ -11,6 +11,7 @@
 #include "prx/libc/include/general/AsmMacros.hpp"
 #include "prx/libkernel/KernelErrors.hpp"
 #include "prx/libc/include/CpuTopology.hpp"
+#include "prx/libc/include/GuestCpu.hpp"
 #include "prx/libc/include/GuestAllocations.hpp"
 #include "prx/libkernel/DirectMemory/DirectMemory.hpp"
 #include <algorithm>
@@ -775,6 +776,11 @@ void ThreadCancel::EndWait() {
 
 extern "C" void* APS5_VABI Aps5CallGuestEntry_nid_no_patch(PthreadEntry entry, void* arg);
 
+#ifdef ANYPS5_GUEST_LIFTED
+extern "C" void* APS5_VABI Aps5CallGuestEntry_nid_no_patch(PthreadEntry entry, void* arg) {
+    return reinterpret_cast<void*>(GuestCpuCall_nid_no_patch(reinterpret_cast<std::uint64_t>(entry), reinterpret_cast<std::uint64_t>(arg), 0));
+}
+#else
 asm(".text\n"
     APS5_ASM_FUNCTION("Aps5CallGuestEntry_nid_no_patch") R"(
     .cfi_startproc
@@ -797,6 +803,7 @@ asm(".text\n"
     ret
     .cfi_endproc
 )" APS5_ASM_FUNCTION_END("Aps5CallGuestEntry_nid_no_patch"));
+#endif
 
 static void RunThread(std::unique_ptr<ThreadArgs> args) {
     APS5_LOG_OUT("RunThread entry=0x%llx arg=%p self=%p", static_cast<unsigned long long>(reinterpret_cast<std::uintptr_t>(args->entry)), args->arg, static_cast<void*>(args->self));
