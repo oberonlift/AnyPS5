@@ -226,6 +226,12 @@ __attribute__((noinline)) static void zen2_integer(void) {
     u32 word;
     __asm__("movl 4(%k1), %0" : "=r"(word) : "r"((u64)words));
     line_hex("load through 32-bit address", word);
+    static _Alignas(64) u64 line_data[16];
+    for (int i = 0; i < 16; ++i) line_data[i] = 0x5a5a5a5a00000000UL + (u64)i;
+    __asm__ volatile("clflush (%0)\n\tclflushopt 64(%0)\n\tclwb 8(%0)\n\tmfence" : : "r"(line_data) : "memory");
+    u64 flushed = 0;
+    for (int i = 0; i < 16; ++i) flushed += line_data[i];
+    line_hex("after cache line flushes", flushed);
 }
 
 static volatile u64 opaque_misalignment = 13;

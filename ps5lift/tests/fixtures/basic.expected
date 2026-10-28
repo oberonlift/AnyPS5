@@ -54,6 +54,7 @@ adox carried = 8
 adcx adox flags = 0
 lea 32-bit wraps = 0x0000000000000008
 load through 32-bit address = 0x0000000022222222
+after cache line flushes = 0xa5a5a5a000000078
 unaligned load 64 = 0x14131211100f0e0d
 unaligned load 32 = 0x0000000011100f0e
 unaligned load 16 = 0x000000000000100f

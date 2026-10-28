@@ -181,6 +181,8 @@ uint64_t ps5lift_thread_join(uint64_t handle);
 Ps5LiftState* ps5lift_current_state(void);
 void ps5lift_run_main(void);
 uint64_t ps5lift_read_tsc(void);
+void ps5lift_flush_cache_line(uint64_t address);
+void ps5lift_write_back_cache_line(uint64_t address);
 void ps5lift_cpuid(Ps5LiftState* state, uint64_t address);
 uint64_t ps5lift_xgetbv(uint64_t address, uint32_t index);
 __attribute__((noreturn, format(printf, 1, 2))) void ps5lift_fail(const char* format, ...);
