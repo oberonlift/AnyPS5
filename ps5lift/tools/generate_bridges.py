@@ -11,8 +11,9 @@ from pathlib import Path
 
 import clang.cindex as cindex
 
-ROOT = Path(__file__).resolve().parent.parent
-ANYPS5_LIBS = ROOT / "3rdparty" / "anyps5" / "core" / "libs"
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from anyps5_build import Build, compiler_arguments
+
 NID_SUFFIX = bytes([0x51, 0x8D, 0x64, 0xA6, 0x35, 0xDE, 0xD8, 0xC1, 0xE6, 0xB0, 0x39, 0xB1, 0xC3, 0xE5, 0x52, 0x30])
 NID_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+-"
 POSTFIX = "_nid_postfix"
@@ -83,7 +84,8 @@ def classify(type_, role):
     if kind in (K.INCOMPLETEARRAY, K.CONSTANTARRAY) and role == "parameter":
         return ("pointer", "void*")
     if kind == K.RECORD:
-        raise Unsupported(f"{role} passed by value as a {canonical.get_size()}-byte record")
+        size = canonical.get_size()
+        raise Unsupported(f"{role} passed by value as a {size}-byte record" if size >= 0 else f"{role} passed by value as a record of unknown layout")
     if kind in (K.INT128, K.UINT128):
         return ("integer128", "unsigned __int128" if kind == K.UINT128 else "__int128")
     raise Unsupported(f"{role} of kind {kind.spelling}")
@@ -149,16 +151,6 @@ def describe(cursor, symbol):
     return {"symbol": symbol, "return": return_class, "parameters": parameters, "variadic": (integers, floats, stack) if variadic else None}
 
 
-def translation_unit_arguments(library):
-    third_party = ANYPS5_LIBS.parent.parent / "3rdparty"
-    return ["-x", "c++", "-std=c++20", f"-I{ANYPS5_LIBS}", f"-I{ANYPS5_LIBS / 'nid' / 'include'}", f"-I{library / 'include'}", f"-I{third_party / 'ZArchive' / 'include'}", "-D__linux__", "-fno-delayed-template-parsing"]
-
-
-def library_sources(library):
-    from check_libc_port import sources
-    return sources(library.name)
-
-
 DISAMBIGUATION = re.compile(r"_nid_disambig\d+$")
 
 
@@ -187,8 +179,8 @@ class Definitions:
 
 
 def scan_source(job):
-    source, library, explicit = job
-    unit = cindex.Index.create().parse(str(source), args=translation_unit_arguments(library), options=cindex.TranslationUnit.PARSE_SKIP_FUNCTION_BODIES)
+    source, arguments, explicit = job
+    unit = cindex.Index.create().parse(str(source), args=arguments, options=cindex.TranslationUnit.PARSE_SKIP_FUNCTION_BODIES)
     errors = sum(1 for diagnostic in unit.diagnostics if diagnostic.severity >= cindex.Diagnostic.Error)
     defined = Definitions()
     candidates = []
@@ -218,9 +210,9 @@ def scan_source(job):
     return errors, candidates
 
 
-def collect(library, pool):
+def collect(sources, pool):
     explicit = {}
-    for source in library_sources(library):
+    for source, _ in sources:
         for nid, function in EXPORT_PATTERN.findall(source.read_text(errors="replace")):
             explicit[function] = nid
 
@@ -229,7 +221,7 @@ def collect(library, pool):
     unsupported = {}
     parse_errors = 0
     candidates = []
-    for errors, found in pool.map(scan_source, [(source, library, explicit) for source in library_sources(library)]):
+    for errors, found in pool.map(scan_source, [(source, compiler_arguments(entry), explicit) for source, entry in sources]):
         parse_errors += errors
         candidates.extend(found)
     named = {candidate["name"] for candidate in candidates}
@@ -323,7 +315,8 @@ def emit(exports, data, library_name):
 
 def main():
     parser = argparse.ArgumentParser(description="Generate SysV-to-native import bridges for AnyPS5 libraries")
-    parser.add_argument("library", nargs="+", help="library directory names under core/libs/prx, such as libc; for a NID that several export, the first one's export gets the bridge")
+    parser.add_argument("library", nargs="+", help="AnyPS5 library targets, such as libc; for a NID that several export, the first one's export gets the bridge")
+    parser.add_argument("--anyps5-build", required=True, help="AnyPS5's build directory, configured with CMAKE_EXPORT_COMPILE_COMMANDS=ON")
     parser.add_argument("-o", "--output", required=True)
     parser.add_argument("--libclang", default="/usr/lib/llvm-18/lib/libclang-18.so.1")
     parser.add_argument("--report", action="store_true", help="list every export without a bridge and why")
@@ -334,11 +327,9 @@ def main():
         cindex.Config.set_library_file(args.libclang)
     pool = concurrent.futures.ProcessPoolExecutor(args.jobs)
     exports, data, unsupported, parse_errors = {}, {}, {}, 0
+    build = Build(args.anyps5_build)
     for name in args.library:
-        library = ANYPS5_LIBS / "prx" / name
-        if not library.is_dir():
-            raise SystemExit(f"{library} is not an AnyPS5 library directory")
-        library_exports, library_data, library_unsupported, library_errors = collect(library, pool)
+        library_exports, library_data, library_unsupported, library_errors = collect(build.library_sources(name), pool)
         for nid, export in library_exports.items():
             exports.setdefault(nid, export)
         for nid, symbol in library_data.items():
