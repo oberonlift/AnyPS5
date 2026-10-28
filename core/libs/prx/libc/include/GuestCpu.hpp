@@ -20,7 +20,6 @@ bool GuestCpuUnwindTables_nid_no_patch(std::uint64_t pc, const void** header, st
 const char* GuestCpuImportName_nid_no_patch(std::uint64_t address);
 [[noreturn]] void GuestCpuUnwindResume_nid_no_patch(const std::uint64_t* registers);
 std::uint64_t GuestCpuReadTsc_nid_no_patch(void);
-std::uint64_t GuestCpuCall_nid_no_patch(std::uint64_t target, std::uint64_t first, std::uint64_t second);
 void GuestCpuCallInterrupted_nid_no_patch(std::uint64_t target, std::uint64_t first, std::uint64_t second);
 void GuestCpuInterruptedContext_nid_no_patch(std::uint64_t* registers, std::uint64_t* flags);
 }
