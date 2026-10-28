@@ -63,6 +63,11 @@ static void arithmetic(void) {
     line_hex("pavgw", BINARY("pavgw", a, b));
     line_hex("pminsw", BINARY("pminsw", a, b));
     line_hex("pmaxsw", BINARY("pmaxsw", a, b));
+    line_hex("pmulhrsw", BINARY("pmulhrsw", a, b));
+    line_hex("pmaddubsw", BINARY("pmaddubsw", a, b));
+    line_hex("phaddw", BINARY("phaddw", a, b));
+    line_hex("phsubsw", BINARY("phsubsw", a, b));
+    line_hex("psadbw", BINARY("psadbw", a, b));
 }
 
 static void logic_and_compares(void) {

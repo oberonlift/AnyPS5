@@ -193,6 +193,20 @@ BINARY128(cvt16to64x, _mm_cvtepi16_epi64(a))
 BINARY128(min32ux, _mm_min_epu32(a, b))
 BINARY128(cmpeq32x, _mm_cmpeq_epi32(a, _mm_blend_epi16(a, b, 0x0f)))
 BINARY128(movemaskx, _mm_set1_epi32(_mm_movemask_epi8(a)))
+BINARY256(maddubs16, _mm256_maddubs_epi16(a, b))
+BINARY256(mulhrs16, _mm256_mulhrs_epi16(a, b))
+BINARY256(hadd32, _mm256_hadd_epi32(a, b))
+BINARY256(hadds16, _mm256_hadds_epi16(a, b))
+BINARY256(hsub16, _mm256_hsub_epi16(a, b))
+BINARY256(hsubs16, _mm256_hsubs_epi16(a, b))
+BINARY256(sad8, _mm256_sad_epu8(a, b))
+BINARY256(testps, _mm256_set1_epi32(_mm256_testz_ps(_mm256_castsi256_ps(a), _mm256_castsi256_ps(b)) * 2 + _mm256_testc_ps(_mm256_castsi256_ps(a), _mm256_castsi256_ps(b))))
+BINARY256(testpd, _mm256_set1_epi32(_mm256_testz_pd(_mm256_castsi256_pd(a), _mm256_castsi256_pd(a)) * 2 + _mm256_testc_pd(_mm256_castsi256_pd(b), _mm256_castsi256_pd(a))))
+BINARY128(maddubs16x, _mm_maddubs_epi16(a, b))
+BINARY128(mulhrs16x, _mm_mulhrs_epi16(a, b))
+BINARY128(hadd16x, _mm_hadd_epi16(a, b))
+BINARY128(hsub32x, _mm_hsub_epi32(a, b))
+BINARY128(sad8x, _mm_sad_epu8(a, b))
 
 struct Test {
     const char* name;
@@ -215,6 +229,8 @@ static const struct Test tests[] = {
     ENTRY(add16x), ENTRY(sub32x), ENTRY(shuffle8x), ENTRY(unpacklo8x), ENTRY(packus16x), ENTRY(alignrx), ENTRY(slli32x),
     ENTRY(srli64x), ENTRY(bsrlix), ENTRY(shuffle32x), ENTRY(blendvx), ENTRY(extract), ENTRY(insert), ENTRY(extracti128),
     ENTRY(cvt16to64x), ENTRY(min32ux), ENTRY(cmpeq32x), ENTRY(movemaskx),
+    ENTRY(maddubs16), ENTRY(mulhrs16), ENTRY(hadd32), ENTRY(hadds16), ENTRY(hsub16), ENTRY(hsubs16), ENTRY(sad8), ENTRY(testps),
+    ENTRY(testpd), ENTRY(maddubs16x), ENTRY(mulhrs16x), ENTRY(hadd16x), ENTRY(hsub32x), ENTRY(sad8x),
 };
 
 int main(void) {
