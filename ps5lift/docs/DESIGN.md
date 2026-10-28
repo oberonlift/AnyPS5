@@ -38,6 +38,12 @@ The guest stack is real guest memory. `call` pushes the return address, the call
 - Relocation targets inside executable segments seed discovery, which is how function pointers in stripped images are found.
 - The runtime enters the image the way Linux does, with `argc`, `argv`, `envp` and `auxv` at `rsp`, so the relinker's entry stub runs unchanged. It copies `PT_TLS` below the thread pointer (x86-64 variant II) and stores the thread pointer at `fs:0`.
 
+## Callbacks
+
+Native code cannot call a guest address. A bridge that receives a function pointer passes the native code a thunk instead: `Callback<R(Args...)>(guestAddress)` in [Bridge.hpp](../runtime/include/ps5lift/Bridge.hpp) returns one of 256 compile-time thunks per signature, the same one every time for the same guest address, so pointer comparisons keep working. A thunk places its arguments in the SysV registers and on the guest stack, pushes a return address and calls the lifted target through dispatch on the calling thread's guest state.
+
+The runtime keeps each guest thread's state in a thread-local. A native thread that calls a thunk without one, such as a thread a native library started, gets a guest stack, a TLS block and a state on its first call, which is how a native `pthread_create` or a worker pool can run guest code.
+
 ## Memory ordering
 
 x86 is TSO; the GB10 cores have no TSO mode. With `--memory tso` every guest load except an `rsp`-based one is an acquire load and every store a release store. On a CPU with FEAT_LRCPC (`neoverse-v2`, the GB10) acquire loads become `LDAPR`, which is cheaper than `LDAR`. Locked instructions, `xchg` with memory, `xadd` and `cmpxchg` are sequentially consistent LLVM atomics, lowered to LSE. `mfence` is a full fence.
@@ -66,7 +72,7 @@ Flags are computed exactly for add, adc, sub, sbb, cmp, logic, inc, dec, neg, sh
 
 1. **Fixtures (done).** Integer code, calls, recursion, function pointers, jump tables, 128-bit products, division, atomics and Zen 2 BMI code lift and match the native output at -O0 to -O3, for aarch64 and x86-64.
 2. **PS5 executables (in progress).** Done: PS5 ELFs go through AnyPS5's relinker and lift with NID imports, static relocations, relocation-target discovery and static TLS; AnyPS5's PS5-style `import` and `tls` fixtures run on x86-64 and aarch64. Remaining: generate the import bridges from AnyPS5's exports by NID, seed discovery from the init and fini arrays, TLS relocations, and lift the bundled `sce_module` files the relinker converts.
-3. **Native AnyPS5 libraries on aarch64 (started).** `tools/generate_bridges.py` generates the import bridges from a library's export prototypes with libclang: 1241 of libc's 1428 exports so far. Remaining: build the libraries for aarch64 and port their x86-specific parts (`UserContext`, `Fiber`, `RaiseException`, `Backtrace`, `HostCpu`, `FloatingPoint`, `AtomicBuiltins`, about 28 files) to read and write `Ps5LiftState`. Reverse bridges let native code call guest callbacks: thread entries, `atexit`, comparators, fibers and JobManager jobs.
+3. **Native AnyPS5 libraries on aarch64 (started).** `tools/generate_bridges.py` generates the import bridges from a library's export prototypes with libclang: 1241 of libc's 1428 exports so far. Remaining: build the libraries for aarch64 and port their x86-specific parts (`UserContext`, `Fiber`, `RaiseException`, `Backtrace`, `HostCpu`, `FloatingPoint`, `AtomicBuiltins`, about 28 files) to read and write `Ps5LiftState`. Callbacks with scalar signatures are done; fibers and JobManager jobs, which switch guest stacks, are not.
 4. **SSE, AVX2, FMA and F16C (done).** Integer and floating-point vector instructions, scalar SSE math, FMA3 and F16C, checked against native results by `tests/fixtures/vector.c` and `tests/fixtures/float.c` under three MXCSR settings. Remaining: x87 for libc's `long double`, `dpps`, gathers and masked moves.
 5. **Exceptions.** Landing pads as dispatch entries so guest `.eh_frame` unwinding can resume inside lifted code.
 6. **Breakout demo, then one title.** Followed by performance work: relaxing ordering where provably private, keeping vector registers in SSA, and recovering prototypes so hot functions skip the state.

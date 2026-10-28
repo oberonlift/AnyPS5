@@ -3,9 +3,14 @@
 
 #include <ps5lift/State.h>
 
+#include <array>
+#include <atomic>
+#include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <mutex>
 #include <type_traits>
+#include <utility>
 
 namespace Ps5Lift::Bridge {
 
@@ -75,6 +80,121 @@ void Return(Ps5LiftState* state, const T value) {
     } else {
         state->Gpr[PS5LIFT_RAX] = static_cast<std::uint64_t>(value);
     }
+}
+
+template <typename T>
+constexpr bool IsFloating = std::is_floating_point_v<T>;
+
+template <typename T>
+std::uint64_t ToBits(const T value) {
+    if constexpr (std::is_pointer_v<T>) {
+        return reinterpret_cast<std::uint64_t>(value);
+    } else if constexpr (std::is_floating_point_v<T>) {
+        std::uint64_t bits = 0;
+        std::memcpy(&bits, &value, sizeof(T));
+        return bits;
+    } else if constexpr (std::is_signed_v<T>) {
+        return static_cast<std::uint64_t>(static_cast<std::int64_t>(value));
+    } else {
+        return static_cast<std::uint64_t>(value);
+    }
+}
+
+template <typename R>
+R GuestResult(const Ps5LiftState* state) {
+    if constexpr (std::is_void_v<R>) {
+        return;
+    } else if constexpr (std::is_floating_point_v<R>) {
+        return Floating<R>(state, 0);
+    } else {
+        return FromBits<R>(state->Gpr[PS5LIFT_RAX]);
+    }
+}
+
+template <typename R, typename... Args>
+R CallGuest(const std::uint64_t target, Args... arguments) {
+    static_assert(((std::is_arithmetic_v<Args> || std::is_pointer_v<Args> || std::is_enum_v<Args>) && ...), "callbacks take scalar arguments");
+    auto* state = ps5lift_current_state();
+    const auto savedRsp = state->Gpr[PS5LIFT_RSP];
+    std::uint64_t stackArguments[sizeof...(Args) + 1]{};
+    int stackCount = 0;
+    int integers = 0;
+    int floats = 0;
+    const auto place = [&](const auto value) {
+        using T = std::decay_t<decltype(value)>;
+        const auto bits = ToBits(value);
+        if constexpr (IsFloating<T>) {
+            if (floats < 8) {
+                std::memset(state->Vector[floats], 0, 16);
+                std::memcpy(state->Vector[floats++], &bits, sizeof(T));
+                return;
+            }
+        } else {
+            if (integers < 6) {
+                state->Gpr[IntegerRegisters[integers++]] = bits;
+                return;
+            }
+        }
+        stackArguments[stackCount++] = bits;
+    };
+    (place(arguments), ...);
+    auto rsp = (savedRsp - 8 * static_cast<std::uint64_t>(stackCount)) & ~std::uint64_t{15};
+    std::memcpy(reinterpret_cast<void*>(rsp), stackArguments, 8 * static_cast<std::size_t>(stackCount));
+    rsp -= 8;
+    constexpr std::uint64_t ReturnSentinel = 0;
+    std::memcpy(reinterpret_cast<void*>(rsp), &ReturnSentinel, sizeof(ReturnSentinel));
+    state->Gpr[PS5LIFT_RSP] = rsp;
+    state->Gpr[PS5LIFT_RAX] = static_cast<std::uint64_t>(floats);
+    ps5lift_dispatch(state, target);
+    state->Gpr[PS5LIFT_RSP] = savedRsp;
+    if constexpr (!std::is_void_v<R>) return GuestResult<R>(state);
+}
+
+template <typename Signature>
+struct CallbackPool;
+
+template <typename R, typename... Args>
+struct CallbackPool<R(Args...)> {
+    static constexpr std::size_t Capacity = 256;
+    using Native = R (*)(Args...);
+
+    static inline std::atomic<std::uint64_t> Targets[Capacity]{};
+    static inline std::atomic<std::size_t> Count{0};
+    static inline std::mutex Lock;
+
+    template <std::size_t Index>
+    static R Thunk(Args... arguments) {
+        return CallGuest<R>(Targets[Index].load(std::memory_order_acquire), arguments...);
+    }
+
+    template <std::size_t... Indices>
+    static constexpr std::array<Native, Capacity> MakeThunks(std::index_sequence<Indices...>) {
+        return {&Thunk<Indices>...};
+    }
+
+    static inline constexpr std::array<Native, Capacity> Thunks = MakeThunks(std::make_index_sequence<Capacity>{});
+
+    static Native For(const std::uint64_t target) {
+        if (target == 0) return nullptr;
+        const auto count = Count.load(std::memory_order_acquire);
+        for (std::size_t i = 0; i < count; ++i) {
+            if (Targets[i].load(std::memory_order_relaxed) == target) return Thunks[i];
+        }
+        std::lock_guard guard(Lock);
+        const auto current = Count.load(std::memory_order_relaxed);
+        for (std::size_t i = count; i < current; ++i) {
+            if (Targets[i].load(std::memory_order_relaxed) == target) return Thunks[i];
+        }
+        if (current == Capacity) ps5lift_unsupported(nullptr, target, "callback pool is full");
+        Targets[current].store(target, std::memory_order_release);
+        Count.store(current + 1, std::memory_order_release);
+        return Thunks[current];
+    }
+};
+
+template <typename Signature>
+auto Callback(const std::uint64_t target) {
+    return CallbackPool<Signature>::For(target);
 }
 
 }

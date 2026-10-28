@@ -69,6 +69,8 @@ Ps5LiftFunction Lookup(const std::uint64_t target) {
     return found->Host;
 }
 
+thread_local Ps5LiftState* CurrentState = nullptr;
+
 struct GuestThread {
     std::uint64_t Entry = 0;
     std::uint64_t Argument = 0;
@@ -101,6 +103,7 @@ void* RunThread(void* argument) {
     auto& thread = *static_cast<GuestThread*>(argument);
     Ps5LiftState state{};
     const auto top = PrepareThread(thread, state);
+    CurrentState = &state;
     const auto function = Lookup(thread.Entry);
     if (function == nullptr) Fail("the thread entry 0x%" PRIx64 " was not lifted", thread.Entry);
 
@@ -204,6 +207,23 @@ extern "C" std::uint64_t ps5lift_thread_create(Ps5LiftState* parent, const std::
     thread->Mxcsr = parent->Mxcsr;
     StartThread(*thread);
     return reinterpret_cast<std::uint64_t>(thread);
+}
+
+extern "C" Ps5LiftState* ps5lift_current_state(void) {
+    if (CurrentState != nullptr) return CurrentState;
+    struct ForeignThread {
+        GuestThread Thread;
+        Ps5LiftState State{};
+        ~ForeignThread() {
+            munmap(Thread.Stack, GuestStackSize);
+            munmap(Thread.Tls, TlsSize);
+        }
+    };
+    thread_local ForeignThread foreign;
+    const auto top = PrepareThread(foreign.Thread, foreign.State);
+    foreign.State.Gpr[PS5LIFT_RSP] = top & ~std::uint64_t{15};
+    CurrentState = &foreign.State;
+    return CurrentState;
 }
 
 extern "C" std::uint64_t ps5lift_thread_join(const std::uint64_t handle) {

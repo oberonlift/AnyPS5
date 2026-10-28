@@ -60,7 +60,7 @@ class Unsupported(Exception):
 def classify(type_, role):
     canonical = type_.get_canonical()
     kind = canonical.kind
-    if kind == K.VOID and role == "return":
+    if kind == K.VOID and role.endswith("return"):
         return ("void", "void")
     if kind in INTEGER_KINDS:
         return ("integer", canonical.spelling.replace("const ", "").replace("volatile ", ""))
@@ -70,8 +70,11 @@ def classify(type_, role):
     if kind in FLOAT_KINDS:
         return ("float", canonical.spelling.replace("const ", ""))
     if kind in POINTER_KINDS:
-        if canonical.get_pointee().get_canonical().kind in FUNCTION_KINDS:
-            raise Unsupported("callback parameter")
+        pointee = canonical.get_pointee().get_canonical()
+        if pointee.kind in FUNCTION_KINDS:
+            if role != "parameter":
+                raise Unsupported(f"function pointer as a {role}")
+            return ("callback", callback_signature(pointee))
         return ("pointer", "void*")
     if kind == K.LONGDOUBLE:
         raise Unsupported("long double")
@@ -80,6 +83,21 @@ def classify(type_, role):
     if kind in (K.INT128, K.UINT128):
         return ("integer128", "unsigned __int128" if kind == K.UINT128 else "__int128")
     raise Unsupported(f"{role} of kind {kind.spelling}")
+
+
+def callback_signature(function):
+    if function.kind == K.FUNCTIONPROTO and function.is_function_variadic():
+        raise Unsupported("variadic callback")
+    result_class, result = classify(function.get_result(), "callback return")
+    if result_class not in ("void", "integer", "pointer", "float"):
+        raise Unsupported(f"callback returning {result_class}")
+    arguments = []
+    for argument in function.argument_types():
+        argument_class, spelling = classify(argument, "callback argument")
+        if argument_class not in ("integer", "pointer", "float"):
+            raise Unsupported(f"callback taking {argument_class}")
+        arguments.append(spelling)
+    return f"{result}({', '.join(arguments)})"
 
 
 def describe(cursor, symbol):
@@ -104,6 +122,14 @@ def describe(cursor, symbol):
             access = f"Floating<{spelling}>(state, {floats})" if floats < 8 else f"Stack<{spelling}>(state, {stack})"
             if floats < 8:
                 floats += 1
+            else:
+                stack += 1
+        elif parameter_class == "callback":
+            source = f"Integer<std::uint64_t>(state, {integers})" if integers < 6 else f"Stack<std::uint64_t>(state, {stack})"
+            access = f"reinterpret_cast<void*>(Callback<{spelling}>({source}))"
+            spelling = "void*"
+            if integers < 6:
+                integers += 1
             else:
                 stack += 1
         else:

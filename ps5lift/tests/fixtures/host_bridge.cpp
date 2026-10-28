@@ -1,4 +1,7 @@
+#include <ps5lift/Bridge.hpp>
 #include <ps5lift/State.h>
+
+#include <pthread.h>
 
 #include <time.h>
 #include <unistd.h>
@@ -29,4 +32,38 @@ extern "C" void ps5lift_import_host__thread__create(Ps5LiftState* state) {
 
 extern "C" void ps5lift_import_host__thread__join(Ps5LiftState* state) {
     state->Gpr[PS5LIFT_RAX] = ps5lift_thread_join(state->Gpr[PS5LIFT_RDI]);
+}
+
+using namespace Ps5Lift::Bridge;
+
+extern "C" void ps5lift_import_host__sort(Ps5LiftState* state) {
+    auto* compare = Callback<int(const void*, const void*)>(Integer<std::uint64_t>(state, 3));
+    std::qsort(Integer<void*>(state, 0), Integer<unsigned long>(state, 1), Integer<unsigned long>(state, 2), compare);
+}
+
+extern "C" void ps5lift_import_host__apply(Ps5LiftState* state) {
+    auto* function = Callback<double(double, long)>(Integer<std::uint64_t>(state, 0));
+    const auto count = Integer<long>(state, 1);
+    Return(state, function(function(Floating<double>(state, 0), count), count + 1));
+}
+
+extern "C" void ps5lift_import_host__on__thread(Ps5LiftState* state) {
+    struct Call {
+        long (*Function)(long);
+        long Argument;
+        long Result;
+    } call{Callback<long(long)>(Integer<std::uint64_t>(state, 0)), Integer<long>(state, 1), 0};
+    pthread_t thread;
+    pthread_create(&thread, nullptr, [](void* argument) -> void* {
+        auto* call = static_cast<Call*>(argument);
+        call->Result = call->Function(call->Argument);
+        return nullptr;
+    }, &call);
+    pthread_join(thread, nullptr);
+    Return(state, call.Result);
+}
+
+extern "C" void ps5lift_import_host__call__eight(Ps5LiftState* state) {
+    auto* function = Callback<long(long, long, long, long, long, long, long, long)>(Integer<std::uint64_t>(state, 0));
+    Return(state, function(1, 2, 3, 4, 5, 6, 7, 8) + function(10, 20, 30, 40, 50, 60, 70, 80));
 }

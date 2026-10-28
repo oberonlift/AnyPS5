@@ -54,7 +54,7 @@ The lifter prints how many functions and instructions it lifted and lists every 
 python3 tools/generate_bridges.py libc -o libc_bridges.cpp
 ```
 
-It prints how many exports it could not bridge and why; `--report` lists them. For libc it writes 1241 bridges and leaves 187 exports: `long double` (84, waiting for x87), callbacks (46), variadic functions (30) and records passed or returned by value (27).
+Function-pointer parameters become native thunks that call back into the guest (see [the design](docs/DESIGN.md#callbacks)). It prints how many exports it could not bridge and why; `--report` lists them. For libc it writes 1283 bridges and leaves 145 exports: `long double` (84, waiting for x87), variadic functions (30), records passed or returned by value (21), complex values (6) and function pointers as return values (4).
 
 ## Benchmark
 
