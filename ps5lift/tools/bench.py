@@ -8,7 +8,7 @@ import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from run_fixture import runtime_library, FIXTURES, ROOT, build_guest, host_triple, lifter_features, run, runner_for
+from run_fixture import runtime_library, FIXTURES, ROOT, build_guest, host_triple, lifter_target, run, runner_for
 
 
 def parse(output):
@@ -32,7 +32,6 @@ def main():
     args = parser.parse_args()
 
     runner = runner_for(args.triple)
-    cpu = args.cpu or ("native" if not runner else None)
     work = Path(tempfile.mkdtemp(prefix="ps5lift-bench-"))
     try:
         scale = [f"-DBENCH_SCALE={args.scale}"]
@@ -47,8 +46,7 @@ def main():
         for memory, suffix in (("relaxed", ""), ("tso", ""), ("tso", "-vec")):
             name = f"lifted-{memory}{suffix}"
             lifted = work / f"{name}.o"
-            cpu_args = ["--cpu", cpu] if cpu else []
-            report = run([args.ps5lift, guests[suffix], "-o", lifted, "--triple", args.triple, "--memory", memory, *cpu_args, *lifter_features(args.triple, runner)]).stderr.strip()
+            report = run([args.ps5lift, guests[suffix], "-o", lifted, "--triple", args.triple, "--memory", memory, *lifter_target(args.triple, runner, args.cpu)]).stderr.strip()
             print(f"{name}: {report}")
             programs[name] = work / name
             run([args.clangxx, f"--target={args.triple}", "-std=c++20", "-O2", f"-I{ROOT / 'runtime' / 'include'}", FIXTURES / "host_bridge.cpp", lifted, *runtime_library(args.ps5lift, args.triple, args.clang, args.clangxx), "-fuse-ld=lld", "-pthread", "-o", programs[name]])
