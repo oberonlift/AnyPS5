@@ -72,22 +72,32 @@ extern "C" void GuestCpuUnwindStart_nid_no_patch(std::uint64_t* registers) {
 }
 
 extern "C" bool GuestCpuUnwindTables_nid_no_patch(const std::uint64_t pc, const void** header, std::uint64_t* text, std::uint64_t* data) {
-    if (ps5lift_image.EhFrameHeader == 0) return false;
-    bool contains = false;
-    for (std::uint64_t i = 0; i < ps5lift_image.SegmentCount; ++i) {
-        const auto& segment = ps5lift_image.Segments[i];
-        if (pc >= segment.GuestAddress && pc - segment.GuestAddress < segment.MemorySize) contains = true;
-        if (segment.Protection & SegmentExecute) *text = segment.GuestAddress;
-        if (segment.Protection & SegmentWrite) *data = segment.GuestAddress;
+    for (std::uint64_t index = 0; index < ps5lift_program.ImageCount; ++index) {
+        const auto& image = ps5lift_program.Images[index];
+        bool contains = false;
+        for (std::uint64_t i = 0; i < image.SegmentCount; ++i) {
+            const auto& segment = image.Segments[i];
+            if (pc >= segment.GuestAddress && pc - segment.GuestAddress < segment.MemorySize) contains = true;
+        }
+        if (!contains) continue;
+        if (image.EhFrameHeader == 0) return false;
+        for (std::uint64_t i = 0; i < image.SegmentCount; ++i) {
+            const auto& segment = image.Segments[i];
+            if (segment.Protection & SegmentExecute) *text = segment.GuestAddress;
+            if (segment.Protection & SegmentWrite) *data = segment.GuestAddress;
+        }
+        *header = reinterpret_cast<const void*>(image.EhFrameHeader);
+        return true;
     }
-    if (!contains) return false;
-    *header = reinterpret_cast<const void*>(ps5lift_image.EhFrameHeader);
-    return true;
+    return false;
 }
 
 extern "C" const char* GuestCpuImportName_nid_no_patch(const std::uint64_t address) {
-    for (std::uint64_t i = 0; i < ps5lift_image.ImportCount; ++i) {
-        if (ps5lift_image.Imports[i].GuestAddress == address) return ps5lift_image.Imports[i].Name;
+    for (std::uint64_t index = 0; index < ps5lift_program.ImageCount; ++index) {
+        const auto& image = ps5lift_program.Images[index];
+        for (std::uint64_t i = 0; i < image.ImportCount; ++i) {
+            if (image.Imports[i].GuestAddress == address) return image.Imports[i].Name;
+        }
     }
     return nullptr;
 }

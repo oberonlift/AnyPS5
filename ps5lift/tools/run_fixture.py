@@ -70,6 +70,7 @@ def lifter_target(triple, runner, cpu=None):
 
 
 CONSOLE_OUTPUT = {"cpu"}
+GUEST_MODULES = {"modules": ("guestmodule", "module.c")}
 HOST_LIBRARIES = {"threads": ("hostthread", "host_thread.c"), "callbacks": ("hostcallbacks", "host_callbacks.c"), "x87": ("hostx87", "host_x87.c"), "setjmp": ("hostsetjmp", "host_setjmp.c")}
 
 
@@ -84,9 +85,17 @@ def build_guest(clang, work, name, optimization, defines=(), vectorize=False, su
         if not extra_library.exists():
             run([clang, "--target=x86_64-unknown-linux-gnu", "-O2", "-fPIC", "-shared", "-fuse-ld=lld", FIXTURES / source, "-pthread", "-o", extra_library])
         extra = [f"-l{library_name}"]
+    code = ["-fno-pic"]
+    if name in GUEST_MODULES:
+        module_name, source = GUEST_MODULES[name]
+        module = work / f"lib{module_name}.so"
+        if not module.exists():
+            run([clang, *GUEST_FLAGS, "-O2", "-fPIC", "-shared", f"-Wl,-soname,$ORIGIN/lib{module_name}.so", FIXTURES / source, f"-L{work}", "-lhost", "-o", module])
+        extra = [f"-l{module_name}"]
+        code = ["-fpie"]
     guest = work / f"{name}{optimization}{suffix}"
     vector_flags = [] if vectorize else ["-fno-vectorize", "-fno-slp-vectorize"]
-    run([clang, optimization, *GUEST_FLAGS, *vector_flags, *defines, "-fno-pic", "-no-pie", "-Wl,--image-base=0x20000000",
+    run([clang, optimization, *GUEST_FLAGS, *vector_flags, *defines, *code, "-no-pie", "-Wl,--image-base=0x20000000",
          "-Wl,--dynamic-linker=/lib64/ld-linux-x86-64.so.2", FIXTURES / f"{name}.c", f"-L{work}", "-lhost", *extra, "-o", guest])
     return guest
 

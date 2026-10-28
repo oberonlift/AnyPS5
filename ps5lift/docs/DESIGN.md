@@ -18,6 +18,12 @@ eboot.bin + sce_module/*.prx
   -> link            with the runtime, the import bridges and the native AnyPS5 libraries
 ```
 
+## Images
+
+A program can be several ELF images: the executable and the modules it names in `DT_NEEDED` as `$ORIGIN/<path>`, which is how the AnyPS5 relinker names the `.guest.prx` modules it converts from a title's `sce_module` directory. Any other `DT_NEEDED` entry is a native library, reached through bridges. `GuestProgram::Load` ([Program.cpp](../lifter/src/Program.cpp)) reads the executable at its link addresses and the modules breadth-first, each position-independent module at the next 16 MiB boundary after the previous image and its import addresses, and relocates them only once all are read: an undefined symbol binds to the first image in that order that exports it, as `ld.so` would bind it, and only a symbol no image exports becomes an import. A relocation against a symbol the image defines binds to its own definition.
+
+Discovery runs per image, from its entry point, `DT_INIT`, relocation targets, symbols and `.eh_frame`. The functions of each image go into parts of their own, and one more part holds `ps5lift_program`: a table per image (segments, TLS, imports, data imports, `.eh_frame_hdr`, `DT_INIT` and `DT_INIT_ARRAY`), the order to initialize the modules in, which is a depth-first walk of their dependencies, and one sorted function table over every image for dispatch. Before the executable's entry point the runtime calls each module's `DT_INIT` and `DT_INIT_ARRAY` entries with `argc`, `argv` and `envp` on the main thread. `tests/fixtures/modules.c` runs an executable whose module's constructor calls an import, and which calls a module function directly and through a pointer and reads and writes the module's data.
+
 ## Machine model
 
 `Ps5LiftState` ([State.h](../runtime/include/ps5lift/State.h)) holds the sixteen GPRs, the flags as bytes, the FS and GS bases, MXCSR and sixteen 256-bit vector registers. Each lifted function caches the registers its instructions name (explicitly or implicitly) in allocas: it loads them on entry, stores them back before every call, return, dispatch and runtime helper, and reloads them after. Registers a function never names stay in the state, where its callees find them. LLVM promotes the allocas to SSA values, so registers live in host registers within a function and flags nobody reads are deleted.

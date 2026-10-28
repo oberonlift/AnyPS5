@@ -3,6 +3,7 @@
 
 #include <lifter/Discovery.hpp>
 #include <lifter/GuestImage.hpp>
+#include <lifter/Program.hpp>
 
 #include <llvm/IR/LLVMContext.h>
 #include <llvm/IR/Module.h>
@@ -12,6 +13,7 @@
 #include <memory>
 #include <span>
 #include <string>
+#include <vector>
 
 namespace Ps5Lift {
 
@@ -40,7 +42,7 @@ struct LiftReport {
 
 std::unique_ptr<llvm::Module> LiftFunctions(llvm::LLVMContext& context, const GuestImage& image, const std::map<std::uint64_t, GuestFunction>& functions, std::span<const std::uint64_t> addresses,
                                             const LiftOptions& options, LiftReport& report);
-std::unique_ptr<llvm::Module> LiftTables(llvm::LLVMContext& context, const GuestImage& image, const std::map<std::uint64_t, GuestFunction>& functions, const LiftOptions& options);
+std::unique_ptr<llvm::Module> LiftTables(llvm::LLVMContext& context, const GuestProgram& program, const std::vector<std::map<std::uint64_t, GuestFunction>>& functions, const LiftOptions& options);
 
 }
 
