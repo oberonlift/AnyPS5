@@ -2420,6 +2420,19 @@ private:
             SetGpr(PS5LIFT_RDX, _builder.CreateLShr(ticks, _builder.getInt64(32)));
             return;
         }
+        case ZYDIS_MNEMONIC_CPUID: {
+            for (const int index : {PS5LIFT_RAX, PS5LIFT_RCX}) StateStore(Gpr(index), offsetof(Ps5LiftState, Gpr) + 8 * static_cast<std::size_t>(index));
+            _builder.CreateCall(_module.Runtime("ps5lift_cpuid", llvm::FunctionType::get(_builder.getVoidTy(), {_module.Pointer(), I64()}, false)), {_state, _builder.getInt64(_instruction->Address)});
+            for (const int index : {PS5LIFT_RAX, PS5LIFT_RBX, PS5LIFT_RCX, PS5LIFT_RDX}) SetGpr(index, StateLoad(I64(), offsetof(Ps5LiftState, Gpr) + 8 * static_cast<std::size_t>(index)));
+            return;
+        }
+        case ZYDIS_MNEMONIC_XGETBV: {
+            auto* value = _builder.CreateCall(_module.Runtime("ps5lift_xgetbv", llvm::FunctionType::get(I64(), {I64(), _builder.getInt32Ty()}, false)),
+                                              {_builder.getInt64(_instruction->Address), _builder.CreateTrunc(Gpr(PS5LIFT_RCX), _builder.getInt32Ty())});
+            SetGpr(PS5LIFT_RAX, _builder.CreateAnd(value, _builder.getInt64(0xffffffff)));
+            SetGpr(PS5LIFT_RDX, _builder.CreateLShr(value, _builder.getInt64(32)));
+            return;
+        }
         case ZYDIS_MNEMONIC_LFENCE:
         case ZYDIS_MNEMONIC_SFENCE:
             _builder.CreateFence(llvm::AtomicOrdering::AcquireRelease);

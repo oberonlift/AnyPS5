@@ -14,7 +14,7 @@ endif()
 
 foreach(triple IN LISTS PS5LIFT_TEST_TRIPLES)
     string(REGEX REPLACE "-.*" "" arch ${triple})
-    foreach(fixture basic vector float threads callbacks x87 setjmp)
+    foreach(fixture basic vector float threads callbacks x87 setjmp cpu)
         set(memory_models)
         if(fixture STREQUAL "threads")
             set(memory_models --memory tso)

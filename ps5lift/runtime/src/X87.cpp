@@ -34,12 +34,6 @@ constexpr std::uint32_t CompareLess = 1;
 constexpr std::uint32_t CompareEqual = 2;
 constexpr std::uint32_t CompareUnordered = 3;
 
-[[noreturn]] void Fail(const char* message, const unsigned value) {
-    std::fprintf(stderr, "ps5lift: %s 0x%x\n", message, value);
-    std::fflush(stdout);
-    std::_Exit(70);
-}
-
 extFloat80_t Indefinite() {
     extFloat80_t value;
     value.signExp = 0xffff;
@@ -251,7 +245,7 @@ extFloat80_t LoadMemory(Fpu& fpu, const std::uint32_t format, const std::uint64_
         return i64_to_extF80(value);
     }
     default:
-        Fail("unknown x87 memory format", format);
+        ps5lift_fail("unknown x87 memory format 0x%x", format);
     }
 }
 
@@ -303,7 +297,7 @@ void StoreMemory(Fpu& fpu, const std::uint32_t format, const std::uint64_t addre
     case PS5LIFT_X87_INTEGER16: StoreInteger<std::int16_t>(fpu, value, truncate, destination); return;
     case PS5LIFT_X87_INTEGER32: StoreInteger<std::int32_t>(fpu, value, truncate, destination); return;
     case PS5LIFT_X87_INTEGER64: StoreInteger<std::int64_t>(fpu, value, truncate, destination); return;
-    default: Fail("unknown x87 memory format", format);
+    default: ps5lift_fail("unknown x87 memory format 0x%x", format);
     }
 }
 
@@ -347,7 +341,7 @@ extFloat80_t Constant(const std::uint32_t index) {
     };
     if (index == 0) return i32_to_extF80(1);
     if (index == 6) return Zero(false);
-    if (index > 6) Fail("unknown x87 constant", index);
+    if (index > 6) ps5lift_fail("unknown x87 constant 0x%x", index);
     float128_t value;
     value.v[0] = Constants[index - 1][1];
     value.v[1] = Constants[index - 1][0];
@@ -443,7 +437,7 @@ extern "C" std::uint32_t ps5lift_x87(Ps5LiftState* state, const std::uint32_t op
         return 0;
     case PS5LIFT_X87_WAIT: {
         const auto pending = state->X87Status & ~state->X87Control & 0x3fu;
-        if (pending != 0) Fail("x87 instruction with unmasked exceptions pending; the console raises SIGFPE for", pending);
+        if (pending != 0) ps5lift_fail("x87 instruction with unmasked exceptions pending; the console raises SIGFPE for 0x%x", pending);
         return 0;
     }
     case PS5LIFT_X87_STORE_STATUS:
@@ -653,7 +647,7 @@ extern "C" std::uint32_t ps5lift_x87(Ps5LiftState* state, const std::uint32_t op
         fpu.Set(0, fpu.Get(index));
         return 0;
     default:
-        Fail("unknown x87 operation", operation);
+        ps5lift_fail("unknown x87 operation 0x%x", operation);
     }
 }
 

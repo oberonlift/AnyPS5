@@ -9,7 +9,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 SOFTFLOAT = ROOT / "3rdparty" / "softfloat"
-RUNTIME_SOURCES = ["runtime/src/Runtime.cpp", "runtime/src/GuestCpu.cpp", "runtime/src/X87.cpp", "runtime/src/Jump.cpp"]
+RUNTIME_SOURCES = ["runtime/src/Runtime.cpp", "runtime/src/GuestCpu.cpp", "runtime/src/X87.cpp", "runtime/src/Jump.cpp", "runtime/src/Cpuid.cpp"]
 MAIN_SOURCE = "runtime/src/Main.cpp"
 GUEST_CPU_INTERFACE = "GuestCpu*_nid_no_patch"
 SOFTFLOAT_FLAGS = [
