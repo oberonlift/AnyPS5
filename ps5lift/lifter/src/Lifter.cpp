@@ -551,26 +551,75 @@ private:
     }
 
     llvm::Value* Load(llvm::Value* address, const unsigned bits, const bool ordered) {
-        auto* load = _builder.CreateLoad(Int(bits), _builder.CreateIntToPtr(address, _module.Pointer()));
-        load->setMetadata(llvm::LLVMContext::MD_tbaa, _module.GuestTag());
-        if (ordered) {
-            load->setAtomic(llvm::AtomicOrdering::Acquire);
-            load->setAlignment(llvm::Align(bits / 8));
-        } else {
-            load->setAlignment(llvm::Align(1));
-        }
-        return load;
+        if (!ordered) return GuestLoad(address, bits);
+        if (bits == 8) return Ordered(GuestLoad(address, bits), llvm::AtomicOrdering::Acquire);
+        const auto split = SplitOnAlignment(address, bits);
+        _builder.SetInsertPoint(split.Aligned);
+        auto* aligned = Ordered(GuestLoad(address, bits), llvm::AtomicOrdering::Acquire);
+        _builder.CreateBr(split.Done);
+        _builder.SetInsertPoint(split.Unaligned);
+        auto* unaligned = GuestLoad(address, bits);
+        _builder.CreateFence(llvm::AtomicOrdering::Acquire);
+        _builder.CreateBr(split.Done);
+        _builder.SetInsertPoint(split.Done);
+        auto* value = _builder.CreatePHI(Int(bits), 2);
+        value->addIncoming(aligned, split.Aligned);
+        value->addIncoming(unaligned, split.Unaligned);
+        return value;
     }
 
     void Store(llvm::Value* address, llvm::Value* value, const bool ordered) {
-        auto* store = _builder.CreateStore(value, _builder.CreateIntToPtr(address, _module.Pointer()));
-        store->setMetadata(llvm::LLVMContext::MD_tbaa, _module.GuestTag());
-        if (ordered) {
-            store->setAtomic(llvm::AtomicOrdering::Release);
-            store->setAlignment(llvm::Align(value->getType()->getIntegerBitWidth() / 8));
+        const auto bits = value->getType()->getIntegerBitWidth();
+        if (!ordered) {
+            GuestStore(address, value);
+        } else if (bits == 8) {
+            Ordered(GuestStore(address, value), llvm::AtomicOrdering::Release);
         } else {
-            store->setAlignment(llvm::Align(1));
+            const auto split = SplitOnAlignment(address, bits);
+            _builder.SetInsertPoint(split.Aligned);
+            Ordered(GuestStore(address, value), llvm::AtomicOrdering::Release);
+            _builder.CreateBr(split.Done);
+            _builder.SetInsertPoint(split.Unaligned);
+            _builder.CreateFence(llvm::AtomicOrdering::Release);
+            GuestStore(address, value);
+            _builder.CreateBr(split.Done);
+            _builder.SetInsertPoint(split.Done);
         }
+    }
+
+    llvm::LoadInst* GuestLoad(llvm::Value* address, const unsigned bits) {
+        auto* load = _builder.CreateAlignedLoad(Int(bits), _builder.CreateIntToPtr(address, _module.Pointer()), llvm::Align(1));
+        load->setMetadata(llvm::LLVMContext::MD_tbaa, _module.GuestTag());
+        return load;
+    }
+
+    llvm::StoreInst* GuestStore(llvm::Value* address, llvm::Value* value) {
+        auto* store = _builder.CreateAlignedStore(value, _builder.CreateIntToPtr(address, _module.Pointer()), llvm::Align(1));
+        store->setMetadata(llvm::LLVMContext::MD_tbaa, _module.GuestTag());
+        return store;
+    }
+
+    template <typename Access>
+    Access* Ordered(Access* access, const llvm::AtomicOrdering ordering) {
+        access->setAtomic(ordering);
+        access->setAlignment(llvm::Align(access->getAccessType()->getIntegerBitWidth() / 8));
+        return access;
+    }
+
+    struct AlignmentSplit {
+        llvm::BasicBlock* Aligned;
+        llvm::BasicBlock* Unaligned;
+        llvm::BasicBlock* Done;
+    };
+
+    // aarch64's acquire loads and release stores fault on unaligned addresses, which x86 allows, so an ordered access
+    // checks its alignment. An unaligned one is a plain access, with a fence after it if it is a load and before it if it is a store.
+    AlignmentSplit SplitOnAlignment(llvm::Value* address, const unsigned bits) {
+        const AlignmentSplit split{llvm::BasicBlock::Create(Context(), "aligned", _host), llvm::BasicBlock::Create(Context(), "unaligned", _host),
+            llvm::BasicBlock::Create(Context(), "ordered", _host)};
+        auto* misaligned = _builder.CreateICmpNE(_builder.CreateAnd(address, _builder.getInt64(bits / 8 - 1)), _builder.getInt64(0));
+        _builder.CreateCondBr(misaligned, split.Unaligned, split.Aligned, llvm::MDBuilder(Context()).createBranchWeights(1, 1u << 20));
+        return split;
     }
 
     const ZydisDecodedOperand& Operand(const int index) const { return _instruction->Operands[index]; }
