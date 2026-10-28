@@ -318,6 +318,99 @@ static __m128i load_volatile(const volatile u8* source) {
         report_bytes("clmul " label " 11", form##_PCLMULQDQ(a, b, 0x11));                           \
     }
 
+static volatile u8 sha_message[3] = {'a', 'b', 'c'};
+
+/* The message padded to one block: a one bit after it, and its length in bits at the end. */
+static void sha_block(u8 block[64]) {
+    for (int i = 0; i < 64; ++i) block[i] = 0;
+    for (int i = 0; i < 3; ++i) block[i] = sha_message[i];
+    block[3] = 0x80;
+    block[63] = 24;
+}
+
+static void report_words(const char* name, const u32* words, int count) {
+    static const char digits[] = "0123456789abcdef";
+    char buffer[65];
+    for (int i = 0; i < count; ++i) {
+        for (int j = 0; j < 8; ++j) buffer[8 * i + j] = digits[(words[i] >> (28 - 4 * j)) & 15];
+    }
+    buffer[8 * count] = 0;
+    print(name);
+    print(" ");
+    print(buffer);
+    print("\n");
+}
+
+static const u32 sha256_constants[64] = {
+    0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5, 0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74,
+    0x80deb1fe, 0x9bdc06a7, 0xc19bf174, 0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da, 0x983e5152, 0xa831c66d,
+    0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967, 0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e,
+    0x92722c85, 0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070, 0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5,
+    0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3, 0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2,
+};
+
+/* FIPS 180's SHA-256 of "abc" with sha256rnds2, sha256msg1 and sha256msg2, keeping the state as ABEF and CDGH. */
+__attribute__((noinline)) static void sha256_abc(void) {
+    u32 state[8] = {0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19};
+    u8 block[64];
+    sha_block(block);
+    const __m128i swap = _mm_set_epi64x(0x0c0d0e0f08090a0bLL, 0x0405060700010203LL);
+    __m128i dcba = _mm_shuffle_epi32(_mm_loadu_si128((const __m128i*)&state[0]), 0xb1);
+    __m128i efgh = _mm_shuffle_epi32(_mm_loadu_si128((const __m128i*)&state[4]), 0x1b);
+    __m128i abef = _mm_alignr_epi8(dcba, efgh, 8);
+    __m128i cdgh = _mm_blend_epi16(efgh, dcba, 0xf0);
+    const __m128i abef_saved = abef, cdgh_saved = cdgh;
+    __m128i words[16];
+    for (int i = 0; i < 4; ++i) words[i] = _mm_shuffle_epi8(_mm_loadu_si128((const __m128i*)&block[16 * i]), swap);
+    for (int i = 4; i < 16; ++i) {
+        __m128i next = _mm_add_epi32(_mm_sha256msg1_epu32(words[i - 4], words[i - 3]), _mm_alignr_epi8(words[i - 1], words[i - 2], 4));
+        words[i] = _mm_sha256msg2_epu32(next, words[i - 1]);
+    }
+    for (int i = 0; i < 16; ++i) {
+        __m128i keyed = _mm_add_epi32(words[i], _mm_loadu_si128((const __m128i*)&sha256_constants[4 * i]));
+        cdgh = _mm_sha256rnds2_epu32(cdgh, abef, keyed);
+        abef = _mm_sha256rnds2_epu32(abef, cdgh, _mm_shuffle_epi32(keyed, 0x0e));
+    }
+    abef = _mm_add_epi32(abef, abef_saved);
+    cdgh = _mm_add_epi32(cdgh, cdgh_saved);
+    __m128i feba = _mm_shuffle_epi32(abef, 0x1b);
+    __m128i dchg = _mm_shuffle_epi32(cdgh, 0xb1);
+    _mm_storeu_si128((__m128i*)&state[0], _mm_blend_epi16(feba, dchg, 0xf0));
+    _mm_storeu_si128((__m128i*)&state[4], _mm_alignr_epi8(dchg, feba, 8));
+    report_words("sha256 abc", state, 8);
+}
+
+/* FIPS 180's SHA-1 of "abc" with sha1rnds4 in all four functions, sha1nexte, sha1msg1 and sha1msg2. */
+__attribute__((noinline)) static void sha1_abc(void) {
+    u32 state[5] = {0x67452301, 0xefcdab89, 0x98badcfe, 0x10325476, 0xc3d2e1f0};
+    u8 block[64];
+    sha_block(block);
+    const __m128i reverse = _mm_set_epi64x(0x0001020304050607LL, 0x08090a0b0c0d0e0fLL);
+    __m128i abcd = _mm_shuffle_epi32(_mm_loadu_si128((const __m128i*)state), 0x1b);
+    __m128i e = _mm_set_epi32((int)state[4], 0, 0, 0);
+    const __m128i abcd_saved = abcd, e_saved = e;
+    __m128i words[20];
+    for (int i = 0; i < 4; ++i) words[i] = _mm_shuffle_epi8(_mm_loadu_si128((const __m128i*)&block[16 * i]), reverse);
+    for (int i = 4; i < 20; ++i) words[i] = _mm_sha1msg2_epu32(_mm_xor_si128(_mm_sha1msg1_epu32(words[i - 4], words[i - 3]), words[i - 2]), words[i - 1]);
+    __m128i previous = abcd;
+    e = _mm_add_epi32(e, words[0]);
+    abcd = _mm_sha1rnds4_epu32(abcd, e, 0);
+#define SHA1_GROUP(i, function)                       \
+    e = _mm_sha1nexte_epu32(previous, words[i]);      \
+    previous = abcd;                                  \
+    abcd = _mm_sha1rnds4_epu32(abcd, e, function)
+    SHA1_GROUP(1, 0); SHA1_GROUP(2, 0); SHA1_GROUP(3, 0); SHA1_GROUP(4, 0);
+    SHA1_GROUP(5, 1); SHA1_GROUP(6, 1); SHA1_GROUP(7, 1); SHA1_GROUP(8, 1); SHA1_GROUP(9, 1);
+    SHA1_GROUP(10, 2); SHA1_GROUP(11, 2); SHA1_GROUP(12, 2); SHA1_GROUP(13, 2); SHA1_GROUP(14, 2);
+    SHA1_GROUP(15, 3); SHA1_GROUP(16, 3); SHA1_GROUP(17, 3); SHA1_GROUP(18, 3); SHA1_GROUP(19, 3);
+#undef SHA1_GROUP
+    e = _mm_sha1nexte_epu32(previous, e_saved);
+    abcd = _mm_add_epi32(abcd, abcd_saved);
+    _mm_storeu_si128((__m128i*)state, _mm_shuffle_epi32(abcd, 0x1b));
+    state[4] = (u32)_mm_extract_epi32(e, 3);
+    report_words("sha1 abc", state, 5);
+}
+
 AES128_TEST(VEX, "vex")
 AES128_TEST(SSE, "sse")
 CLMUL_TEST(VEX, "vex")
@@ -354,6 +447,8 @@ int main(void) {
     aes128_SSE();
     clmul_VEX();
     clmul_SSE();
+    sha256_abc();
+    sha1_abc();
     return 0;
 }
 
