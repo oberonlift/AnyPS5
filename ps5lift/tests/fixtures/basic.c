@@ -104,6 +104,61 @@ __attribute__((noinline)) static const char* classify(int value) {
     }
 }
 
+i64 table_index_copied_after_compare(i64 value);
+i64 table_index_copied_before_compare(i64 value);
+
+__asm__(".text\n"
+        ".globl table_index_copied_after_compare\n"
+        ".type table_index_copied_after_compare, @function\n"
+        "table_index_copied_after_compare:\n"
+        "    cmp $2, %edi\n"
+        "    ja 3f\n"
+        "    mov %edi, %eax\n"
+        "    lea 4f(%rip), %rcx\n"
+        "    movslq (%rcx,%rax,4), %rax\n"
+        "    add %rcx, %rax\n"
+        "    jmp *%rax\n"
+        "0:  mov $100, %eax\n"
+        "    ret\n"
+        "1:  mov $101, %eax\n"
+        "    ret\n"
+        "2:  mov $102, %eax\n"
+        "    ret\n"
+        "3:  mov $-1, %rax\n"
+        "    ret\n"
+        "5:  .byte 0xff, 0xff\n"
+        ".size table_index_copied_after_compare, .-table_index_copied_after_compare\n"
+        ".pushsection .rodata\n"
+        ".p2align 2\n"
+        "4:  .long 0b-4b, 1b-4b, 2b-4b, 5b-4b\n"
+        ".popsection\n"
+        ".globl table_index_copied_before_compare\n"
+        ".type table_index_copied_before_compare, @function\n"
+        "table_index_copied_before_compare:\n"
+        "    mov %edi, %edx\n"
+        "    cmp $2, %edi\n"
+        "    ja 3f\n"
+        "    mov %edx, %eax\n"
+        "    lea 4f(%rip), %rcx\n"
+        "    movslq (%rcx,%rax,4), %rax\n"
+        "    add %rcx, %rax\n"
+        "    jmp *%rax\n"
+        "0:  mov $200, %eax\n"
+        "    ret\n"
+        "1:  mov $201, %eax\n"
+        "    ret\n"
+        "2:  mov $202, %eax\n"
+        "    ret\n"
+        "3:  mov $-1, %rax\n"
+        "    ret\n"
+        "5:  .byte 0xff, 0xff\n"
+        ".size table_index_copied_before_compare, .-table_index_copied_before_compare\n"
+        ".pushsection .rodata\n"
+        ".p2align 2\n"
+        "4:  .long 0b-4b, 1b-4b, 2b-4b, 5b-4b\n"
+        ".popsection\n"
+        ".text\n");
+
 struct Record {
     i64 key;
     u32 values[6];
@@ -173,6 +228,8 @@ int main(void) {
         total += (i64)length_of(name) * (i + 1);
     }
     line("classify total", total);
+    for (i64 i = 0; i < 4; ++i) line("table after compare", table_index_copied_after_compare(i));
+    for (i64 i = 0; i < 4; ++i) line("table before compare", table_index_copied_before_compare(i));
 
     struct Record record = make_record(41);
     struct Record copy;

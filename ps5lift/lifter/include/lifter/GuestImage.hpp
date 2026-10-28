@@ -29,6 +29,8 @@ struct GuestSegment {
     std::uint64_t MemorySize;
     std::vector<std::uint8_t> Bytes;
     std::uint32_t Flags;
+
+    bool IsExecutable() const;
 };
 
 class GuestImage {

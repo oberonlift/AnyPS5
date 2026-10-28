@@ -98,7 +98,13 @@ int main(int argc, char** argv) {
         std::cerr << "ps5lift: " << report.Functions << " functions, " << report.Instructions << " instructions";
         std::size_t unsupported = 0;
         for (const auto& [mnemonic, count] : report.Unsupported) unsupported += count;
-        std::cerr << ", " << unsupported << " unsupported\n";
+        std::size_t tables = 0;
+        std::size_t unguarded = 0;
+        for (const auto& [entry, function] : functions) {
+            tables += function.JumpTables.size();
+            unguarded += function.UnguardedJumpTables.size();
+        }
+        std::cerr << ", " << unsupported << " unsupported, " << tables << " jump tables (" << unguarded << " sized by layout)\n";
         for (const auto& [mnemonic, count] : report.Unsupported) std::cerr << "  unsupported " << mnemonic << ": " << count << "\n";
     } catch (const std::exception& error) {
         std::cerr << "ps5lift: " << error.what() << "\n";
