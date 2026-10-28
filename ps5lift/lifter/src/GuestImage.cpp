@@ -24,6 +24,7 @@ constexpr std::uint32_t SectionSymbolTable = 2;
 constexpr std::uint32_t SectionDynamicSymbols = 11;
 constexpr std::uint8_t SymbolObject = 1;
 constexpr std::uint8_t SymbolFunction = 2;
+constexpr std::uint8_t SymbolTls = 6;
 constexpr std::int64_t DynamicNeeded = 1;
 constexpr std::int64_t DynamicHash = 4;
 constexpr std::int64_t DynamicStringTable = 5;
@@ -41,6 +42,9 @@ constexpr std::uint32_t RelocationAbsolute = 1;
 constexpr std::uint32_t RelocationGlobalData = 6;
 constexpr std::uint32_t RelocationJumpSlot = 7;
 constexpr std::uint32_t RelocationRelative = 8;
+constexpr std::uint32_t RelocationTlsModule = 16;
+constexpr std::uint32_t RelocationTlsOffset = 17;
+constexpr std::uint32_t RelocationThreadPointerOffset = 18;
 constexpr std::uint64_t ImportStride = 16;
 constexpr std::uint64_t ImportAlignment = 0x10000;
 
@@ -98,7 +102,7 @@ struct Relocation {
 bool Exported(const Symbol& symbol) {
     constexpr std::uint8_t Hidden = 2;
     constexpr std::uint8_t Internal = 1;
-    return symbol.Section != 0 && symbol.Binding != 0 && symbol.Visibility != Hidden && symbol.Visibility != Internal && !symbol.Name.empty();
+    return symbol.Section != 0 && symbol.Type != SymbolTls && symbol.Binding != 0 && symbol.Visibility != Hidden && symbol.Visibility != Internal && !symbol.Name.empty();
 }
 
 }
@@ -208,6 +212,10 @@ GuestImage GuestImage::Read(const std::string& path, const std::optional<std::ui
                 if (defined) relocated[relocation.Offset] = symbol.Value + (relocation.Type == RelocationAbsolute ? static_cast<std::uint64_t>(relocation.Addend) : 0);
                 else importSlots.insert(relocation.Offset);
                 image._relocations.push_back({relocation.Offset + bias, relocation.Type, relocation.Addend, symbol.Name, defined, symbol.Type == SymbolObject, defined ? symbol.Value + bias : 0});
+            } else if (relocation.Type == RelocationTlsModule || relocation.Type == RelocationTlsOffset || relocation.Type == RelocationThreadPointerOffset) {
+                const auto symbol = relocation.Symbol == 0 ? Symbol{} : symbolAt(relocation.Symbol);
+                if (relocation.Symbol != 0 && symbol.Section == 0) throw std::runtime_error("TLS relocation at 0x" + Hex(relocation.Offset + bias) + " in " + path + " names " + symbol.Name + ", which another image defines");
+                image._relocations.push_back({relocation.Offset + bias, relocation.Type, relocation.Addend, symbol.Name, true, false, symbol.Value});
             } else {
                 throw std::runtime_error("Unsupported relocation type " + std::to_string(relocation.Type) + " at 0x" + Hex(relocation.Offset + bias) + " in " + path);
             }
@@ -224,11 +232,25 @@ GuestImage GuestImage::Read(const std::string& path, const std::optional<std::ui
     return image;
 }
 
+void GuestImage::PlaceTls(const std::uint64_t module, const std::uint64_t offset) {
+    _tls.Module = module;
+    _tls.Offset = offset;
+}
+
 void GuestImage::Relocate(const Resolver& resolve) {
     auto nextImport = AlignUp(_mappedEnd, ImportAlignment);
     std::map<std::string, std::uint64_t> importByName;
     for (const auto& relocation : _relocations) {
         std::uint64_t value = relocation.Value;
+        if (relocation.Type == RelocationTlsModule || relocation.Type == RelocationTlsOffset || relocation.Type == RelocationThreadPointerOffset) {
+            if (_tls.Module == 0) throw std::runtime_error("TLS relocation at 0x" + Hex(relocation.Offset) + " in " + _path + ", which has no TLS segment");
+            const auto offset = relocation.Value + static_cast<std::uint64_t>(relocation.Addend);
+            if (relocation.Type == RelocationTlsModule) value = _tls.Module;
+            else if (relocation.Type == RelocationTlsOffset) value = offset;
+            else value = offset - _tls.Offset;
+            Write64(relocation.Offset, value);
+            continue;
+        }
         if (relocation.Type != RelocationRelative && !relocation.Defined) {
             if (const auto definition = resolve(relocation.Symbol)) {
                 value = *definition;
@@ -269,6 +291,10 @@ std::optional<std::uint64_t> GuestImage::Export(const std::string& name) const {
     const auto found = _exports.find(name);
     if (found == _exports.end()) return std::nullopt;
     return found->second;
+}
+
+const std::map<std::string, std::uint64_t>& GuestImage::Exports() const {
+    return _exports;
 }
 
 std::uint64_t GuestImage::Init() const {

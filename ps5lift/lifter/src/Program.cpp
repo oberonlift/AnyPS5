@@ -47,6 +47,14 @@ GuestProgram GuestProgram::Load(const std::string& executable) {
         }
         return std::nullopt;
     };
+    std::uint64_t tlsOffset = 0;
+    for (std::size_t index = 0; index < program.Images.size(); ++index) {
+        auto& image = program.Images[index];
+        const auto& tls = image.Tls();
+        if (tls.MemorySize == 0) continue;
+        tlsOffset = (tlsOffset + tls.MemorySize + tls.Alignment - 1) / tls.Alignment * tls.Alignment;
+        image.PlaceTls(index + 1, tlsOffset);
+    }
     for (auto& image : program.Images) image.Relocate(resolve);
 
     std::vector<bool> visited(program.Images.size());

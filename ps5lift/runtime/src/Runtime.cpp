@@ -98,12 +98,11 @@ std::uint64_t PrepareThread(GuestThread& thread, Ps5LiftState& state) {
     thread.Tls = static_cast<std::uint8_t*>(MapAnonymous(TlsSize));
     const auto threadPointer = reinterpret_cast<std::uint64_t>(thread.Tls + TlsSize / 2);
     std::memcpy(reinterpret_cast<void*>(threadPointer), &threadPointer, sizeof(threadPointer));
-    if (ps5lift_program.ImageCount != 0 && ps5lift_program.Images[0].TlsMemorySize != 0) {
-        const auto& executable = ps5lift_program.Images[0];
-        const auto alignment = executable.TlsAlignment;
-        const auto offset = (executable.TlsMemorySize + alignment - 1) / alignment * alignment;
-        if (offset > TlsSize / 2) ps5lift_fail("the static TLS block of %" PRIu64 " bytes does not fit", executable.TlsMemorySize);
-        std::memcpy(reinterpret_cast<void*>(threadPointer - offset), reinterpret_cast<const void*>(executable.TlsAddress), executable.TlsFileSize);
+    for (std::uint64_t i = 0; i < ps5lift_program.ImageCount; ++i) {
+        const auto& image = ps5lift_program.Images[i];
+        if (image.TlsMemorySize == 0) continue;
+        if (image.TlsOffset > TlsSize / 2) ps5lift_fail("the static TLS of %s does not fit", image.Path);
+        std::memcpy(reinterpret_cast<void*>(threadPointer - image.TlsOffset), reinterpret_cast<const void*>(image.TlsAddress), image.TlsFileSize);
     }
     state.FsBase = threadPointer;
     state.Mxcsr = thread.Mxcsr & ~0x3fu;
@@ -270,6 +269,14 @@ extern "C" void ps5lift_fail(const char* format, ...) {
     std::_Exit(70);
 }
 
+extern "C" void ps5lift_import_____tls__get__addr(Ps5LiftState* state) {
+    std::uint64_t index[2];
+    std::memcpy(index, reinterpret_cast<const void*>(state->Gpr[PS5LIFT_RDI]), sizeof(index));
+    if (index[0] == 0 || index[0] > ps5lift_program.ImageCount || ps5lift_program.Images[index[0] - 1].TlsMemorySize == 0)
+        ps5lift_fail("__tls_get_addr of module %" PRIu64 ", which has no TLS", index[0]);
+    state->Gpr[PS5LIFT_RAX] = state->FsBase - ps5lift_program.Images[index[0] - 1].TlsOffset + index[1];
+}
+
 extern "C" void ps5lift_unsupported(Ps5LiftState*, const std::uint64_t address, const char* mnemonic) {
     ps5lift_fail("reached unsupported instruction %s at 0x%" PRIx64, mnemonic, address);
 }
@@ -333,9 +340,7 @@ extern "C" std::uint64_t ps5lift_thread_join(const std::uint64_t handle) {
 
 extern "C" void ps5lift_run_main(void) {
     for (std::uint64_t i = 0; i < ps5lift_program.ImageCount; ++i) {
-        const auto& image = ps5lift_program.Images[i];
-        if (i != 0 && image.TlsMemorySize != 0) ps5lift_fail("%s has a TLS segment, which a module cannot have yet", image.Path);
-        MapSegments(image);
+        MapSegments(ps5lift_program.Images[i]);
     }
     GuestThread thread;
     thread.Entry = ps5lift_program.Entry;

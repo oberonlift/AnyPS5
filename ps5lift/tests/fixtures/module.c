@@ -2,6 +2,7 @@
 
 long module_scale;
 long module_counter = 40;
+static __thread long module_local = 5;
 
 static unsigned long length_of(const char* text) {
     unsigned long length = 0;
@@ -18,6 +19,10 @@ __attribute__((constructor)) static void initialize(void) {
 
 long module_value(long x) {
     return x * module_scale + module_counter;
+}
+
+long module_tls(void) {
+    return ++module_local;
 }
 
 long (*module_function(void))(long) {

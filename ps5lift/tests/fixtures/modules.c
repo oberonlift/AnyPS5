@@ -5,6 +5,9 @@ typedef long i64;
 extern long module_counter;
 long module_value(long x);
 long (*module_function(void))(long);
+long module_tls(void);
+
+static __thread long executable_local = 100;
 
 static unsigned long length_of(const char* text) {
     unsigned long length = 0;
@@ -43,6 +46,10 @@ int main(void) {
     line("through a module pointer", module_function()(3));
     module_counter = 100;
     line("after writing its data", module_value(1));
+    line("module tls", module_tls());
+    line("module tls again", module_tls());
+    executable_local += module_tls();
+    line("executable tls", executable_local);
     return 0;
 }
 
