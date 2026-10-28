@@ -11,6 +11,10 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 endif()
 
+if(ANYPS5_GUEST_LIFTED)
+    add_compile_definitions(ANYPS5_GUEST_LIFTED)
+endif()
+
 if(APPLE)
     set(ANYPS5_PRX_RPATH "@loader_path")
 else()
