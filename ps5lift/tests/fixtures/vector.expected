@@ -91,3 +91,17 @@ cvt16to64x 044d5af9ff1730c0
 min32ux 43e7d150422fc730
 cmpeq32x b2c1aa29b6111c00
 movemaskx 30d21f2ae6a74de0
+maddubs16 981ab21decf97d91
+mulhrs16 6071cd006402cec9
+hadd32 a13d26b3582739f9
+hadds16 ebdca50076acdc62
+hsub16 65582eb2e9311c3a
+hsubs16 5df5f06fdb301038
+sad8 bb639205af1d2106
+testps 4dec775105944ab0
+testpd 0df41e0ef08b37dc
+maddubs16x 0f289c5d6bd1bf30
+mulhrs16x 2e316a300b1b7a30
+hadd16x 835cdd7f877e1a90
+hsub32x 0fb3ff31a2f0bf60
+sad8x f9fe506e88478f88

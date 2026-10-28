@@ -1159,7 +1159,8 @@ private:
 
     enum class VectorKind {
         Add, Sub, AddSignedSaturate, AddUnsignedSaturate, SubSignedSaturate, SubUnsignedSaturate,
-        MultiplyLow, MultiplyHighSigned, MultiplyHighUnsigned, MultiplyEvenUnsigned, MultiplyEvenSigned, MultiplyAddWords,
+        MultiplyLow, MultiplyHighSigned, MultiplyHighUnsigned, MultiplyHighRoundScale, MultiplyEvenUnsigned, MultiplyEvenSigned, MultiplyAddWords, MultiplyAddBytes,
+        HorizontalAdd, HorizontalAddSaturate, HorizontalSub, HorizontalSubSaturate, SumAbsoluteDifferences, TestSigns,
         MinSigned, MaxSigned, MinUnsigned, MaxUnsigned, CompareEqual, CompareGreater, Average, AndNot, Absolute,
         ShiftLeft, ShiftRightLogical, ShiftRightArithmetic, ShiftLeftVariable, ShiftRightLogicalVariable, ShiftRightArithmeticVariable,
         ShiftLeftBytes, ShiftRightBytes, ShuffleDwords, ShuffleLowWords, ShuffleHighWords, ShufflePairs, UnpackLow, UnpackHigh,
@@ -1197,6 +1198,17 @@ private:
         PS5LIFT_BOTH(PMULLW): return VectorSpec{K::MultiplyLow, 16};
         PS5LIFT_BOTH(PMULLD): return VectorSpec{K::MultiplyLow, 32};
         PS5LIFT_BOTH(PMULHW): return VectorSpec{K::MultiplyHighSigned, 16};
+        PS5LIFT_BOTH(PMULHRSW): return VectorSpec{K::MultiplyHighRoundScale, 16};
+        PS5LIFT_BOTH(PMADDUBSW): return VectorSpec{K::MultiplyAddBytes, 16};
+        PS5LIFT_BOTH(PHADDW): return VectorSpec{K::HorizontalAdd, 16};
+        PS5LIFT_BOTH(PHADDD): return VectorSpec{K::HorizontalAdd, 32};
+        PS5LIFT_BOTH(PHADDSW): return VectorSpec{K::HorizontalAddSaturate, 16};
+        PS5LIFT_BOTH(PHSUBW): return VectorSpec{K::HorizontalSub, 16};
+        PS5LIFT_BOTH(PHSUBD): return VectorSpec{K::HorizontalSub, 32};
+        PS5LIFT_BOTH(PHSUBSW): return VectorSpec{K::HorizontalSubSaturate, 16};
+        PS5LIFT_BOTH(PSADBW): return VectorSpec{K::SumAbsoluteDifferences, 64};
+        case ZYDIS_MNEMONIC_VTESTPS: return VectorSpec{K::TestSigns, 32};
+        case ZYDIS_MNEMONIC_VTESTPD: return VectorSpec{K::TestSigns, 64};
         PS5LIFT_BOTH(PMULHUW): return VectorSpec{K::MultiplyHighUnsigned, 16};
         PS5LIFT_BOTH(PMULUDQ): return VectorSpec{K::MultiplyEvenUnsigned, 64};
         PS5LIFT_BOTH(PMULDQ): return VectorSpec{K::MultiplyEvenSigned, 64};
@@ -1355,6 +1367,12 @@ private:
         }
     }
 
+    llvm::Value* Pairs(llvm::Value* vector, const unsigned count, const unsigned offset) {
+        std::vector<int> picked(count);
+        for (unsigned i = 0; i < count; ++i) picked[i] = static_cast<int>(2 * i + offset);
+        return _builder.CreateShuffleVector(vector, vector, picked);
+    }
+
     llvm::Value* Saturate(llvm::Value* wide, const unsigned element, const bool isSigned) {
         auto* type = wide->getType();
         const auto wideBits = llvm::cast<llvm::FixedVectorType>(type)->getElementType()->getIntegerBitWidth();
@@ -1391,9 +1409,17 @@ private:
             Write(0, _builder.CreateExtractElement(source, _builder.getInt64(Immediate(2) & 1)));
             return true;
         }
-        if (kind == K::Test) {
+        if (kind == K::Test || kind == K::TestSigns) {
             auto* a = Read(0);
             auto* b = ReadAs(1, a->getType()->getIntegerBitWidth());
+            if (kind == K::TestSigns) {
+                const auto bits = a->getType()->getIntegerBitWidth();
+                llvm::APInt signs(bits, 0);
+                for (unsigned i = element - 1; i < bits; i += element) signs.setBit(i);
+                auto* mask = llvm::ConstantInt::get(Context(), signs);
+                a = _builder.CreateAnd(a, mask);
+                b = _builder.CreateAnd(b, mask);
+            }
             auto* zero = llvm::ConstantInt::get(a->getType(), 0);
             SetFlag(PS5LIFT_ZF, _builder.CreateICmpEQ(_builder.CreateAnd(a, b), zero));
             SetFlag(PS5LIFT_CF, _builder.CreateICmpEQ(_builder.CreateAnd(_builder.CreateNot(a), b), zero));
@@ -1514,16 +1540,57 @@ private:
                 result = _builder.CreateMul(left, right);
                 break;
             }
+            case K::MultiplyHighRoundScale: {
+                auto* wide = llvm::FixedVectorType::get(Int(32), count);
+                auto* product = _builder.CreateMul(_builder.CreateSExt(va, wide), _builder.CreateSExt(vb, wide));
+                auto* scaled = _builder.CreateAdd(_builder.CreateAShr(product, 14), llvm::ConstantInt::get(wide, 1));
+                result = _builder.CreateTrunc(_builder.CreateLShr(scaled, 1), va->getType());
+                break;
+            }
             case K::MultiplyAddWords: {
                 auto* words = llvm::FixedVectorType::get(Int(32), count * 2);
                 auto* product = _builder.CreateMul(_builder.CreateSExt(AsVector(a, 16), words), _builder.CreateSExt(AsVector(b, 16), words));
-                std::vector<int> even(count);
-                std::vector<int> odd(count);
-                for (unsigned i = 0; i < count; ++i) {
-                    even[i] = static_cast<int>(2 * i);
-                    odd[i] = static_cast<int>(2 * i + 1);
+                result = _builder.CreateAdd(Pairs(product, count, 0), Pairs(product, count, 1));
+                break;
+            }
+            case K::MultiplyAddBytes: {
+                auto* bytes = llvm::FixedVectorType::get(Int(16), count * 2);
+                auto* product = _builder.CreateMul(_builder.CreateZExt(AsVector(a, 8), bytes), _builder.CreateSExt(AsVector(b, 8), bytes));
+                result = _builder.CreateBinaryIntrinsic(llvm::Intrinsic::sadd_sat, Pairs(product, count, 0), Pairs(product, count, 1));
+                break;
+            }
+            case K::HorizontalAdd:
+            case K::HorizontalAddSaturate:
+            case K::HorizontalSub:
+            case K::HorizontalSubSaturate: {
+                std::vector<int> left(count);
+                std::vector<int> right(count);
+                const unsigned half = perLane / 2;
+                for (unsigned lane = 0; lane < lanes; ++lane) {
+                    for (unsigned i = 0; i < perLane; ++i) {
+                        const unsigned from = (i < half ? 0 : count) + lane * perLane + 2 * (i % half);
+                        left[lane * perLane + i] = static_cast<int>(from);
+                        right[lane * perLane + i] = static_cast<int>(from + 1);
+                    }
                 }
-                result = _builder.CreateAdd(_builder.CreateShuffleVector(product, product, even), _builder.CreateShuffleVector(product, product, odd));
+                auto* first = _builder.CreateShuffleVector(va, vb, left);
+                auto* second = _builder.CreateShuffleVector(va, vb, right);
+                if (kind == K::HorizontalAdd) result = _builder.CreateAdd(first, second);
+                else if (kind == K::HorizontalSub) result = _builder.CreateSub(first, second);
+                else result = _builder.CreateBinaryIntrinsic(kind == K::HorizontalAddSaturate ? llvm::Intrinsic::sadd_sat : llvm::Intrinsic::ssub_sat, first, second);
+                break;
+            }
+            case K::SumAbsoluteDifferences: {
+                auto* words = llvm::FixedVectorType::get(Int(16), count * 8);
+                auto* difference = _builder.CreateBinaryIntrinsic(llvm::Intrinsic::abs, _builder.CreateSub(_builder.CreateZExt(AsVector(a, 8), words), _builder.CreateZExt(AsVector(b, 8), words)),
+                                                                  _builder.getFalse());
+                result = llvm::Constant::getNullValue(va->getType());
+                for (unsigned i = 0; i < count; ++i) {
+                    std::vector<int> block(8);
+                    for (unsigned j = 0; j < 8; ++j) block[j] = static_cast<int>(8 * i + j);
+                    auto* sum = _builder.CreateAddReduce(_builder.CreateShuffleVector(difference, difference, block));
+                    result = _builder.CreateInsertElement(result, _builder.CreateZExt(sum, Int(64)), _builder.getInt64(i));
+                }
                 break;
             }
             case K::Average: {
