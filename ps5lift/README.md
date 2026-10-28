@@ -17,7 +17,7 @@ ninja -C build
 ctest --test-dir build --output-on-failure
 ```
 
-On an aarch64 host the test lifts the fixture and runs it natively. On an x86-64 host it also runs it natively and, when `qemu-aarch64` and an aarch64 sysroot are installed (`qemu-user g++-aarch64-linux-gnu`), lifts it for aarch64 and runs it under qemu.
+On an aarch64 host the test lifts the fixture and runs it natively. On an x86-64 host it also runs it natively and, when `qemu-aarch64` and an aarch64 sysroot are installed (`qemu-user g++-aarch64-linux-gnu`), lifts it for aarch64 and runs it under qemu. The libc tests reserve the PS5 user address range, about 1 TiB of address space, so they fail under a `ulimit -v` limit.
 
 `tools/build_runtime.py` builds the runtime and [Berkeley SoftFloat](https://github.com/ucb-bar/berkeley-softfloat-3) (a submodule, for x87) into a static library per target; the tests build and cache it in `build/runtime-<arch>`.
 
@@ -32,7 +32,7 @@ build/anyps5-relinker/core/relinker/relinker eboot.bin eboot.elf
 ```sh
 build/lifter/ps5lift eboot.elf -o guest.o --cpu native
 python3 tools/build_runtime.py --triple aarch64-unknown-linux-gnu --output build/runtime-aarch64
-clang++ -O2 -Iruntime/include bridges.cpp guest.o build/runtime-aarch64/libps5lift_runtime.a -fuse-ld=lld -pthread -o guest
+clang++ -O2 -Iruntime/include bridges.cpp guest.o build/runtime-aarch64/libps5lift_runtime.a build/runtime-aarch64/libps5lift_main.a -fuse-ld=lld -pthread -o guest
 ./guest
 ```
 
@@ -57,7 +57,9 @@ The lifter prints how many functions and instructions it lifted and lists every 
 python3 tools/generate_bridges.py libc -o libc_bridges.cpp
 ```
 
-Function-pointer parameters become native thunks that call back into the guest (see [the design](docs/DESIGN.md#callbacks)). It prints how many exports it could not bridge and why; `--report` lists them. For libc it writes 1283 bridges and leaves 145 exports: `long double` (84, waiting for x87), variadic functions (30), records passed or returned by value (21), complex values (6) and function pointers as return values (4).
+Function-pointer parameters become native thunks that call back into the guest (see [the design](docs/DESIGN.md#callbacks)), `long double` values cross between the guest's x87 format and the host's, and a variadic export calls its `v` sibling with a SysV `va_list` built from the guest's registers (see [variadic imports](docs/DESIGN.md#variadic-imports)). It prints how many exports it could not bridge and why; `--report` lists them. For libc it writes 1397 bridges and leaves 31 exports: records passed or returned by value (21), complex values (6), function pointers as return values (4) and `setjmp`/`longjmp`, which need the guest's own registers.
+
+The bridges call AnyPS5's libc built for the lifted guest (`-DANYPS5_GUEST_LIFTED`). `tools/run_libc_tests.py --triple aarch64-unknown-linux-gnu` builds it and runs upstream's libc tests against it, and `tools/run_libc_fixture.py` lifts a guest that calls it through the generated bridges; ctest runs both for each target.
 
 ## Benchmark
 

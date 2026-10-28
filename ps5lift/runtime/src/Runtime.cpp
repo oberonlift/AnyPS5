@@ -17,8 +17,14 @@
 #include <immintrin.h>
 #endif
 
+extern "C" {
+__attribute__((weak)) bool GuestArenaContains_nid_postfix(const void* pointer, std::size_t bytes);
+__attribute__((weak)) void GuestArenaCommit_nid_postfix(void* pointer, std::size_t bytes, std::uint32_t protection, std::size_t granule);
+}
+
 namespace {
 
+constexpr std::uint32_t ArenaReadWrite = 0x04;
 constexpr std::uint64_t GuestStackSize = 8ull << 20;
 constexpr std::size_t HostStackSize = 512ull << 20;
 constexpr std::uint64_t TlsSize = 64ull << 10;
@@ -51,8 +57,14 @@ void MapSegments(const Ps5LiftImage& image) {
         begin = std::min(begin, image.Segments[i].GuestAddress & ~(page - 1));
         end = std::max(end, (image.Segments[i].GuestAddress + image.Segments[i].MemorySize + page - 1) & ~(page - 1));
     }
-    auto* mapped = mmap(reinterpret_cast<void*>(begin), end - begin, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED_NOREPLACE, -1, 0);
-    if (mapped != reinterpret_cast<void*>(begin)) Fail("cannot map the guest image at 0x%" PRIx64 "-0x%" PRIx64 ": %s", begin, end, std::strerror(errno));
+    auto* const start = reinterpret_cast<void*>(begin);
+    if (GuestArenaContains_nid_postfix != nullptr && GuestArenaContains_nid_postfix(start, end - begin)) {
+        GuestArenaCommit_nid_postfix(start, end - begin, ArenaReadWrite, end - begin);
+        for (std::uint64_t i = 0; i < image.SegmentCount; ++i) std::memcpy(reinterpret_cast<void*>(image.Segments[i].GuestAddress), image.Segments[i].Data, image.Segments[i].FileSize);
+        return;
+    }
+    auto* mapped = mmap(start, end - begin, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED_NOREPLACE, -1, 0);
+    if (mapped != start) Fail("cannot map the guest image at 0x%" PRIx64 "-0x%" PRIx64 ": %s", begin, end, std::strerror(errno));
     for (std::uint64_t i = 0; i < image.SegmentCount; ++i) std::memcpy(reinterpret_cast<void*>(image.Segments[i].GuestAddress), image.Segments[i].Data, image.Segments[i].FileSize);
 }
 
@@ -284,12 +296,11 @@ extern "C" std::uint64_t ps5lift_thread_join(const std::uint64_t handle) {
     return result;
 }
 
-int main() {
+extern "C" void ps5lift_run_main(void) {
     MapSegments(ps5lift_image);
     GuestThread thread;
     thread.Entry = ps5lift_image.Entry;
     thread.Main = true;
     StartThread(thread);
     pthread_join(thread.Handle, nullptr);
-    return 0;
 }

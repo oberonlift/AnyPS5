@@ -144,6 +144,7 @@ void ps5lift_extended_from_host(const Ps5LiftState* state, const long double* ho
 uint64_t ps5lift_thread_create(Ps5LiftState* parent, uint64_t entry, uint64_t argument);
 uint64_t ps5lift_thread_join(uint64_t handle);
 Ps5LiftState* ps5lift_current_state(void);
+void ps5lift_run_main(void);
 void ps5lift_unsupported(Ps5LiftState* state, uint64_t address, const char* mnemonic);
 void ps5lift_trap(Ps5LiftState* state, uint64_t address);
 void ps5lift_string_op(Ps5LiftState* state, uint32_t operation, uint32_t width, uint32_t repeat);

@@ -93,6 +93,32 @@ inline void ReturnExtended(Ps5LiftState* state, const long double value) {
     ps5lift_x87(state, PS5LIFT_X87_LOAD, PS5LIFT_X87_FLOAT80, reinterpret_cast<std::uint64_t>(extended), 0);
 }
 
+class VariadicArguments {
+public:
+    VariadicArguments(const Ps5LiftState* state, const int integers, const int floats, const int stack) {
+        for (int index = 0; index < 6; ++index) std::memcpy(_saveArea + 8 * index, &state->Gpr[IntegerRegisters[index]], 8);
+        for (int index = 0; index < 8; ++index) std::memcpy(_saveArea + 48 + 16 * index, state->Vector[index], 16);
+        _list.GpOffset = static_cast<std::uint32_t>(8 * integers);
+        _list.FpOffset = static_cast<std::uint32_t>(48 + 16 * floats);
+        _list.OverflowArea = state->Gpr[PS5LIFT_RSP] + 8 + 8 * static_cast<std::uint64_t>(stack);
+        _list.SaveArea = reinterpret_cast<std::uint64_t>(_saveArea);
+    }
+
+    VariadicArguments(const VariadicArguments&) = delete;
+    VariadicArguments& operator=(const VariadicArguments&) = delete;
+
+    void* List() { return &_list; }
+
+private:
+    struct {
+        std::uint32_t GpOffset;
+        std::uint32_t FpOffset;
+        std::uint64_t OverflowArea;
+        std::uint64_t SaveArea;
+    } _list;
+    alignas(16) unsigned char _saveArea[176];
+};
+
 template <typename T>
 void Return(Ps5LiftState* state, const T value) {
     if constexpr (std::is_same_v<T, __int128> || std::is_same_v<T, unsigned __int128>) {

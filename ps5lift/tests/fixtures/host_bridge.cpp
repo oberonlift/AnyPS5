@@ -17,6 +17,7 @@ extern "C" void ps5lift_import_host__write(Ps5LiftState* state) {
 }
 
 extern "C" void ps5lift_import_host__exit(Ps5LiftState* state) {
+    std::fflush(nullptr);
     std::_Exit(static_cast<int>(state->Gpr[PS5LIFT_RDI]));
 }
 

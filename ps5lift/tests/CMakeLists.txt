@@ -61,16 +61,23 @@ execute_process(COMMAND ${Python3_EXECUTABLE} -c "import clang.cindex" RESULT_VA
 if(PS5LIFT_HAVE_LIBCLANG_PYTHON EQUAL 0)
     foreach(triple IN LISTS PS5LIFT_TEST_TRIPLES)
         string(REGEX REPLACE "-.*" "" arch ${triple})
-        add_test(NAME bridges_libc_${arch}
-                COMMAND ${CMAKE_COMMAND}
-                        -DPYTHON=${Python3_EXECUTABLE}
-                        -DGENERATOR=${CMAKE_SOURCE_DIR}/tools/generate_bridges.py
-                        -DCOMPILER=${CMAKE_CXX_COMPILER}
-                        -DTRIPLE=${triple}
-                        -DINCLUDE=${CMAKE_SOURCE_DIR}/runtime/include
-                        -DOUTPUT=${CMAKE_CURRENT_BINARY_DIR}/libc_bridges_${arch}.cpp
-                        -P ${CMAKE_CURRENT_SOURCE_DIR}/CheckBridges.cmake)
+        add_test(NAME libc_${arch}
+                COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tools/run_libc_fixture.py
+                        --ps5lift $<TARGET_FILE:ps5lift>
+                        --clangxx ${CMAKE_CXX_COMPILER}
+                        --triple ${triple})
+        set_tests_properties(libc_${arch} PROPERTIES RESOURCE_LOCK libc_${arch})
     endforeach()
 else()
-    message(STATUS "The libclang Python bindings were not found; the bridge generator tests are skipped")
+    message(STATUS "The libclang Python bindings were not found; the libc bridge tests are skipped")
 endif()
+
+foreach(triple IN LISTS PS5LIFT_TEST_TRIPLES)
+    string(REGEX REPLACE "-.*" "" arch ${triple})
+    add_test(NAME libc_upstream_${arch}
+            COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tools/run_libc_tests.py
+                    --clangxx ${CMAKE_CXX_COMPILER}
+                    --build ${CMAKE_BINARY_DIR}
+                    --triple ${triple})
+    set_tests_properties(libc_upstream_${arch} PROPERTIES RESOURCE_LOCK libc_${arch})
+endforeach()

@@ -9,6 +9,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 SOFTFLOAT = ROOT / "3rdparty" / "softfloat"
 RUNTIME_SOURCES = ["runtime/src/Runtime.cpp", "runtime/src/GuestCpu.cpp", "runtime/src/X87.cpp"]
+MAIN_SOURCE = "runtime/src/Main.cpp"
 SOFTFLOAT_FLAGS = [
     "-DSOFTFLOAT_FAST_INT64", "-DSOFTFLOAT_ROUND_ODD", "-DINLINE_LEVEL=5", "-DSOFTFLOAT_FAST_DIV32TO16", "-DSOFTFLOAT_FAST_DIV64TO32",
     "-DTHREAD_LOCAL=_Thread_local", f"-I{SOFTFLOAT / 'build' / 'Linux-x86_64-GCC'}", f"-I{SOFTFLOAT / 'source' / '8086-SSE'}", f"-I{SOFTFLOAT / 'source' / 'include'}",
@@ -36,23 +37,25 @@ def compile_one(command, source, output):
 def build(triple, output_directory, clang, clangxx, jobs):
     output_directory = Path(output_directory)
     library = output_directory / "libps5lift_runtime.a"
+    main_library = output_directory / "libps5lift_main.a"
     headers = list((ROOT / "runtime" / "include" / "ps5lift").glob("*")) + list((SOFTFLOAT / "source" / "include").glob("*.h"))
     target = [f"--target={triple}", "-O2", "-fPIC"]
     units = []
     for path in softfloat_sources():
         units.append(([clang, *target, *SOFTFLOAT_FLAGS], path, output_directory / "softfloat" / (path.stem + ".o")))
-    for relative in RUNTIME_SOURCES:
+    for relative in [*RUNTIME_SOURCES, MAIN_SOURCE]:
         path = ROOT / relative
         units.append(([clangxx, *target, "-std=c++20", f"-I{ROOT / 'runtime' / 'include'}", f"-I{SOFTFLOAT / 'source' / 'include'}", "-DTHREAD_LOCAL=thread_local", "-DSOFTFLOAT_FAST_INT64", "-DLITTLEENDIAN=1"], path, output_directory / "runtime" / (path.stem + ".o")))
     stale = [unit for unit in units if needs_build(unit[1], unit[2], headers)]
-    if stale or not library.exists():
+    if stale or not library.exists() or not main_library.exists():
         with concurrent.futures.ThreadPoolExecutor(jobs) as pool:
             list(pool.map(lambda unit: compile_one(*unit), stale))
-        if library.exists():
-            library.unlink()
         archiver = os.environ.get("AR", "llvm-ar")
-        subprocess.run([archiver, "crs", str(library), *(str(unit[2]) for unit in units)], check=True)
-    return library
+        for archive, members in ((library, units[:-1]), (main_library, units[-1:])):
+            if archive.exists():
+                archive.unlink()
+            subprocess.run([archiver, "crs", str(archive), *(str(unit[2]) for unit in members)], check=True)
+    return library, main_library
 
 
 def main():
@@ -63,7 +66,8 @@ def main():
     parser.add_argument("--clangxx", default="clang++")
     parser.add_argument("--jobs", type=int, default=os.cpu_count())
     args = parser.parse_args()
-    print(build(args.triple, args.output, args.clang, args.clangxx, args.jobs))
+    for library in build(args.triple, args.output, args.clang, args.clangxx, args.jobs):
+        print(library)
     return 0
 
 

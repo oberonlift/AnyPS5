@@ -15,6 +15,8 @@ ANYPS5_LIBS = ROOT / "3rdparty" / "anyps5" / "core" / "libs"
 NID_SUFFIX = bytes([0x51, 0x8D, 0x64, 0xA6, 0x35, 0xDE, 0xD8, 0xC1, 0xE6, 0xB0, 0x39, 0xB1, 0xC3, 0xE5, 0x52, 0x30])
 NID_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+-"
 POSTFIX = "_nid_postfix"
+VARIADIC_SIBLINGS = {"libc_printf": "vprintf"}
+GUEST_STATE_EXPORTS = {"setjmp", "longjmp"}
 EXPORT_PATTERN = re.compile(r'APS5_EXPORT\(\s*"([^"]+)"\s*,\s*(\w+)\s*\)')
 SKIPPED_DIRECTORIES = {"windows", "macos"}
 
@@ -101,8 +103,7 @@ def callback_signature(function):
 
 
 def describe(cursor, symbol):
-    if cursor.type.kind == K.FUNCTIONPROTO and cursor.type.is_function_variadic():
-        raise Unsupported("variadic")
+    variadic = cursor.type.kind == K.FUNCTIONPROTO and cursor.type.is_function_variadic()
     return_class = classify(cursor.result_type, "return")
     parameters = []
     integers = 0
@@ -143,7 +144,7 @@ def describe(cursor, symbol):
             else:
                 stack += 1
         parameters.append((spelling, access))
-    return {"symbol": symbol, "return": return_class, "parameters": parameters}
+    return {"symbol": symbol, "return": return_class, "parameters": parameters, "variadic": (integers, floats, stack) if variadic else None}
 
 
 def translation_unit_arguments(library):
@@ -190,11 +191,25 @@ def collect(library, index):
                 continue
             if nid in exports or nid in unsupported:
                 continue
+            if (name[: -len(POSTFIX)] if name.endswith(POSTFIX) else name) in GUEST_STATE_EXPORTS:
+                unsupported[nid] = (name, "saves or restores the guest's own registers")
+                continue
             try:
                 exports[nid] = describe(cursor, name)
                 exports[nid]["name"] = name
             except Unsupported as reason:
                 unsupported[nid] = (name, str(reason))
+    by_name = {export["name"]: export for export in exports.values()}
+    for nid in [nid for nid, export in exports.items() if export["variadic"]]:
+        export = exports.pop(nid)
+        base = export["name"][: -len(POSTFIX)] if export["name"].endswith(POSTFIX) else export["name"]
+        sibling = by_name.get(VARIADIC_SIBLINGS.get(base, "v" + base) + POSTFIX)
+        named = [spelling for spelling, _ in export["parameters"]]
+        if sibling is None or sibling["variadic"] or [spelling for spelling, _ in sibling["parameters"]] != named + ["void*"]:
+            unsupported[nid] = (export["name"], "variadic without a va_list sibling")
+            continue
+        export["target"] = sibling["symbol"]
+        exports[nid] = export
     return exports, unsupported, parse_errors
 
 
@@ -202,6 +217,8 @@ def emit(exports, library_name):
     lines = [f"#include <ps5lift/Bridge.hpp>", "", "#include <cstddef>", "#include <cstdint>", "", "using namespace Ps5Lift::Bridge;", ""]
     for nid in sorted(exports):
         export = exports[nid]
+        if export["variadic"]:
+            continue
         return_class, return_spelling = export["return"]
         declaration = ", ".join(spelling for spelling, _ in export["parameters"])
         lines.append(f'extern "C" {return_spelling} {export["symbol"]}({declaration});')
@@ -209,8 +226,14 @@ def emit(exports, library_name):
     for nid in sorted(exports):
         export = exports[nid]
         return_class, _ = export["return"]
-        call = f'{export["symbol"]}({", ".join(access for _, access in export["parameters"])})'
+        accesses = [access for _, access in export["parameters"]]
+        if export["variadic"]:
+            accesses.append("variadic.List()")
+        call = f'{export.get("target", export["symbol"])}({", ".join(accesses)})'
         lines.append(f'extern "C" void {bridge_symbol(nid)}(Ps5LiftState* state) {{')
+        if export["variadic"]:
+            integers, floats, stack = export["variadic"]
+            lines.append(f"    VariadicArguments variadic(state, {integers}, {floats}, {stack});")
         if return_class == "extended" or any(access.startswith("Extended(") for _, access in export["parameters"]):
             lines.append("    const ExtendedScope scope(state);")
         if return_class == "void":
