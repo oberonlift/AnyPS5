@@ -107,6 +107,12 @@ __attribute__((noinline)) static const char* classify(int value) {
 i64 table_index_copied_after_compare(i64 value);
 i64 table_index_copied_before_compare(i64 value);
 i64 table_base_before_loop(i64 value);
+void store_address_taken_by_lea(i64 (**slot)(void));
+i64 pass_address_taken_by_lea(void);
+
+__attribute__((noinline)) i64 call_function_pointer(i64 (*function)(void)) {
+    return function();
+}
 
 __asm__(".text\n"
         ".globl table_index_copied_after_compare\n"
@@ -198,6 +204,32 @@ __asm__(".text\n"
         "9:  .long 3b-9b, 4b-9b, 5b-9b, 6b-9b\n"
         ".popsection\n"
         ".text\n");
+
+/* Functions with no symbol type and no unwind entry, whose addresses only a RIP-relative lea takes: one stored to
+   memory and one passed to a call. */
+__asm__(".text\n"
+        "stored_through_lea:\n"
+        "    mov $77, %eax\n"
+        "    ret\n"
+        "passed_through_lea:\n"
+        "    mov $78, %eax\n"
+        "    ret\n"
+        ".globl store_address_taken_by_lea\n"
+        ".type store_address_taken_by_lea, @function\n"
+        "store_address_taken_by_lea:\n"
+        "    lea stored_through_lea(%rip), %rax\n"
+        "    mov %rax, (%rdi)\n"
+        "    ret\n"
+        ".size store_address_taken_by_lea, .-store_address_taken_by_lea\n"
+        ".globl pass_address_taken_by_lea\n"
+        ".type pass_address_taken_by_lea, @function\n"
+        "pass_address_taken_by_lea:\n"
+        "    sub $8, %rsp\n"
+        "    lea passed_through_lea(%rip), %rdi\n"
+        "    call call_function_pointer\n"
+        "    add $8, %rsp\n"
+        "    ret\n"
+        ".size pass_address_taken_by_lea, .-pass_address_taken_by_lea\n");
 
 static i64 flags_of(u8 carry, u8 overflow, u8 zero, u8 sign) {
     return carry | overflow << 1 | zero << 2 | sign << 3;
@@ -371,6 +403,10 @@ int main(void) {
     for (i64 i = 0; i < 4; ++i) line("table after compare", table_index_copied_after_compare(i));
     for (i64 i = 0; i < 4; ++i) line("table before compare", table_index_copied_before_compare(i));
     for (i64 i = 0; i < 5; ++i) line("table base before loop", table_base_before_loop(i));
+    i64 (*stored)(void);
+    store_address_taken_by_lea(&stored);
+    line("function stored through lea", call_function_pointer(stored));
+    line("function passed through lea", pass_address_taken_by_lea());
     zen2_integer();
     unaligned_accesses();
 
