@@ -126,6 +126,8 @@ inline void PreciseSleepHundredNanos(unsigned long long hundredNanos) {
 inline void PreciseSpinPause() {
 #if defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)
     _mm_pause();
+#elif defined(__aarch64__)
+    asm volatile("yield" ::: "memory");
 #else
     std::atomic_signal_fence(std::memory_order_seq_cst);
 #endif
