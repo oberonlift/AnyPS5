@@ -10,5 +10,6 @@ void host_sort(void* base, unsigned long count, unsigned long size, int (*compar
 double host_apply(double (*function)(double, long), double value, long count);
 long host_on_thread(long (*function)(long), long argument);
 long host_call_eight(long (*function)(long, long, long, long, long, long, long, long));
+long double host_extended(long a, long b, long c, long d, long e, long f, long g, long double x, long double y);
 
 #endif

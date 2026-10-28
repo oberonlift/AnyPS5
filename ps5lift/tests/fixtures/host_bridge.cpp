@@ -67,3 +67,10 @@ extern "C" void ps5lift_import_host__call__eight(Ps5LiftState* state) {
     auto* function = Callback<long(long, long, long, long, long, long, long, long)>(Integer<std::uint64_t>(state, 0));
     Return(state, function(1, 2, 3, 4, 5, 6, 7, 8) + function(10, 20, 30, 40, 50, 60, 70, 80));
 }
+
+extern "C" void ps5lift_import_host__extended(Ps5LiftState* state) {
+    const ExtendedScope scope(state);
+    long sum = Stack<long>(state, 0);
+    for (int index = 0; index < 6; ++index) sum += Integer<long>(state, index);
+    ReturnExtended(state, sum != 28 ? 0.0L : Extended(state, 2) / Extended(state, 4));
+}

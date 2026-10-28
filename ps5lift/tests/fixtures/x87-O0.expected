@@ -5,6 +5,7 @@ conversions 19a33fd963207f36
 scale-remainder 2d4ef8589de97349
 constants 7ad7683a8abe46f0
 flags 5b73e229f480995c
+host-extended befe6a161f30d893
 == down
 arithmetic 39fab37a74ac8cb8
 unary 7fdc568af654d5c7
@@ -12,6 +13,7 @@ conversions 7bf3a5b5957d5c15
 scale-remainder de0d7d65ef61e479
 constants f764d59a2e7b1a80
 flags 5b73e229f480995c
+host-extended 0b8c820ae507c4a6
 == up
 arithmetic 5e15ef6968ef04f1
 unary 1fe5c6f7946d6df1
@@ -19,6 +21,7 @@ conversions 6acad6f322138060
 scale-remainder f523cc3152bce9e3
 constants 386c85708f85c06d
 flags 5b73e229f480995c
+host-extended 7541aebe077f8e0d
 == zero
 arithmetic 7e570fafc8142ba5
 unary 7fdc568af654d5c7
@@ -26,6 +29,7 @@ conversions 972fff480649de95
 scale-remainder de0d7d65ef61e479
 constants f764d59a2e7b1a80
 flags 5b73e229f480995c
+host-extended 145d69df4576b18e
 == double-precision
 arithmetic 20511456f02339cb
 unary 5136192d20452bd4

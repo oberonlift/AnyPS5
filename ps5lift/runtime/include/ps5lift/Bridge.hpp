@@ -5,6 +5,7 @@
 
 #include <array>
 #include <atomic>
+#include <cfenv>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
@@ -62,6 +63,34 @@ T Stack128(const Ps5LiftState* state, const int slot) {
     unsigned __int128 value = 0;
     std::memcpy(&value, reinterpret_cast<const void*>(state->Gpr[PS5LIFT_RSP] + 8 + 8 * static_cast<std::uint64_t>(slot)), sizeof(value));
     return static_cast<T>(value);
+}
+
+class ExtendedScope {
+public:
+    explicit ExtendedScope(const Ps5LiftState* state) : _saved(std::fegetround()) {
+        static constexpr int Rounding[4] = {FE_TONEAREST, FE_DOWNWARD, FE_UPWARD, FE_TOWARDZERO};
+        std::fesetround(Rounding[(state->X87Control >> 10) & 3]);
+    }
+
+    ~ExtendedScope() { std::fesetround(_saved); }
+
+    ExtendedScope(const ExtendedScope&) = delete;
+    ExtendedScope& operator=(const ExtendedScope&) = delete;
+
+private:
+    int _saved;
+};
+
+inline long double Extended(const Ps5LiftState* state, const int slot) {
+    long double value;
+    ps5lift_extended_to_host(reinterpret_cast<const void*>(state->Gpr[PS5LIFT_RSP] + 8 + 8 * static_cast<std::uint64_t>(slot)), &value);
+    return value;
+}
+
+inline void ReturnExtended(Ps5LiftState* state, const long double value) {
+    unsigned char extended[16] = {};
+    ps5lift_extended_from_host(state, &value, extended);
+    ps5lift_x87(state, PS5LIFT_X87_LOAD, PS5LIFT_X87_FLOAT80, reinterpret_cast<std::uint64_t>(extended), 0);
 }
 
 template <typename T>

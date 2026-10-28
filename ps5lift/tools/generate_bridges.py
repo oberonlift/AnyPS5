@@ -77,7 +77,7 @@ def classify(type_, role):
             return ("callback", callback_signature(pointee))
         return ("pointer", "void*")
     if kind == K.LONGDOUBLE:
-        raise Unsupported("long double")
+        return ("extended", "long double")
     if kind == K.RECORD:
         raise Unsupported(f"{role} passed by value as a {canonical.get_size()}-byte record")
     if kind in (K.INT128, K.UINT128):
@@ -110,7 +110,11 @@ def describe(cursor, symbol):
     stack = 0
     for argument in cursor.get_arguments():
         parameter_class, spelling = classify(argument.type, "parameter")
-        if parameter_class == "integer128":
+        if parameter_class == "extended":
+            stack += stack % 2
+            access = f"Extended(state, {stack})"
+            stack += 2
+        elif parameter_class == "integer128":
             if integers + 2 <= 6:
                 access = f"Integer128<{spelling}>(state, {integers})"
                 integers += 2
@@ -207,8 +211,12 @@ def emit(exports, library_name):
         return_class, _ = export["return"]
         call = f'{export["symbol"]}({", ".join(access for _, access in export["parameters"])})'
         lines.append(f'extern "C" void {bridge_symbol(nid)}(Ps5LiftState* state) {{')
+        if return_class == "extended" or any(access.startswith("Extended(") for _, access in export["parameters"]):
+            lines.append("    const ExtendedScope scope(state);")
         if return_class == "void":
             lines.append(f"    {call};")
+        elif return_class == "extended":
+            lines.append(f"    ReturnExtended(state, {call});")
         else:
             lines.append(f"    Return(state, {call});")
         lines.append("}")

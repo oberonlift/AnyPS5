@@ -7,6 +7,7 @@ extern "C" {
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <cfloat>
 #include <cstring>
 
 namespace {
@@ -654,4 +655,70 @@ extern "C" std::uint32_t ps5lift_x87(Ps5LiftState* state, const std::uint32_t op
     default:
         Fail("unknown x87 operation", operation);
     }
+}
+
+#if LDBL_MANT_DIG != 64
+static_assert(LDBL_MANT_DIG == 113 && sizeof(long double) == sizeof(float128_t), "host long double is x87 extended or IEEE binary128");
+
+namespace {
+
+float128_t HostDefaultNan() {
+    volatile long double zero = 0;
+    const long double nan = zero / zero;
+    float128_t bits;
+    std::memcpy(&bits, &nan, sizeof(bits));
+    return bits;
+}
+
+}
+#endif
+
+extern "C" void ps5lift_extended_to_host(const void* extended, long double* host) {
+    std::memset(host, 0, sizeof(*host));
+#if LDBL_MANT_DIG == 64
+    std::memcpy(host, extended, 10);
+#else
+    extFloat80_t value;
+    std::memcpy(&value.signif, extended, 8);
+    std::memcpy(&value.signExp, static_cast<const unsigned char*>(extended) + 8, 2);
+    float128_t converted;
+    if (IsNan(value)) {
+        converted.v[1] = static_cast<std::uint64_t>(value.signExp) << 48 | (value.signif & 0x7fffffffffffffffull) >> 15;
+        converted.v[0] = value.signif << 49;
+    } else {
+        const auto flags = softfloat_exceptionFlags;
+        converted = extF80_to_f128(value);
+        softfloat_exceptionFlags = flags;
+    }
+    std::memcpy(host, &converted, sizeof(converted));
+#endif
+}
+
+extern "C" void ps5lift_extended_from_host(const Ps5LiftState* state, const long double* host, void* extended) {
+#if LDBL_MANT_DIG == 64
+    (void)state;
+    std::memcpy(extended, host, 10);
+#else
+    static constexpr std::uint_fast8_t Rounding[4] = {softfloat_round_near_even, softfloat_round_min, softfloat_round_max, softfloat_round_minMag};
+    static const float128_t DefaultNan = HostDefaultNan();
+    float128_t value;
+    std::memcpy(&value, host, sizeof(value));
+    if (value.v[0] == DefaultNan.v[0] && value.v[1] == DefaultNan.v[1]) {
+        const auto indefinite = Indefinite();
+        std::memcpy(extended, &indefinite.signif, 8);
+        std::memcpy(static_cast<unsigned char*>(extended) + 8, &indefinite.signExp, 2);
+        return;
+    }
+    const auto flags = softfloat_exceptionFlags;
+    const auto rounding = softfloat_roundingMode;
+    const auto tininess = softfloat_detectTininess;
+    softfloat_roundingMode = Rounding[(state->X87Control >> 10) & 3];
+    softfloat_detectTininess = softfloat_tininess_afterRounding;
+    const extFloat80_t converted = f128_to_extF80(value);
+    softfloat_exceptionFlags = flags;
+    softfloat_roundingMode = rounding;
+    softfloat_detectTininess = tininess;
+    std::memcpy(extended, &converted.signif, 8);
+    std::memcpy(static_cast<unsigned char*>(extended) + 8, &converted.signExp, 2);
+#endif
 }

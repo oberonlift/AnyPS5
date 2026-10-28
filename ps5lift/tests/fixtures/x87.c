@@ -192,6 +192,17 @@ static void run_tests(void) {
     report("flags");
 }
 
+static int is_nan(int index) {
+    return (bits[index][1] & 0x7fff) == 0x7fff && (bits[index][0] << 1) != 0;
+}
+
+static void host_calls(void) {
+    for (int i = 0; i < Count; ++i)
+        for (int j = 0; j < Count; ++j)
+            if (!is_nan(i) || !is_nan(j)) mix_ld(host_extended(1, 2, 3, 4, 5, 6, 7, values[i], values[j]));
+    report("host-extended");
+}
+
 int main(void) {
     for (int i = 0; i < Count; ++i) {
         long double v;
@@ -207,6 +218,7 @@ int main(void) {
         print(names[c]);
         print("\n");
         run_tests();
+        if (c < 4) host_calls();
     }
     set_control(0x037f);
     return 0;

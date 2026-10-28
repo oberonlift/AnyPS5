@@ -139,6 +139,8 @@ void ps5lift_dispatch(Ps5LiftState* state, uint64_t target);
 void ps5lift_apply_mxcsr(Ps5LiftState* state);
 uint32_t ps5lift_read_mxcsr(Ps5LiftState* state);
 uint32_t ps5lift_x87(Ps5LiftState* state, uint32_t operation, uint32_t format, uint64_t address, uint32_t index);
+void ps5lift_extended_to_host(const void* extended, long double* host);
+void ps5lift_extended_from_host(const Ps5LiftState* state, const long double* host, void* extended);
 uint64_t ps5lift_thread_create(Ps5LiftState* parent, uint64_t entry, uint64_t argument);
 uint64_t ps5lift_thread_join(uint64_t handle);
 Ps5LiftState* ps5lift_current_state(void);
