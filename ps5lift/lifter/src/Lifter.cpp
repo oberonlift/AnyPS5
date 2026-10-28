@@ -1939,13 +1939,16 @@ private:
                 break;
             }
             case K::AlignRight: {
+                // Each lane shifts the destination's lane above the source's right by whole bytes: 16 for XMM and
+                // YMM registers, 8 for MMX ones.
                 const auto amount = static_cast<int>(Immediate(base + 2) & 0xff);
+                const auto laneBytes = static_cast<int>(laneBits / 8);
                 std::vector<int> mask(count);
                 for (unsigned lane = 0; lane < lanes; ++lane) {
-                    for (int i = 0; i < 16; ++i) {
+                    const int laneBase = static_cast<int>(lane) * laneBytes;
+                    for (int i = 0; i < laneBytes; ++i) {
                         const int from = i + amount;
-                        const int laneBase = static_cast<int>(lane * 16);
-                        mask[laneBase + i] = from < 16 ? static_cast<int>(count) + laneBase + from : from < 32 ? laneBase + from - 16 : -1;
+                        mask[laneBase + i] = from < laneBytes ? static_cast<int>(count) + laneBase + from : from < 2 * laneBytes ? laneBase + from - laneBytes : -1;
                     }
                 }
                 result = ShuffleWithZero(va, vb, mask);

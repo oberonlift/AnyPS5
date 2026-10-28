@@ -42,6 +42,14 @@ static void line_hex(const char* name, u64 value) {
         result;                                                                                                      \
     })
 
+#define ALIGN(a, b, count)                                                                                           \
+    ({                                                                                                               \
+        u64 result;                                                                                                  \
+        __asm__("movq %1, %%mm0\n\tmovq %2, %%mm1\n\tpalignr $" #count ", %%mm1, %%mm0\n\tmovq %%mm0, %0\n\temms"      \
+                : "=r"(result) : "r"(a), "r"(b) : "mm0", "mm1");                                                     \
+        result;                                                                                                      \
+    })
+
 static const u64 a = 0x80017fff0100ff80UL;
 static const u64 b = 0x7fff8000fffe0081UL;
 static const u64 selector = 0x8007060504030201UL;
@@ -93,6 +101,10 @@ static void shuffles(void) {
     u64 shuffled;
     __asm__("movq %1, %%mm1\n\tpshufw $0x1b, %%mm1, %%mm0\n\tmovq %%mm0, %0\n\temms" : "=r"(shuffled) : "r"(a) : "mm0", "mm1");
     line_hex("pshufw 0x1b", shuffled);
+    line_hex("palignr 3", ALIGN(a, b, 3));
+    line_hex("palignr 8", ALIGN(a, b, 8));
+    line_hex("palignr 13", ALIGN(a, b, 13));
+    line_hex("palignr 20", ALIGN(a, b, 20));
 }
 
 static void shifts(void) {
