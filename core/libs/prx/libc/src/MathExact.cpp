@@ -6,7 +6,9 @@
 #include <cmath>
 #include <cstdint>
 #include <cstring>
+#if defined(__SSE2__)
 #include <emmintrin.h>
+#endif
 #include <limits>
 #include <stdexcept>
 
@@ -257,6 +259,16 @@ TFloat FusedPolynomial(TFloat x, const TFloat* table, int degree) {
     return result;
 }
 
+#if !defined(__SSE2__)
+std::int64_t ConvertToInteger(double x) {
+    if (!(x >= -0x1p63 && x < 0x1p63)) {
+        std::feraiseexcept(FE_INVALID);
+        return std::numeric_limits<std::int64_t>::min();
+    }
+    return static_cast<std::int64_t>(std::rint(x));
+}
+#endif
+
 }
 
 extern "C" {
@@ -362,6 +374,7 @@ float APS5_VABI rintf_nid_postfix(float x) { return std::isnan(x) ? x + x : std:
 float APS5_VABI nearbyintf_nid_postfix(float x) { return std::isnan(x) ? x + x : std::rintf(x); }
 double APS5_VABI nearbyint_nid_postfix(double x) { return std::isnan(x) ? x + x : std::rint(x); }
 
+#if defined(__SSE2__)
 std::int64_t APS5_VABI lrint_nid_postfix(double x) { return _mm_cvtsd_si64(_mm_set_sd(x)); }
 
 std::int64_t APS5_VABI lrintf_nid_postfix(float x) { return _mm_cvtss_si64(_mm_set_ss(x)); }
@@ -369,6 +382,15 @@ std::int64_t APS5_VABI lrintf_nid_postfix(float x) { return _mm_cvtss_si64(_mm_s
 long long APS5_VABI llrint_nid_postfix(double x) { return _mm_cvtsd_si64(_mm_set_sd(x)); }
 
 long long APS5_VABI llrintf_nid_postfix(float x) { return _mm_cvtss_si64(_mm_set_ss(x)); }
+#else
+std::int64_t APS5_VABI lrint_nid_postfix(double x) { return ConvertToInteger(x); }
+
+std::int64_t APS5_VABI lrintf_nid_postfix(float x) { return ConvertToInteger(x); }
+
+long long APS5_VABI llrint_nid_postfix(double x) { return ConvertToInteger(x); }
+
+long long APS5_VABI llrintf_nid_postfix(float x) { return ConvertToInteger(x); }
+#endif
 
 double APS5_VABI drem_nid_postfix(double x, double y) {
     return Remainder(x, y);
