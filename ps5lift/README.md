@@ -17,6 +17,15 @@ ctest --test-dir build --output-on-failure
 
 When the tests run lifted code natively they lift it for the host CPU (`--cpu native`), since the `neoverse-v2` default uses SVE, which CPUs such as Apple's do not have; `run_fixture.py --cpu` lifts for another CPU. On an aarch64 host the test lifts the fixture and runs it natively; building the x86-64 guests there needs an x86-64 cross toolchain and libraries (`g++-x86-64-linux-gnu` on Ubuntu). On an x86-64 host it also runs it natively and, when `qemu-aarch64` and an aarch64 sysroot are installed (`qemu-user g++-aarch64-linux-gnu`), lifts it for aarch64 and runs it under qemu. The AnyPS5 submodule points at the `aarch64-host` branch of [oberonlift/AnyPS5](https://github.com/oberonlift/AnyPS5), which carries the changes that build AnyPS5's libraries for a lifted guest on top of upstream. AnyPS5 is built for the host, so the tests that use its libraries run for the host's architecture only. The libc tests reserve the PS5 user address range, about 1 TiB of address space, so they fail under a `ulimit -v` limit.
 
+On an Apple Silicon Mac `ps5lift` builds and lifts for Linux, but what it lifts still runs on Linux only ([the macOS plan](docs/MACOS.md)). Xcode's command-line tools and Homebrew's `llvm` and `lld` are the toolchain. The tests lift every fixture for aarch64 and x86-64 Linux without running the result, and leave out AnyPS5's build and the tests that use its libraries. The x86-64 guests that use threads or libc build against an x86-64 Linux sysroot: a directory holding `usr/x86_64-linux-gnu` and `usr/lib/gcc-cross/x86_64-linux-gnu` as Ubuntu's `g++-x86-64-linux-gnu` installs them, copied from such a machine.
+
+```sh
+git submodule update --init 3rdparty/anyps5 && git submodule update --init --recursive 3rdparty/zydis
+cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DLLVM_DIR=$(brew --prefix llvm)/lib/cmake/llvm -DPS5LIFT_X86_64_SYSROOT=<sysroot>
+ninja -C build
+ctest --test-dir build --output-on-failure
+```
+
 `tools/build_runtime.py` builds the runtime and [Berkeley SoftFloat](https://github.com/ucb-bar/berkeley-softfloat-3) (a submodule, for x87) into a static library per target; the tests build and cache it in `build/runtime-<arch>`.
 
 ## Use

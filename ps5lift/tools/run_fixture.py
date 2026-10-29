@@ -74,28 +74,29 @@ GUEST_MODULES = {"modules": ("guestmodule", "module.c")}
 HOST_LIBRARIES = {"threads": ("hostthread", "host_thread.c"), "callbacks": ("hostcallbacks", "host_callbacks.c"), "x87": ("hostx87", "host_x87.c"), "setjmp": ("hostsetjmp", "host_setjmp.c")}
 
 
-def build_guest(clang, work, name, optimization, defines=(), vectorize=False, suffix=""):
+def build_guest(clang, work, name, optimization, defines=(), vectorize=False, suffix="", sysroot=None):
+    cross = [f"--sysroot={sysroot}"] if sysroot else []
     library = work / "libhost.so"
     if not library.exists():
-        run([clang, *GUEST_FLAGS, "-O2", "-fPIC", "-shared", FIXTURES / "host_stub.c", "-o", library])
+        run([clang, *GUEST_FLAGS, *cross, "-O2", "-fPIC", "-shared", FIXTURES / "host_stub.c", "-o", library])
     extra = []
     if name in HOST_LIBRARIES:
         library_name, source = HOST_LIBRARIES[name]
         extra_library = work / f"lib{library_name}.so"
         if not extra_library.exists():
-            run([clang, "--target=x86_64-unknown-linux-gnu", "-O2", "-fPIC", "-shared", "-fuse-ld=lld", FIXTURES / source, "-pthread", "-o", extra_library])
+            run([clang, "--target=x86_64-unknown-linux-gnu", *cross, "-O2", "-fPIC", "-shared", "-fuse-ld=lld", FIXTURES / source, "-pthread", "-o", extra_library])
         extra = [f"-l{library_name}"]
     code = ["-fno-pic"]
     if name in GUEST_MODULES:
         module_name, source = GUEST_MODULES[name]
         module = work / f"lib{module_name}.so"
         if not module.exists():
-            run([clang, *GUEST_FLAGS, "-O2", "-fPIC", "-shared", "-Wl,-z,pack-relative-relocs", f"-Wl,-soname,$ORIGIN/lib{module_name}.so", FIXTURES / source, f"-L{work}", "-lhost", "-o", module])
+            run([clang, *GUEST_FLAGS, *cross, "-O2", "-fPIC", "-shared", "-Wl,-z,pack-relative-relocs", f"-Wl,-soname,$ORIGIN/lib{module_name}.so", FIXTURES / source, f"-L{work}", "-lhost", "-o", module])
         extra = [f"-l{module_name}", "-lc", "-Wl,--allow-shlib-undefined"]
         code = ["-fpie"]
     guest = work / f"{name}{optimization}{suffix}"
     vector_flags = [] if vectorize else ["-fno-vectorize", "-fno-slp-vectorize"]
-    run([clang, optimization, *GUEST_FLAGS, *vector_flags, *defines, *code, "-no-pie", "-Wl,--image-base=0x20000000",
+    run([clang, optimization, *GUEST_FLAGS, *cross, *vector_flags, *defines, *code, "-no-pie", "-Wl,--image-base=0x20000000",
          "-Wl,--dynamic-linker=/lib64/ld-linux-x86-64.so.2", FIXTURES / f"{name}.c", f"-L{work}", "-lhost", *extra, "-o", guest])
     return guest
 
@@ -109,7 +110,7 @@ def compare(expected, actual, label):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Lift an x86-64 fixture, build it for a target and compare its output")
+    parser = argparse.ArgumentParser(description="Lift an x86-64 fixture, build it for a target and compare its output, or only lift it")
     parser.add_argument("--ps5lift", required=True)
     parser.add_argument("--clang", required=True)
     parser.add_argument("--clangxx", required=True)
@@ -119,6 +120,8 @@ def main():
     parser.add_argument("--memory", action="append", choices=["tso", "relaxed"])
     parser.add_argument("--cpu", help="CPU for the lifted code; native on the host by default")
     parser.add_argument("--unoptimized-lift", action="store_true", help="lift with ps5lift -O0, which skips LLVM's optimizations")
+    parser.add_argument("--guest-sysroot", help="x86-64 Linux sysroot to build the guest against; the compiler's own by default")
+    parser.add_argument("--lift-only", action="store_true", help="lift for --triple without linking or running the result, on a host that cannot run it")
     parser.add_argument("--keep", action="store_true")
     args = parser.parse_args()
 
@@ -129,20 +132,28 @@ def main():
         specific = FIXTURES / f"{args.fixture}{optimization}.expected"
         return (specific if specific.exists() else FIXTURES / f"{args.fixture}.expected").read_text()
 
-    runner = runner_for(args.triple)
+    if args.lift_only:
+        runner = None
+        target = ["--cpu", args.cpu] if args.cpu else []
+    else:
+        runner = runner_for(args.triple)
+        target = lifter_target(args.triple, runner, args.cpu)
     work = Path(tempfile.mkdtemp(prefix="ps5lift-"))
     failures = 0
     try:
         for optimization in optimizations:
             expected = expected_for(optimization)
-            guest = build_guest(args.clang, work, args.fixture, optimization, ["-DPS5LIFT_EMULATED"] if runner else [])
-            if platform.machine() == "x86_64" and args.fixture not in CONSOLE_OUTPUT:
+            guest = build_guest(args.clang, work, args.fixture, optimization, ["-DPS5LIFT_EMULATED"] if runner else [], sysroot=args.guest_sysroot)
+            if not args.lift_only and platform.machine() == "x86_64" and args.fixture not in CONSOLE_OUTPUT:
                 native = run([guest], env={**os.environ, "LD_LIBRARY_PATH": str(work)}).stdout
                 failures += not compare(expected, native, f"native {optimization}")
             for memory in memories:
                 label = f"{args.triple} {optimization} {memory}{' unoptimized lift' if args.unoptimized_lift else ''}"
                 lifted = work / f"{guest.name}-{memory}.a"
-                report = run([args.ps5lift, guest, "-o", lifted, "--triple", args.triple, "--memory", memory, *lifter_target(args.triple, runner, args.cpu), *(["-O0"] if args.unoptimized_lift else [])]).stderr
+                report = run([args.ps5lift, guest, "-o", lifted, "--triple", args.triple, "--memory", memory, *target, *(["-O0"] if args.unoptimized_lift else [])]).stderr
+                if args.lift_only:
+                    print(f"PASS {label}, lifted only: {report.strip()}")
+                    continue
                 program = work / f"{guest.name}-{memory}"
                 run([args.clangxx, f"--target={args.triple}", "-std=c++20", "-O2", f"-I{ROOT / 'runtime' / 'include'}", FIXTURES / "host_bridge.cpp", lifted, *runtime_link_arguments(args.ps5lift, args.triple, args.clang, args.clangxx), "-fuse-ld=lld", "-pthread", "-o", program])
                 try:

@@ -1,5 +1,46 @@
 find_package(Python3 REQUIRED COMPONENTS Interpreter)
 
+set(PS5LIFT_FIXTURES basic vector float threads callbacks x87 setjmp cpu mmx modules strings sse41)
+
+if(NOT CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    # ps5lift writes Linux programs, so on another host the tests lift every fixture for both Linux targets without
+    # running the result, and the tests that run AnyPS5's libraries need a Linux host. The guests that use threads or
+    # libc build against an x86-64 Linux sysroot: usr/x86_64-linux-gnu and usr/lib/gcc-cross/x86_64-linux-gnu as
+    # Ubuntu's g++-x86-64-linux-gnu installs them, copied below one directory.
+    set(PS5LIFT_X86_64_SYSROOT "" CACHE PATH "x86-64 Linux sysroot that the fixture guests build against")
+    if(NOT IS_DIRECTORY "${PS5LIFT_X86_64_SYSROOT}/usr/x86_64-linux-gnu" OR NOT IS_DIRECTORY "${PS5LIFT_X86_64_SYSROOT}/usr/lib/gcc-cross/x86_64-linux-gnu")
+        message(FATAL_ERROR "The fixture guests need an x86-64 Linux sysroot on ${CMAKE_SYSTEM_NAME}: set PS5LIFT_X86_64_SYSROOT to a directory "
+                "with usr/x86_64-linux-gnu and usr/lib/gcc-cross/x86_64-linux-gnu, as Ubuntu's g++-x86-64-linux-gnu installs them, "
+                "or configure with -DBUILD_TESTING=OFF.")
+    endif()
+    foreach(triple aarch64-unknown-linux-gnu x86_64-unknown-linux-gnu)
+        string(REGEX REPLACE "-.*" "" arch ${triple})
+        foreach(fixture IN LISTS PS5LIFT_FIXTURES)
+            add_test(NAME lift_${fixture}_${arch}
+                    COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tools/run_fixture.py
+                            --ps5lift $<TARGET_FILE:ps5lift>
+                            --clang ${CMAKE_C_COMPILER}
+                            --clangxx ${CMAKE_CXX_COMPILER}
+                            --triple ${triple}
+                            --fixture ${fixture}
+                            --guest-sysroot ${PS5LIFT_X86_64_SYSROOT}
+                            --lift-only)
+        endforeach()
+        add_test(NAME lift_basic_unoptimized_${arch}
+                COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tools/run_fixture.py
+                        --ps5lift $<TARGET_FILE:ps5lift>
+                        --clang ${CMAKE_C_COMPILER}
+                        --clangxx ${CMAKE_CXX_COMPILER}
+                        --triple ${triple}
+                        --fixture basic
+                        --optimization=-O2
+                        --unoptimized-lift
+                        --guest-sysroot ${PS5LIFT_X86_64_SYSROOT}
+                        --lift-only)
+    endforeach()
+    return()
+endif()
+
 if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(aarch64|arm64)$")
     set(PS5LIFT_HOST_ARCH aarch64)
     set(PS5LIFT_TEST_TRIPLES aarch64-unknown-linux-gnu)
@@ -14,7 +55,7 @@ endif()
 
 foreach(triple IN LISTS PS5LIFT_TEST_TRIPLES)
     string(REGEX REPLACE "-.*" "" arch ${triple})
-    foreach(fixture basic vector float threads callbacks x87 setjmp cpu mmx modules strings sse41)
+    foreach(fixture IN LISTS PS5LIFT_FIXTURES)
         set(memory_models)
         if(fixture STREQUAL "threads")
             set(memory_models --memory tso)
