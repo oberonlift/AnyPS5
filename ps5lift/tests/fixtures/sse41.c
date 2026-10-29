@@ -149,6 +149,46 @@ __attribute__((noinline)) static v2 vdppd(int control, v2 a, v2 b) {
 
 enum { Cases = 24 };
 
+// Which NaN dpps and dppd return when two or more selected products are NaN or infinite depends on the order the CPU
+// adds them in, which differs between x86 implementations, so such a result is hashed as one canonical NaN.
+static int several_special(const float* a, const float* b, int count, int control) {
+    int special = 0;
+    for (int i = 0; i < count; ++i) {
+        if (!((control >> (4 + i)) & 1)) continue;
+        const float product = a[i] * b[i];
+        special += product != product || product - product != 0;
+    }
+    return special >= 2;
+}
+
+static int several_special_doubles(const double* a, const double* b, int control) {
+    int special = 0;
+    for (int i = 0; i < 2; ++i) {
+        if (!((control >> (4 + i)) & 1)) continue;
+        const double product = a[i] * b[i];
+        special += product != product || product - product != 0;
+    }
+    return special >= 2;
+}
+
+static void canonical_floats(v4* value) {
+    for (int i = 0; i < 4; ++i) {
+        if ((*value)[i] != (*value)[i]) {
+            const u32 nan = 0x7fc00000;
+            memcpy((char*)value + 4 * i, &nan, 4);
+        }
+    }
+}
+
+static void canonical_doubles(v2* value) {
+    for (int i = 0; i < 2; ++i) {
+        if ((*value)[i] != (*value)[i]) {
+            const u64 nan = 0x7ff8000000000000ul;
+            memcpy((char*)value + 8 * i, &nan, 8);
+        }
+    }
+}
+
 int main(void) {
     static const u32 modes[2] = {0x1f80, 0x9fc0};
     u64 single = 0xcbf29ce484222325ul, pair = single;
@@ -164,8 +204,18 @@ int main(void) {
                 const v2 c = random_doubles(), d = random_doubles();
                 const v4 product = dpps(control, a, b);
                 const v2 product2 = dppd(control, c, d);
-                mix(&single, &product, 16);
-                mix(&pair, &product2, 16);
+                float fa[4], fb[4];
+                double da[2], db[2];
+                memcpy(fa, &a, 16);
+                memcpy(fb, &b, 16);
+                memcpy(da, &c, 16);
+                memcpy(db, &d, 16);
+                v4 hashed = product;
+                v2 hashed2 = product2;
+                if (several_special(fa, fb, 4, control)) canonical_floats(&hashed);
+                if (several_special_doubles(da, db, control)) canonical_doubles(&hashed2);
+                mix(&single, &hashed, 16);
+                mix(&pair, &hashed2, 16);
 #ifdef __AVX__
                 const v4 high = dpps(control, high_a, high_b);
                 v8 wide_a, wide_b;
