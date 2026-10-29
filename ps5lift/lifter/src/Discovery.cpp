@@ -397,7 +397,7 @@ GuestFunction DiscoverFunction(const GuestImage& image, const Decoder& decoder, 
                     pending.emplace_back(*target, address);
                 }
                 if (IsConditionalJump(mnemonic) && ownCode(instruction.Next())) function.Leaders.insert(instruction.Next());
-                if (mnemonic == ZYDIS_MNEMONIC_JMP && !target) indirectJumps.push_back(address);
+                if (mnemonic == ZYDIS_MNEMONIC_JMP && !target && instruction.Info.meta.branch_type != ZYDIS_BRANCH_TYPE_FAR) indirectJumps.push_back(address);
                 if (EndsFlow(instruction)) break;
                 address = instruction.Next();
                 if (!ownCode(address)) break;
