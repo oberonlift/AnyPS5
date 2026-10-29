@@ -8,6 +8,7 @@
 #include <deque>
 #include <sstream>
 #include <stdexcept>
+#include <utility>
 
 namespace Ps5Lift {
 
@@ -216,14 +217,18 @@ std::optional<TableShape> MatchTable(const GuestFunction& function, const Predec
     if (previous->Info.mnemonic == ZYDIS_MNEMONIC_MOV && absolute(previous->Operands[1]))
         return TableShape{static_cast<std::uint64_t>(previous->Operands[1].mem.disp.value), 8, previous->Operands[1].mem.index, previous->Address};
     if (previous->Info.mnemonic != ZYDIS_MNEMONIC_ADD || previous->Operands[1].type != ZYDIS_OPERAND_TYPE_REGISTER) return std::nullopt;
-    const auto base = previous->Operands[1].reg.value;
-    const auto* load = SingleDefinition(function, predecessors, previous->Address, target.reg.value);
-    if (load == nullptr || load->Info.mnemonic != ZYDIS_MNEMONIC_MOVSXD) return std::nullopt;
-    const auto& entry = load->Operands[1];
-    if (entry.type != ZYDIS_OPERAND_TYPE_MEMORY || entry.mem.base != base || entry.mem.scale != 4 || entry.mem.disp.value != 0) return std::nullopt;
-    const auto table = RipRelativeValue(function, predecessors, load->Address, base);
-    if (!table || RipRelativeValue(function, predecessors, previous->Address, base) != table) return std::nullopt;
-    return TableShape{*table, 4, entry.mem.index, load->Address};
+    // Clang adds the table to the loaded entry, GCC the entry to the table.
+    const auto sum = target.reg.value;
+    const auto addend = previous->Operands[1].reg.value;
+    for (const auto& [loaded, base] : {std::pair{sum, addend}, std::pair{addend, sum}}) {
+        const auto* load = SingleDefinition(function, predecessors, previous->Address, loaded);
+        if (load == nullptr || load->Info.mnemonic != ZYDIS_MNEMONIC_MOVSXD) continue;
+        const auto& entry = load->Operands[1];
+        if (entry.type != ZYDIS_OPERAND_TYPE_MEMORY || entry.mem.base != base || entry.mem.scale != 4 || entry.mem.disp.value != 0) continue;
+        const auto table = RipRelativeValue(function, predecessors, load->Address, base);
+        if (table && RipRelativeValue(function, predecessors, previous->Address, base) == table) return TableShape{*table, 4, entry.mem.index, load->Address};
+    }
+    return std::nullopt;
 }
 
 std::optional<std::uint64_t> MemoryReference(const Instruction& instruction, const ZydisDecodedOperand& operand) {
