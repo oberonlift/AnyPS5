@@ -11,9 +11,7 @@ A review of the whole tree in October 2026 found these. Each gives a wrong resul
 
 ### x87
 
-- `fscale` by +∞, or by 2^63 or more, scales down to zero: under SoftFloat's 8086-SSE specialisation `extF80_to_i64` returns `INT64_MIN` on positive overflow, and the clamp keeps it negative. The invalid cases 0 × 2^+∞ and ∞ × 2^−∞ do not raise IE.
 - Unnormals, pseudo-NaNs and pseudo-infinities are computed with as SoftFloat normalises them, instead of raising IE and returning the indefinite; `fxam` already classifies them as unsupported.
-- A `fist` that overflows its 16- or 32-bit destination leaves C1 set from the 64-bit conversion. `fxam` of an empty ST(0) reports C1 as 0 rather than the sign of the stale register.
 
 ### Discovery and images
 
@@ -61,7 +59,7 @@ A review of the whole tree in October 2026 found these. Each gives a wrong resul
 
 - Every fixture is built for `znver2`, so the compiler encodes SSE with VEX, and the only legacy SSE forms tested are AES, `pclmulqdq`, SHA, MMX and a set of scalar arithmetic, comparison, rounding and conversion forms, which come from assembly. `vector.c` and `float.c` use AVX throughout, so covering the packed legacy forms needs SSE-only builds of their tests.
 - No test runs `--float fast`, `--preserve-flags` or `--emit-ir`, and no fixture splits an image into more than one part, so calls between the parts of one image are tested only by EVO Player.
-- Untested paths: division traps, jump tables sized by layout, fibers resumed on another thread, `fscale` by large scales, the generator's forwarded variadics and 128-bit stack arguments, and the runtime's reports of a full callback pool, a `longjmp` through native code and a resume a frame has no point for.
+- Untested paths: division traps, jump tables sized by layout, fibers resumed on another thread, the generator's forwarded variadics and 128-bit stack arguments, and the runtime's reports of a full callback pool, a `longjmp` through native code and a resume a frame has no point for.
 - The TSO check in `threads.c` can only fail when the lifted code runs on aarch64 hardware.
 
 ## Cleanup

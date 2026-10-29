@@ -60,6 +60,21 @@ bool IsNegative(const extFloat80_t value) {
     return (value.signExp & 0x8000) != 0;
 }
 
+bool IsZero(const extFloat80_t value) {
+    return (value.signExp & 0x7fff) == 0 && value.signif == 0;
+}
+
+bool IsInfinity(const extFloat80_t value) {
+    return (value.signExp & 0x7fff) == 0x7fff && value.signif == 0x8000000000000000ull;
+}
+
+extFloat80_t Infinity(const bool negative) {
+    extFloat80_t value;
+    value.signExp = negative ? 0xffff : 0x7fff;
+    value.signif = 0x8000000000000000ull;
+    return value;
+}
+
 class Fpu {
 public:
     explicit Fpu(Ps5LiftState* state) : _state(*state) {
@@ -101,6 +116,10 @@ public:
             StackFault(false);
             return Indefinite();
         }
+        return Contents(index);
+    }
+
+    extFloat80_t Contents(const unsigned index) const {
         extFloat80_t value;
         std::memcpy(&value.signif, _state.X87Registers[Physical(index)], 8);
         std::memcpy(&value.signExp, _state.X87Registers[Physical(index)] + 8, 2);
@@ -253,25 +272,19 @@ template <typename T>
 void StoreInteger(Fpu& fpu, const extFloat80_t value, const bool truncate, void* destination) {
     const auto rounding = truncate ? static_cast<std::uint_fast8_t>(softfloat_round_minMag) : softfloat_roundingMode;
     T result = static_cast<T>(std::uint64_t{1} << (sizeof(T) * 8 - 1));
-    if (!IsNan(value)) {
+    if (IsNan(value)) {
+        fpu.Raise(StatusInvalid);
+    } else {
         const auto saved = softfloat_exceptionFlags;
         softfloat_exceptionFlags = 0;
         const auto wide = extF80_to_i64(value, rounding, true);
-        const bool invalid = (softfloat_exceptionFlags & softfloat_flag_invalid) != 0;
-        const bool inexact = (softfloat_exceptionFlags & softfloat_flag_inexact) != 0;
-        softfloat_exceptionFlags = static_cast<std::uint_fast8_t>(saved | softfloat_exceptionFlags);
-        if (!invalid && inexact && !truncate) {
-            const auto flags = softfloat_exceptionFlags;
-            if (extF80_to_i64(value, softfloat_round_minMag, false) != wide) fpu.SetRoundedUp();
-            softfloat_exceptionFlags = flags;
-        }
-        if (!invalid && wide >= INT64_C(-1) << (sizeof(T) * 8 - 1) && (sizeof(T) == 8 || wide < INT64_C(1) << (sizeof(T) * 8 - 1))) {
+        const auto raised = softfloat_exceptionFlags;
+        const bool fits = (raised & softfloat_flag_invalid) == 0 && wide >= INT64_C(-1) << (sizeof(T) * 8 - 1) && (sizeof(T) == 8 || wide < INT64_C(1) << (sizeof(T) * 8 - 1));
+        if (fits) {
             result = static_cast<T>(wide);
-        } else {
-            softfloat_exceptionFlags = static_cast<std::uint_fast8_t>(saved | softfloat_flag_invalid);
+            if ((raised & softfloat_flag_inexact) != 0 && !truncate && extF80_to_i64(value, softfloat_round_minMag, false) != wide) fpu.SetRoundedUp();
         }
-    } else {
-        fpu.Raise(StatusInvalid);
+        softfloat_exceptionFlags = static_cast<std::uint_fast8_t>(saved | (fits ? raised : softfloat_flag_invalid));
     }
     std::memcpy(destination, &result, sizeof(T));
 }
@@ -385,11 +398,9 @@ unsigned TruncatedQuotientBits(const extFloat80_t dividend, const extFloat80_t d
 }
 
 std::uint16_t Examine(Fpu& fpu) {
-    const bool empty = !fpu.Valid(0);
-    extFloat80_t value{};
-    if (!empty) value = fpu.Get(0);
+    const auto value = fpu.Contents(0);
     const auto sign = IsNegative(value) ? StatusC1 : 0;
-    if (empty) return static_cast<std::uint16_t>(StatusC3 | StatusC0 | sign);
+    if (!fpu.Valid(0)) return static_cast<std::uint16_t>(StatusC3 | StatusC0 | sign);
     const auto exponent = value.signExp & 0x7fff;
     const bool integerBit = (value.signif >> 63) != 0;
     if (exponent == 0x7fff) {
@@ -573,11 +584,23 @@ extern "C" std::uint32_t ps5lift_x87(Ps5LiftState* state, const std::uint32_t op
             fpu.Set(0, extF80_add(value, scale));
             return 0;
         }
-        const auto saved = softfloat_exceptionFlags;
-        auto power = extF80_to_i64(scale, softfloat_round_minMag, false);
-        softfloat_exceptionFlags = saved;
-        if (power > 0x10000) power = 0x10000;
-        if (power < -0x10000) power = -0x10000;
+        if (IsInfinity(scale)) {
+            const bool up = !IsNegative(scale);
+            if (up ? IsZero(value) : IsInfinity(value)) {
+                fpu.Raise(StatusInvalid);
+                fpu.Set(0, Indefinite());
+            } else {
+                fpu.Set(0, up ? Infinity(IsNegative(value)) : Zero(IsNegative(value)));
+            }
+            return 0;
+        }
+        constexpr std::int64_t Saturated = 0x10000;
+        std::int64_t power = IsNegative(scale) ? -Saturated : Saturated;
+        if ((scale.signExp & 0x7fff) < 0x3fff + 16) {
+            const auto saved = softfloat_exceptionFlags;
+            power = extF80_to_i64(scale, softfloat_round_minMag, false);
+            softfloat_exceptionFlags = saved;
+        }
         const auto scaled = [&] {
             auto result = value;
             auto remaining = power;
