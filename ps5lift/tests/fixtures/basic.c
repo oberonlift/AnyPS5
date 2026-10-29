@@ -588,6 +588,28 @@ __asm__(".text\n"
         "    movl -1, %eax\n"
         "    ret\n");
 
+// GCC loads the table into the register it jumps through and adds the entry to it; clang adds the table to the entry.
+long gcc_style_switch(long index);
+__asm__(".text\n"
+        ".type gcc_style_switch, @function\n"
+        "gcc_style_switch:\n"
+        "    cmpq $4, %rdi\n"
+        "    jae .Lgcc_default\n"
+        "    leaq .Lgcc_table(%rip), %rcx\n"
+        "    movslq (%rcx,%rdi,4), %rax\n"
+        "    addq %rax, %rcx\n"
+        "    movq %rdi, %rax\n"
+        "    jmpq *%rcx\n"
+        ".Lgcc_case0: movl $10, %eax\n ret\n"
+        ".Lgcc_case1: movl $20, %eax\n ret\n"
+        ".Lgcc_case2: movl $30, %eax\n ret\n"
+        ".Lgcc_case3: movl $40, %eax\n ret\n"
+        ".Lgcc_default: movq $-1, %rax\n ret\n"
+        ".section .rodata\n"
+        ".p2align 2\n"
+        ".Lgcc_table: .long .Lgcc_case0-.Lgcc_table, .Lgcc_case1-.Lgcc_table, .Lgcc_case2-.Lgcc_table, .Lgcc_case3-.Lgcc_table\n"
+        ".text\n");
+
 static u64 push_pop_16(void) {
     u64 result;
     __asm__ volatile("sub $128, %%rsp\n\t"
@@ -689,6 +711,9 @@ int main(void) {
     line("atomic counter", (i64)counter);
     line("atomic exchanged", exchanged);
     line_hex("16-bit push and pop", push_pop_16());
+    long gcc_sum = 0;
+    for (long i = 0; i < 5; ++i) gcc_sum += gcc_style_switch(i);
+    line("gcc-style jump table", gcc_sum);
 
     print("done\n");
     return 0;
