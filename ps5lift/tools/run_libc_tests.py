@@ -13,7 +13,7 @@ from run_fixture import ROOT, host_triple
 
 TESTS = {
     "Formatting": ["libc"], "GuestStrings": ["libc", "libScePosixForWebKit"], "GuestWideFormatting": ["libc"], "GuestStdioVariadic": ["libc"],
-    "GuestAllocatingStrings": ["libc"], "GuestSyslog": ["libc"], "GuestWideStreamScan": ["libc"],
+    "GuestAllocatingStrings": ["libc"], "GuestSyslog": ["libc"], "GuestWideStreamScan": ["libc"], "HostExceptionPointer": ["libc"],
     "GuestNetworkPolicy": ["libSceNetCtl", "libScePosixForWebKit", "libkernel", "libc"], "GuestTcp": ["libkernel", "libc"],
     "GuestSocketOptions": ["libkernel", "libc"], "GuestResolver": ["libScePosixForWebKit", "libSceNet", "libc"], "ResolverRaw": ["libScePosixForWebKit", "libc"],
 }
