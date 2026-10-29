@@ -68,6 +68,11 @@ def lifter_target(triple, runner, cpu=None):
     return flags
 
 
+# Every guest executable is position-independent code at GUEST_BASE, as a PS5 executable is once the relinker places it
+# with --linux-fixed-base. 512 GiB lies inside the PS5 application area and above everything an arm64 macOS process
+# keeps below 448 GiB (the low 4 GiB, its executable, the shared region and the GPU's range), so every host has the same
+# guest layout.
+GUEST_BASE = 0x8000000000
 CONSOLE_OUTPUT = {"cpu"}
 PROGRAM_TIMEOUT = 300
 GUEST_MODULES = {"modules": ("guestmodule", "module.c")}
@@ -86,17 +91,15 @@ def build_guest(clang, work, name, optimization, defines=(), vectorize=False, su
         if not extra_library.exists():
             run([clang, "--target=x86_64-unknown-linux-gnu", *cross, "-O2", "-fPIC", "-shared", "-fuse-ld=lld", FIXTURES / source, "-pthread", "-o", extra_library])
         extra = [f"-l{library_name}"]
-    code = ["-fno-pic"]
     if name in GUEST_MODULES:
         module_name, source = GUEST_MODULES[name]
         module = work / f"lib{module_name}.so"
         if not module.exists():
             run([clang, *GUEST_FLAGS, *cross, "-O2", "-fPIC", "-shared", "-Wl,-z,pack-relative-relocs", f"-Wl,-soname,$ORIGIN/lib{module_name}.so", FIXTURES / source, f"-L{work}", "-lhost", "-o", module])
         extra = [f"-l{module_name}", "-lc", "-Wl,--allow-shlib-undefined"]
-        code = ["-fpie"]
     guest = work / f"{name}{optimization}{suffix}"
     vector_flags = [] if vectorize else ["-fno-vectorize", "-fno-slp-vectorize"]
-    run([clang, optimization, *GUEST_FLAGS, *cross, *vector_flags, *defines, *code, "-no-pie", "-Wl,--image-base=0x20000000",
+    run([clang, optimization, *GUEST_FLAGS, *cross, *vector_flags, *defines, "-fpie", "-no-pie", f"-Wl,--image-base={GUEST_BASE:#x}",
          "-Wl,--dynamic-linker=/lib64/ld-linux-x86-64.so.2", FIXTURES / f"{name}.c", f"-L{work}", "-lhost", *extra, "-o", guest])
     return guest
 

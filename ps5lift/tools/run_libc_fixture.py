@@ -11,7 +11,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from anyps5_build import Build
-from run_fixture import FIXTURES, GUEST_FLAGS, ROOT, compare, host_triple, lifter_target, run, runner_for, runtime_link_arguments
+from run_fixture import FIXTURES, GUEST_BASE, GUEST_FLAGS, ROOT, compare, host_triple, lifter_target, run, runner_for, runtime_link_arguments
 
 IMPORTS = ["printf", "snprintf", "vsnprintf", "sscanf", "puts", "strtold", "strtod", "modfl", "fabsl", "fprintf", "_Stdout"]
 KERNEL_IMPORTS = ["printf", "exit", "scePthreadCreate", "scePthreadJoin", "scePthreadMutexInit", "scePthreadMutexLock", "scePthreadMutexUnlock",
@@ -22,7 +22,7 @@ KERNEL_IMPORTS = ["printf", "exit", "scePthreadCreate", "scePthreadJoin", "scePt
                   "sceKernelLoadStartModule", "sceKernelDlsym"]
 FIBER_IMPORTS = ["printf", "exit", "_sceFiberInitializeImpl", "sceFiberFinalize", "sceFiberRun", "sceFiberSwitch", "sceFiberReturnToThread", "sceFiberGetSelf"]
 LOG_LINE = re.compile(r"^\[[^\]\s]+:\d+ [^\]]+\] .*\n", re.MULTILINE)
-GUEST_LINK = ["-no-pie", "-Wl,--image-base=0x20000000", "-Wl,--dynamic-linker=/lib64/ld-linux-x86-64.so.2"]
+GUEST_LINK = ["-no-pie", f"-Wl,--image-base={GUEST_BASE:#x}", "-Wl,--dynamic-linker=/lib64/ld-linux-x86-64.so.2"]
 
 
 def compute_nid(name):
