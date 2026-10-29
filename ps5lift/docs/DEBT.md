@@ -34,7 +34,6 @@ A review of the whole tree in October 2026 found these. Each gives a wrong resul
 
 - `ps5lift` does not compile against LLVM 21 or newer, where `Module::setTargetTriple` takes an `llvm::Triple`; the build accepts any LLVM from 18 on.
 - `--cpu native` appends the host's features after `--features`, so the host's win. `--triple`, `--cpu` and `--features` are not validated: an unknown CPU or feature warns and gives generic code, and a triple the host CPU cannot target aborts in a codegen thread after discovery.
-- Without the libclang Python bindings CMake leaves out the libc, exceptions, kernel and fiber tests with a status message, so ctest passes without running them.
 - [build_runtime.py](../tools/build_runtime.py) rebuilds an object only when its source or a listed header is newer, not when the compiler, the flags or SoftFloat's `specialize.h` change, and keys its output directory by architecture alone.
 
 ## Gaps
