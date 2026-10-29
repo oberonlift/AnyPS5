@@ -19,6 +19,8 @@ void GuestCpuUnwindStart_nid_no_patch(std::uint64_t* registers);
 const char* GuestCpuImportName_nid_no_patch(std::uint64_t address);
 [[noreturn]] void GuestCpuUnwindResume_nid_no_patch(const std::uint64_t* registers);
 std::uint64_t GuestCpuReadTsc_nid_no_patch(void);
+void GuestCpuUseStack_nid_no_patch(std::uint64_t stackTop);
+std::uint64_t GuestCpuHostStackSize_nid_no_patch(void);
 void GuestCpuCallInterrupted_nid_no_patch(std::uint64_t target, std::uint64_t first, std::uint64_t second);
 void GuestCpuInterruptedContext_nid_no_patch(std::uint64_t* registers, std::uint64_t* flags);
 }
