@@ -506,6 +506,32 @@ __attribute__((noinline)) static void string_reads(void) {
     line("repe cmpsb from fs, equal and count left", zero * 10 + (i64)count);
 }
 
+// The index of this table is the zero extension of the byte its guard compares, as clang emits for a switch on a
+// narrow value; the second lea refers to the table's last entry as data, so sizing the table by layout would cut it short.
+__attribute__((noinline)) static int byte_guarded_switch(u64 value) {
+    int result;
+    __asm__ volatile("lea -10(%[value]), %%edx\n\t"
+                     "cmp $3, %%dl\n\t"
+                     "ja 5f\n\t"
+                     "movzbl %%dl, %%edx\n\t"
+                     "lea 6f(%%rip), %%rcx\n\t"
+                     "lea 6f+12(%%rip), %%rax\n\t"
+                     "movslq (%%rcx,%%rdx,4), %%rdx\n\t"
+                     "add %%rcx, %%rdx\n\t"
+                     "jmp *%%rdx\n"
+                     "1:\n\tmov $11, %[result]\n\tjmp 7f\n"
+                     "2:\n\tmov $12, %[result]\n\tjmp 7f\n"
+                     "3:\n\tmov $13, %[result]\n\tjmp 7f\n"
+                     "4:\n\tmov $14, %[result]\n\tjmp 7f\n"
+                     "5:\n\tmov $-1, %[result]\n\tjmp 7f\n"
+                     ".pushsection .rodata\n\t.p2align 2\n"
+                     "6:\n\t.long 1b-6b, 2b-6b, 3b-6b, 4b-6b\n\t"
+                     ".popsection\n"
+                     "7:"
+                     : [result] "=r"(result) : [value] "r"(value) : "rax", "rcx", "rdx", "cc");
+    return result;
+}
+
 __attribute__((noinline)) static void advertised_instructions(void) {
     static const char digits[9] = {'1', '2', '3', '4', '5', '6', '7', '8', '9'};
     u64 crc = 0xffffffff, eight;
@@ -802,6 +828,8 @@ int main(void) {
     locked_forms();
     string_instructions();
     string_reads();
+    line("byte-guarded jump table", byte_guarded_switch(10) + byte_guarded_switch(11) * 100 + byte_guarded_switch(12) * 10000 + byte_guarded_switch(13) * 1000000);
+    line("byte-guarded jump table default", byte_guarded_switch(14) + byte_guarded_switch(9));
     divisions();
     advertised_instructions();
 
