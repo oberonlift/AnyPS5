@@ -13,6 +13,7 @@ unsigned long guest_process_time(void) __asm__(NID_sceKernelGetProcessTime);
 unsigned long guest_read_tsc(void) __asm__(NID_sceKernelReadTsc);
 unsigned long guest_tsc_frequency(void) __asm__(NID_sceKernelGetTscFrequency);
 void (*guest_signal(int number, void (*handler)(int)))(int) __asm__(NID_signal);
+int guest_raise(int number) __asm__(NID_raise);
 
 static void interrupted(int number) {
     (void)number;
@@ -66,6 +67,9 @@ int main(void) {
     guest_printf("tsc %s, frequency %s\n", first <= middle && middle <= last ? "ordered" : "out of order", frequency > 1000000 ? "plausible" : "implausible");
     guest_signal(2, interrupted);
     guest_printf("signal returns the guest's handler %d\n", guest_signal(2, (void (*)(int))0) == interrupted);
+    guest_printf("ignoring SIGPIPE replaces the default %d\n", guest_signal(13, (void (*)(int))1) == 0);
+    guest_printf("raising an ignored SIGPIPE returns %d\n", guest_raise(13));
+    guest_printf("signal reports SIG_IGN %d\n", guest_signal(13, (void (*)(int))0) == (void (*)(int))1);
     return 0;
 }
 
