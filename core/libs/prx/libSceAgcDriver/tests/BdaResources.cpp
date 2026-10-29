@@ -162,6 +162,27 @@ void snapshotTableTests(const Context& context, const BdaTestAccess& access) {
     ::operator delete(block, std::align_val_t{piece});
 }
 
+void writableOverSnapshotTests(const Context& context, const BdaTestAccess& access) {
+    alignas(256) static std::array<std::byte, 256> live{};
+    live.fill(std::byte{0x33});
+    std::array<std::byte, 64> captured{};
+    captured.fill(std::byte{0x44});
+    const auto base = reinterpret_cast<std::uint64_t>(live.data());
+    for (const bool snapshotFirst : {true, false}) {
+        const auto snapshot = snapshotFirst ? base : base + 128;
+        GuestBufferMemory memory(context);
+        memory.AddSnapshot({snapshot, captured});
+        memory.AddWritable(base + 32, 128);
+        memory.Upload(false);
+        std::uint32_t adjustment = 0;
+        const auto view = memory.Descriptor(snapshot, captured.size(), adjustment);
+        const auto bytes = access.bytes(view.buffer);
+        const auto offset = static_cast<std::size_t>(view.offset + adjustment);
+        Require(offset + captured.size() <= bytes.size() && std::memcmp(bytes.data() + offset, reinterpret_cast<const void*>(snapshot), captured.size()) == 0,
+            "a snapshot overlapping a writable range does not read the live guest bytes");
+    }
+}
+
 void importCrossingTests(const Context& context, const BdaTestAccess& access) {
     constexpr std::size_t half = 65536;
     void* block = ::operator new(2 * half, std::align_val_t{half});
@@ -4534,6 +4555,7 @@ void RunBdaResourceTests(const Context& context, const BdaTestAccess& access) {
     importCrossingTests(context, access);
     addressTableKeyTests();
     snapshotTableTests(context, access);
+    writableOverSnapshotTests(context, access);
     importSpanTests(context);
     importRunGrowthTests(context);
     importRunReplacedTests(context);
