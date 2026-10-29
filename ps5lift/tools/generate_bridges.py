@@ -184,7 +184,7 @@ class Definitions:
 def scan_source(job):
     source, arguments, explicit = job
     unit = cindex.Index.create().parse(str(source), args=arguments, options=cindex.TranslationUnit.PARSE_SKIP_FUNCTION_BODIES)
-    errors = sum(1 for diagnostic in unit.diagnostics if diagnostic.severity >= cindex.Diagnostic.Error)
+    errors = [f"{diagnostic.location.file}:{diagnostic.location.line}: {diagnostic.spelling}" for diagnostic in unit.diagnostics if diagnostic.severity >= cindex.Diagnostic.Error]
     defined = Definitions()
     candidates = []
     stack = [unit.cursor]
@@ -223,10 +223,10 @@ def collect(sources, exported, pool):
     exports = {}
     data = {}
     unsupported = {}
-    parse_errors = 0
+    parse_errors = []
     candidates = []
     for errors, found in pool.map(scan_source, [(source, compiler_arguments(entry), explicit) for source, entry in sources]):
-        parse_errors += errors
+        parse_errors.extend(errors)
         candidates.extend(candidate for candidate in found if not candidate["c_linkage"] or candidate["name"] in exported)
     named = {candidate["name"] for candidate in candidates}
     for candidate in candidates:
@@ -323,20 +323,27 @@ def emit(exports, data, library_name):
     return "\n".join(lines)
 
 
+def use_libclang(path):
+    cindex.Config.set_library_file(path)
+
+
 def main():
     parser = argparse.ArgumentParser(description="Generate SysV-to-native import bridges for AnyPS5 libraries")
     parser.add_argument("library", nargs="+", help="AnyPS5 library targets, such as libc; for a NID that several export, the first one's export gets the bridge")
     parser.add_argument("--anyps5-build", required=True, help="AnyPS5's build directory, configured with CMAKE_EXPORT_COMPILE_COMMANDS=ON")
     parser.add_argument("-o", "--output", required=True)
-    parser.add_argument("--libclang", default="/usr/lib/llvm-18/lib/libclang-18.so.1")
+    parser.add_argument("--libclang", type=Path, help="the libclang library to parse with; the bindings find one by default")
     parser.add_argument("--report", action="store_true", help="list every export without a bridge and why")
     parser.add_argument("--jobs", type=int, default=os.cpu_count())
     args = parser.parse_args()
 
-    if os.path.exists(args.libclang):
-        cindex.Config.set_library_file(args.libclang)
-    pool = concurrent.futures.ProcessPoolExecutor(args.jobs)
-    exports, data, unsupported, parse_errors = {}, {}, {}, 0
+    initializer, initargs = None, ()
+    if args.libclang is not None:
+        if not args.libclang.is_file():
+            parser.error(f"--libclang: {args.libclang} does not exist")
+        initializer, initargs = use_libclang, (str(args.libclang),)
+    pool = concurrent.futures.ProcessPoolExecutor(args.jobs, initializer=initializer, initargs=initargs)
+    exports, data, unsupported, parse_errors = {}, {}, {}, []
     build = Build(args.anyps5_build)
     for name in args.library:
         library_exports, library_data, library_unsupported, library_errors = collect(build.library_sources(name), build.library_exports(name), pool)
@@ -346,14 +353,18 @@ def main():
             data.setdefault(nid, symbol)
         for nid, entry in library_unsupported.items():
             unsupported.setdefault(nid, entry)
-        parse_errors += library_errors
+        parse_errors.extend(library_errors)
+    if parse_errors:
+        sys.stderr.writelines(f"{error}\n" for error in parse_errors)
+        sys.stderr.write(f"{len(parse_errors)} parse errors: libclang's recovered declarations would give wrong prototypes, so no bridges were written\n")
+        return 1
     for nid in list(unsupported):
         if nid in exports or nid in data:
             del unsupported[nid]
     Path(args.output).write_text(emit(exports, data, " ".join(args.library)))
 
     reasons = collections.Counter(re.sub(r"\d+-byte", "N-byte", reason) for _, reason in unsupported.values())
-    print(f"{' '.join(args.library)}: {len(exports)} bridges, {len(data)} data exports, {len(unsupported)} exports without one, {parse_errors} parse errors")
+    print(f"{' '.join(args.library)}: {len(exports)} bridges, {len(data)} data exports, {len(unsupported)} exports without one")
     for reason, count in reasons.most_common():
         print(f"  {count:5} {reason}")
     if args.report:
