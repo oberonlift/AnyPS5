@@ -440,6 +440,7 @@ LEGACY_SCALAR(cmpltss, "cmpltss", from_floats(1, 2, 3, 4), from_floats(10, 20, 3
 LEGACY_SCALAR(cvtss2sd, "cvtss2sd", from_doubles(16, 5), from_floats(10, 20, 30, 40))
 LEGACY_SCALAR(cvtsd2ss, "cvtsd2ss", from_floats(1, 2, 3, 4), from_doubles(6, 8))
 LEGACY_SCALAR(roundss, "roundss $1,", from_floats(1, 2, 3, 4), from_floats(2.5f, 20, 30, 40))
+LEGACY_SCALAR(cmpps9, "cmpps $9,", from_floats(__builtin_nanf(""), 1, 5, 2), from_floats(1, 2, 3, 4))
 
 __attribute__((noinline)) static void legacy_cvtsi2sd(void) {
     __m128i result = from_doubles(16, 5);
@@ -493,6 +494,7 @@ int main(void) {
     legacy_cvtss2sd();
     legacy_cvtsd2ss();
     legacy_roundss();
+    legacy_cmpps9();
     legacy_cvtsi2sd();
     return 0;
 }
