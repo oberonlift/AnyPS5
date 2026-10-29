@@ -197,25 +197,21 @@ std::optional<std::uint64_t> TableBound(const GuestFunction& function, const Pre
     return std::nullopt;
 }
 
+// A position-independent table holds 32-bit offsets from its own address.
+constexpr std::uint64_t TableEntryBytes = 4;
+
 struct TableShape {
     std::uint64_t Address;
-    unsigned EntrySize;
     ZydisRegister Index;
     std::uint64_t BoundFrom;
 };
 
 std::optional<TableShape> MatchTable(const GuestFunction& function, const Predecessors& predecessors, const Instruction& jump) {
     const auto& target = jump.Operands[0];
-    const auto absolute = [](const ZydisDecodedOperand& operand) {
-        return operand.type == ZYDIS_OPERAND_TYPE_MEMORY && operand.mem.base == ZYDIS_REGISTER_NONE && operand.mem.index != ZYDIS_REGISTER_NONE && operand.mem.scale == 8;
-    };
-    if (absolute(target)) return TableShape{static_cast<std::uint64_t>(target.mem.disp.value), 8, target.mem.index, jump.Address};
     if (target.type != ZYDIS_OPERAND_TYPE_REGISTER) return std::nullopt;
     // The scheduler may move other instructions between the load of an entry, the addition of the base and the jump.
     const auto* previous = SingleDefinition(function, predecessors, jump.Address, target.reg.value);
     if (previous == nullptr) return std::nullopt;
-    if (previous->Info.mnemonic == ZYDIS_MNEMONIC_MOV && absolute(previous->Operands[1]))
-        return TableShape{static_cast<std::uint64_t>(previous->Operands[1].mem.disp.value), 8, previous->Operands[1].mem.index, previous->Address};
     if (previous->Info.mnemonic != ZYDIS_MNEMONIC_ADD || previous->Operands[1].type != ZYDIS_OPERAND_TYPE_REGISTER) return std::nullopt;
     // Clang adds the table to the loaded entry, GCC the entry to the table.
     const auto sum = target.reg.value;
@@ -226,7 +222,7 @@ std::optional<TableShape> MatchTable(const GuestFunction& function, const Predec
         const auto& entry = load->Operands[1];
         if (entry.type != ZYDIS_OPERAND_TYPE_MEMORY || entry.mem.base != base || entry.mem.scale != 4 || entry.mem.disp.value != 0) continue;
         const auto table = RipRelativeValue(function, predecessors, load->Address, base);
-        if (table && RipRelativeValue(function, predecessors, previous->Address, base) == table) return TableShape{*table, 4, entry.mem.index, load->Address};
+        if (table && RipRelativeValue(function, predecessors, previous->Address, base) == table) return TableShape{*table, entry.mem.index, load->Address};
     }
     return std::nullopt;
 }
@@ -234,7 +230,6 @@ std::optional<TableShape> MatchTable(const GuestFunction& function, const Predec
 std::optional<std::uint64_t> MemoryReference(const Instruction& instruction, const ZydisDecodedOperand& operand) {
     if (operand.type != ZYDIS_OPERAND_TYPE_MEMORY || operand.mem.segment == ZYDIS_REGISTER_FS || operand.mem.segment == ZYDIS_REGISTER_GS) return std::nullopt;
     if (operand.mem.base == ZYDIS_REGISTER_RIP) return instruction.Next() + static_cast<std::uint64_t>(operand.mem.disp.value);
-    if (operand.mem.base == ZYDIS_REGISTER_NONE) return static_cast<std::uint64_t>(operand.mem.disp.value);
     return std::nullopt;
 }
 
@@ -274,16 +269,16 @@ RecoveredTable RecoverJumpTable(const GuestImage& image, const GuestFunction& fu
     const auto bound = TableBound(function, predecessors, shape->BoundFrom, shape->Index);
     if (bound && *bound > MaximumEntries) return {};
     auto count = bound.value_or(MaximumEntries);
-    if (const auto next = references.upper_bound(shape->Address); !bound && next != references.end()) count = std::min(count, (*next - shape->Address) / shape->EntrySize);
+    if (const auto next = references.upper_bound(shape->Address); !bound && next != references.end()) count = std::min(count, (*next - shape->Address) / TableEntryBytes);
     const auto after = starts.upper_bound(jump.Address);
     const auto lower = after == starts.begin() ? std::uint64_t{0} : *std::prev(after);
     const auto upper = after == starts.end() ? ~std::uint64_t{0} : *after;
     RecoveredTable table{{}, bound.has_value()};
     auto& targets = table.Targets;
     for (std::uint64_t i = 0; i < count; ++i) {
-        const auto raw = image.ReadData(shape->Address + shape->EntrySize * i, shape->EntrySize);
+        const auto raw = image.ReadData(shape->Address + TableEntryBytes * i, TableEntryBytes);
         if (!raw) break;
-        const auto destination = shape->EntrySize == 8 ? *raw : shape->Address + static_cast<std::uint64_t>(static_cast<std::int64_t>(static_cast<std::int32_t>(*raw)));
+        const auto destination = shape->Address + static_cast<std::uint64_t>(static_cast<std::int64_t>(static_cast<std::int32_t>(*raw)));
         const bool inside = destination >= lower && destination < upper && image.IsExecutable(destination);
         if (!inside) {
             if (bound) return {};
@@ -516,7 +511,6 @@ std::optional<std::uint64_t> ImportTarget(const GuestImage& image, const Instruc
     if (operand.type != ZYDIS_OPERAND_TYPE_MEMORY || operand.mem.index != ZYDIS_REGISTER_NONE || operand.mem.segment == ZYDIS_REGISTER_FS || operand.mem.segment == ZYDIS_REGISTER_GS) return std::nullopt;
     const auto displacement = static_cast<std::uint64_t>(operand.mem.disp.value);
     if (operand.mem.base == ZYDIS_REGISTER_RIP) return image.ImportAt(instruction.Next() + displacement);
-    if (operand.mem.base == ZYDIS_REGISTER_NONE) return image.ImportAt(displacement);
     return std::nullopt;
 }
 
