@@ -3,6 +3,7 @@
 
 #include "LlvmCompatibility.hpp"
 
+#include <llvm/Support/InitLLVM.h>
 #include <llvm/TargetParser/Host.h>
 
 #include <algorithm>
@@ -20,6 +21,7 @@ constexpr std::string_view Usage = "usage: ps5lift <input.elf> -o <output.a> [--
 }
 
 int main(int argc, char** argv) {
+    const llvm::InitLLVM llvm(argc, argv);
     std::string input;
     Ps5Lift::CompileOptions compile{std::max(1u, std::thread::hardware_concurrency()), "", ""};
     Ps5Lift::LiftOptions lift;
