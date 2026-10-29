@@ -14,6 +14,9 @@ unsigned long guest_read_tsc(void) __asm__(NID_sceKernelReadTsc);
 unsigned long guest_tsc_frequency(void) __asm__(NID_sceKernelGetTscFrequency);
 void (*guest_signal(int number, void (*handler)(int)))(int) __asm__(NID_signal);
 int guest_raise(int number) __asm__(NID_raise);
+int guest_sigprocmask(int how, const unsigned* set, unsigned* old) __asm__(NID_sigprocmask);
+int guest_sigsetjmp(long* buffer, long save_mask) __asm__(NID_sigsetjmp) __attribute__((returns_twice));
+void guest_siglongjmp(long* buffer, int value) __asm__(NID_siglongjmp) __attribute__((noreturn));
 
 static void interrupted(int number) {
     (void)number;
@@ -31,6 +34,24 @@ static void* worker(void* argument) {
         guest_mutex_unlock(&mutex);
     }
     return (void*)((long)argument * 3);
+}
+
+enum { SigBlock = 1, SigSetmask = 3, Sigusr1 = 30 };
+
+static long jump_buffer[12];
+static const unsigned empty_set[4];
+static const unsigned usr1_set[4] = {1u << (Sigusr1 - 1)};
+
+static int sigsetjmp_keeps_blocked_set(void) {
+    guest_sigprocmask(SigSetmask, empty_set, 0);
+    if (guest_sigsetjmp(jump_buffer, 1l << 32) == 0) {
+        guest_sigprocmask(SigBlock, usr1_set, 0);
+        guest_siglongjmp(jump_buffer, 1);
+    }
+    unsigned blocked[4];
+    guest_sigprocmask(SigBlock, 0, blocked);
+    guest_sigprocmask(SigSetmask, empty_set, 0);
+    return (blocked[0] >> (Sigusr1 - 1)) & 1;
 }
 
 static unsigned long rdtsc(void) {
@@ -70,6 +91,7 @@ int main(void) {
     guest_printf("ignoring SIGPIPE replaces the default %d\n", guest_signal(13, (void (*)(int))1) == 0);
     guest_printf("raising an ignored SIGPIPE returns %d\n", guest_raise(13));
     guest_printf("signal reports SIG_IGN %d\n", guest_signal(13, (void (*)(int))0) == (void (*)(int))1);
+    guest_printf("siglongjmp without a saved mask keeps the blocked set %d\n", sigsetjmp_keeps_blocked_set());
     return 0;
 }
 

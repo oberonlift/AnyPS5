@@ -7,3 +7,4 @@ signal returns the guest's handler 1
 ignoring SIGPIPE replaces the default 1
 raising an ignored SIGPIPE returns 0
 signal reports SIG_IGN 1
+siglongjmp without a saved mask keeps the blocked set 1

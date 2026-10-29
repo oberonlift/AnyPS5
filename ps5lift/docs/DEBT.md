@@ -32,7 +32,6 @@ A review of the whole tree in October 2026 found these. Each gives a wrong resul
 - Guest stacks are a fixed 8 MiB with no guard page, whatever size the guest asks for, so an overflow writes into the mapping below.
 - `Ps5LiftState::Rip` is never written, so a `sceKernelRaiseException` handler sees `rip` as 0. The handler runs 64 KiB below the stack pointer of the target thread's last call, which overwrites a frame that has grown past that since.
 - `~ForeignThread` leaves `CurrentState` pointing at the state it frees, so a callback later in the thread's teardown runs on unmapped memory. A native thread that calls a guest callback, or only queries the guest state, keeps the guest's FPCR (DAZ, FTZ, AH and the rounding mode) for its own code afterwards.
-- `sigsetjmp` tests all 64 bits of its `int` argument.
 - A full callback pool, a `longjmp` across native code and a resume at an address the frame cannot continue from are all reported as "reached unsupported instruction".
 
 ### Tools and build

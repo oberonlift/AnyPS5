@@ -56,18 +56,22 @@ void Jump(Ps5LiftState* state, const bool mask) {
     state->Unwinding = 1;
 }
 
+void SaveWithRequestedMask(Ps5LiftState* state) {
+    Save(state, static_cast<std::uint32_t>(state->Gpr[PS5LIFT_RSI]) != 0);
+}
+
 }
 
 extern "C" void ps5lift_import_setjmp(Ps5LiftState* state) { Save(state, true); }
 extern "C" void ps5lift_import___setjmp(Ps5LiftState* state) { Save(state, false); }
-extern "C" void ps5lift_import_sigsetjmp(Ps5LiftState* state) { Save(state, state->Gpr[PS5LIFT_RSI] != 0); }
+extern "C" void ps5lift_import_sigsetjmp(Ps5LiftState* state) { SaveWithRequestedMask(state); }
 extern "C" void ps5lift_import_longjmp(Ps5LiftState* state) { Jump(state, true); }
 extern "C" void ps5lift_import___longjmp(Ps5LiftState* state) { Jump(state, false); }
 extern "C" void ps5lift_import_siglongjmp(Ps5LiftState* state) { Jump(state, true); }
 
 extern "C" void ps5lift_import_gNQ1V2vfXDE(Ps5LiftState* state) { Save(state, true); }
 extern "C" void ps5lift_import_sjpkrhugvVI(Ps5LiftState* state) { Save(state, false); }
-extern "C" void ps5lift_import_aRo9AhFUXcM(Ps5LiftState* state) { Save(state, state->Gpr[PS5LIFT_RSI] != 0); }
+extern "C" void ps5lift_import_aRo9AhFUXcM(Ps5LiftState* state) { SaveWithRequestedMask(state); }
 extern "C" void ps5lift_import_lKEN2IebgJ0(Ps5LiftState* state) { Jump(state, true); }
 extern "C" void ps5lift_import__pF_p9hhi6k9Q(Ps5LiftState* state) { Jump(state, false); }
 extern "C" void ps5lift_import_pebqbE5ws8s(Ps5LiftState* state) { Jump(state, true); }
