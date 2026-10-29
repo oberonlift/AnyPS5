@@ -65,7 +65,7 @@ public:
     std::uint64_t LoadBias() const;
     const GuestArray& ProgramHeaders() const;
     std::optional<std::uint64_t> Export(const std::string& name) const;
-    const std::map<std::string, std::uint64_t>& Exports() const;
+    const std::set<std::uint64_t>& FunctionExports() const;
     std::uint64_t Init() const;
     const GuestArray& InitArray() const;
     std::uint64_t Entry() const;
@@ -87,6 +87,7 @@ private:
     std::vector<std::string> _needed;
     std::map<std::string, std::uint64_t> _exports;
     std::set<std::string> _indirectFunctions;
+    std::set<std::uint64_t> _functionExports;
     std::vector<GuestRelocation> _relocations;
     std::uint64_t _mappedEnd = 0;
     std::uint64_t _loadBias = 0;

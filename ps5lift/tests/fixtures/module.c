@@ -48,6 +48,12 @@ long module_table_call(int index, long x) {
 }
 
 __asm__(".globl module_absolute\n.set module_absolute, 0x12345");
+__asm__(".pushsection .text\n"
+        ".globl module_text_data\n"
+        ".type module_text_data, @object\n"
+        ".size module_text_data, 4\n"
+        "module_text_data: .byte 0x61, 0x62, 0x63, 0x64\n"
+        ".popsection");
 extern char module_absolute[];
 
 long module_absolute_address(void) {

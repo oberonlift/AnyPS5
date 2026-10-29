@@ -227,8 +227,12 @@ GuestImage GuestImage::Read(const std::string& path, const std::optional<std::ui
             for (std::uint32_t index = 1; index < count; ++index) {
                 const auto symbol = symbolAt(index);
                 if (!Exported(symbol)) continue;
-                if (symbol.Type == SymbolIndirectFunction) image._indirectFunctions.insert(symbol.Name);
-                else image._exports.emplace(symbol.Name, Address(symbol, bias));
+                if (symbol.Type == SymbolIndirectFunction) {
+                    image._indirectFunctions.insert(symbol.Name);
+                    continue;
+                }
+                image._exports.emplace(symbol.Name, Address(symbol, bias));
+                if (symbol.Type == SymbolFunction) image._functionExports.insert(Address(symbol, bias));
             }
         }
 
@@ -371,8 +375,8 @@ std::optional<std::uint64_t> GuestImage::Export(const std::string& name) const {
     return found->second;
 }
 
-const std::map<std::string, std::uint64_t>& GuestImage::Exports() const {
-    return _exports;
+const std::set<std::uint64_t>& GuestImage::FunctionExports() const {
+    return _functionExports;
 }
 
 std::uint64_t GuestImage::Init() const {
