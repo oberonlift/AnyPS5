@@ -64,6 +64,68 @@ extern "C" void ps5lift_import_host__on__thread(Ps5LiftState* state) {
     Return(state, call.Result);
 }
 
+namespace {
+
+std::uint64_t HostFloatingPointControl() {
+#if defined(__aarch64__)
+    std::uint64_t fpcr = 0;
+    __asm__ volatile("mrs %0, fpcr" : "=r"(fpcr));
+    return fpcr;
+#else
+    return __builtin_ia32_stmxcsr() & ~0x3fu;
+#endif
+}
+
+void ResetHostFloatingPointControl() {
+#if defined(__aarch64__)
+    __asm__ volatile("msr fpcr, %0" : : "r"(std::uint64_t{0}));
+#else
+    __builtin_ia32_ldmxcsr(0x1f80);
+#endif
+}
+
+struct ThreadCall {
+    long (*Function)(long);
+    long Argument;
+    long Result;
+};
+
+}
+
+extern "C" void ps5lift_import_host__thread__keeps__environment(Ps5LiftState* state) {
+    ThreadCall call{Callback<long(long)>(Integer<std::uint64_t>(state, 0)), Integer<long>(state, 1), 0};
+    pthread_t thread;
+    pthread_create(&thread, nullptr, [](void* argument) -> void* {
+        auto* call = static_cast<ThreadCall*>(argument);
+        ResetHostFloatingPointControl();
+        const auto before = HostFloatingPointControl();
+        ps5lift_current_state();
+        const auto afterQuery = HostFloatingPointControl();
+        call->Function(call->Argument);
+        call->Result = afterQuery == before && HostFloatingPointControl() == before;
+        return nullptr;
+    }, &call);
+    pthread_join(thread, nullptr);
+    Return(state, call.Result);
+}
+
+extern "C" void ps5lift_import_host__call__at__thread__exit(Ps5LiftState* state) {
+    ThreadCall call{Callback<long(long)>(Integer<std::uint64_t>(state, 0)), Integer<long>(state, 1), 0};
+    pthread_t thread;
+    pthread_create(&thread, nullptr, [](void* argument) -> void* {
+        struct Farewell {
+            ThreadCall* Pending = nullptr;
+            ~Farewell() { Pending->Result = Pending->Function(Pending->Argument); }
+        };
+        thread_local Farewell farewell;
+        farewell.Pending = static_cast<ThreadCall*>(argument);
+        farewell.Pending->Function(0);
+        return nullptr;
+    }, &call);
+    pthread_join(thread, nullptr);
+    Return(state, call.Result);
+}
+
 extern "C" int GuestCpuIterateImages_nid_no_patch(int (*callback)(void*, std::size_t, void*), void* data);
 
 extern "C" void ps5lift_import_dl__iterate__phdr(Ps5LiftState* state) {

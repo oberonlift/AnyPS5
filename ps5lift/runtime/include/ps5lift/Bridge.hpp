@@ -83,6 +83,21 @@ private:
     int _saved;
 };
 
+class GuestEntry {
+public:
+    GuestEntry() : _state(ps5lift_enter_guest()) {}
+
+    ~GuestEntry() { ps5lift_leave_guest(); }
+
+    GuestEntry(const GuestEntry&) = delete;
+    GuestEntry& operator=(const GuestEntry&) = delete;
+
+    Ps5LiftState* State() const { return _state; }
+
+private:
+    Ps5LiftState* _state;
+};
+
 inline long double Extended(const Ps5LiftState* state, const int slot) {
     long double value;
     ps5lift_extended_to_host(reinterpret_cast<const void*>(state->Gpr[PS5LIFT_RSP] + 8 + 8 * static_cast<std::uint64_t>(slot)), &value);
@@ -171,7 +186,8 @@ R GuestResult(const Ps5LiftState* state) {
 template <typename R, typename... Args>
 R CallGuest(const std::uint64_t target, Args... arguments) {
     static_assert(((std::is_arithmetic_v<Args> || std::is_pointer_v<Args> || std::is_enum_v<Args>) && ...), "callbacks take scalar arguments");
-    auto* state = ps5lift_current_state();
+    const GuestEntry entry;
+    auto* state = entry.State();
     const auto savedRsp = state->Gpr[PS5LIFT_RSP];
     std::uint64_t stackArguments[sizeof...(Args) + 1]{};
     int stackCount = 0;

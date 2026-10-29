@@ -75,6 +75,35 @@ static long on_thread(long argument) {
     return thread_value;
 }
 
+static volatile double numerator = 1.0, denominator = 3.0;
+static volatile double rounded_nearest, rounded_up;
+
+static unsigned read_mxcsr(void) {
+    unsigned value;
+    __asm__ volatile("stmxcsr %0" : "=m"(value) : : "memory");
+    return value;
+}
+
+static void write_mxcsr(unsigned value) {
+    __asm__ volatile("ldmxcsr %0" : : "m"(value) : "memory");
+}
+
+static long round_up_on_thread(long argument) {
+    const unsigned mxcsr = read_mxcsr();
+    rounded_nearest = numerator / denominator;
+    write_mxcsr((mxcsr & ~0x6000u) | 0x4000u);
+    rounded_up = numerator / denominator;
+    write_mxcsr(mxcsr);
+    return argument;
+}
+
+static long exit_calls;
+
+static long at_exit(long argument) {
+    ++exit_calls;
+    return argument * 2 + 1;
+}
+
 static long eight(long a, long b, long c, long d, long e, long f, long g, long h) {
     return a + 2 * b + 3 * c + 4 * d + 5 * e + 6 * f + 7 * g + 8 * h;
 }
@@ -97,6 +126,10 @@ int main(void) {
     line("on thread", host_on_thread(on_thread, 23));
     line("main thread value", thread_value);
     line("eight arguments", host_call_eight(eight));
+    line("native thread keeps its floating-point environment", host_thread_keeps_environment(round_up_on_thread, 5));
+    line("callback rounds up on a native thread", rounded_up > rounded_nearest);
+    line("callback at native thread exit", host_call_at_thread_exit(at_exit, 9));
+    line("exit callbacks", exit_calls);
     return 0;
 }
 
