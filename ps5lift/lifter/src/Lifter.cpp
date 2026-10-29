@@ -1151,6 +1151,7 @@ private:
         case ZYDIS_MNEMONIC_ADD: case ZYDIS_MNEMONIC_ADC: case ZYDIS_MNEMONIC_SUB: case ZYDIS_MNEMONIC_SBB: case ZYDIS_MNEMONIC_AND: case ZYDIS_MNEMONIC_OR:
         case ZYDIS_MNEMONIC_XOR: case ZYDIS_MNEMONIC_INC: case ZYDIS_MNEMONIC_DEC: case ZYDIS_MNEMONIC_NEG: case ZYDIS_MNEMONIC_NOT: case ZYDIS_MNEMONIC_BTS:
         case ZYDIS_MNEMONIC_BTR: case ZYDIS_MNEMONIC_BTC: case ZYDIS_MNEMONIC_XCHG: case ZYDIS_MNEMONIC_XADD: case ZYDIS_MNEMONIC_CMPXCHG:
+        case ZYDIS_MNEMONIC_CMPXCHG8B: case ZYDIS_MNEMONIC_CMPXCHG16B:
             return true;
         default:
             return false;
@@ -1246,6 +1247,42 @@ private:
         auto* equal = _builder.CreateICmpEQ(old, expected);
         if (bits == 32) return SetGpr(PS5LIFT_RAX, _builder.CreateSelect(equal, Gpr(PS5LIFT_RAX), _builder.CreateZExt(old, I64())));
         WriteRegister(bits == 64 ? ZYDIS_REGISTER_RAX : bits == 16 ? ZYDIS_REGISTER_AX : ZYDIS_REGISTER_AL, old);
+    }
+
+    // cmpxchg8b and cmpxchg16b compare rdx:rax with the memory operand and store rcx:rbx when they match; when they do
+    // not, rdx:rax receives the operand.
+    void CompareExchangeWide() {
+        const auto bits = Bits(0);
+        const auto half = bits / 2;
+        const auto pair = [&](const int high, const int low) {
+            auto* upper = _builder.CreateZExt(_builder.CreateTrunc(Gpr(high), Int(half)), Int(bits));
+            return _builder.CreateOr(_builder.CreateShl(upper, half), _builder.CreateZExt(_builder.CreateTrunc(Gpr(low), Int(half)), Int(bits)));
+        };
+        auto* exchange = _builder.CreateAtomicCmpXchg(MemoryPointer(0), pair(PS5LIFT_RDX, PS5LIFT_RAX), pair(PS5LIFT_RCX, PS5LIFT_RBX), llvm::MaybeAlign(bits / 8),
+                                                      llvm::AtomicOrdering::SequentiallyConsistent, llvm::AtomicOrdering::SequentiallyConsistent);
+        auto* old = _builder.CreateExtractValue(exchange, 0);
+        auto* matched = _builder.CreateExtractValue(exchange, 1);
+        SetFlag(PS5LIFT_ZF, matched);
+        auto* low = _builder.CreateZExt(_builder.CreateTrunc(old, Int(half)), I64());
+        auto* high = _builder.CreateZExt(_builder.CreateTrunc(_builder.CreateLShr(old, half), Int(half)), I64());
+        SetGpr(PS5LIFT_RAX, _builder.CreateSelect(matched, Gpr(PS5LIFT_RAX), low));
+        SetGpr(PS5LIFT_RDX, _builder.CreateSelect(matched, Gpr(PS5LIFT_RDX), high));
+    }
+
+    // x86's crc32 is the Castagnoli CRC that aarch64's CRC32C instructions compute, without the final inversion.
+    void Crc32() {
+        auto* crc = _builder.CreateTrunc(Read(0), _builder.getInt32Ty());
+        auto* data = Read(1);
+        const auto sourceBits = data->getType()->getIntegerBitWidth();
+        llvm::Value* result = nullptr;
+        if (_module.Target().isAArch64()) {
+            const auto id = sourceBits == 8 ? llvm::Intrinsic::aarch64_crc32cb : sourceBits == 16 ? llvm::Intrinsic::aarch64_crc32ch : sourceBits == 32 ? llvm::Intrinsic::aarch64_crc32cw : llvm::Intrinsic::aarch64_crc32cx;
+            result = _builder.CreateIntrinsic(id, {}, {crc, sourceBits == 64 ? data : _builder.CreateZExt(data, _builder.getInt32Ty())});
+        } else {
+            const auto id = sourceBits == 8 ? llvm::Intrinsic::x86_sse42_crc32_32_8 : sourceBits == 16 ? llvm::Intrinsic::x86_sse42_crc32_32_16 : sourceBits == 32 ? llvm::Intrinsic::x86_sse42_crc32_32_32 : llvm::Intrinsic::x86_sse42_crc32_64_64;
+            result = _builder.CreateTrunc(_builder.CreateIntrinsic(id, {}, {sourceBits == 64 ? _builder.CreateZExt(crc, I64()) : crc, data}), _builder.getInt32Ty());
+        }
+        Write(0, _builder.CreateZExt(result, Int(Bits(0))));
     }
 
     void SignExtendAccumulator(const ZydisMnemonic mnemonic) {
@@ -2990,7 +3027,46 @@ private:
         case ZYDIS_MNEMONIC_PREFETCHT1:
         case ZYDIS_MNEMONIC_PREFETCHT2:
         case ZYDIS_MNEMONIC_PREFETCHNTA:
+        case ZYDIS_MNEMONIC_PREFETCHW:
             return;
+        case ZYDIS_MNEMONIC_CMPXCHG8B:
+        case ZYDIS_MNEMONIC_CMPXCHG16B:
+            CompareExchangeWide();
+            return;
+        case ZYDIS_MNEMONIC_CRC32:
+            Crc32();
+            return;
+        case ZYDIS_MNEMONIC_RDRAND:
+        case ZYDIS_MNEMONIC_RDSEED: {
+            auto* value = _builder.CreateCall(_module.Runtime("ps5lift_random", llvm::FunctionType::get(I64(), false)));
+            Write(0, _builder.CreateTrunc(value, Int(Bits(0))));
+            SetFlag(PS5LIFT_CF, _builder.getTrue());
+            for (const auto flag : {PS5LIFT_OF, PS5LIFT_SF, PS5LIFT_ZF, PS5LIFT_AF, PS5LIFT_PF}) SetFlag(flag, _builder.getFalse());
+            return;
+        }
+        case ZYDIS_MNEMONIC_RDPID:
+            Write(0, _builder.CreateZExt(_builder.CreateCall(_module.Runtime("ps5lift_processor_id", llvm::FunctionType::get(_builder.getInt32Ty(), false))), Int(Bits(0))));
+            return;
+        case ZYDIS_MNEMONIC_RDTSCP: {
+            auto* ticks = _builder.CreateCall(_module.Runtime("ps5lift_read_tsc", llvm::FunctionType::get(I64(), false)));
+            SetGpr(PS5LIFT_RAX, _builder.CreateAnd(ticks, _builder.getInt64(0xffffffff)));
+            SetGpr(PS5LIFT_RDX, _builder.CreateLShr(ticks, _builder.getInt64(32)));
+            SetGpr(PS5LIFT_RCX, _builder.CreateZExt(_builder.CreateCall(_module.Runtime("ps5lift_processor_id", llvm::FunctionType::get(_builder.getInt32Ty(), false))), I64()));
+            return;
+        }
+        case ZYDIS_MNEMONIC_LAHF: {
+            llvm::Value* value = _builder.getInt8(2);
+            for (const auto& [flag, bit] : {std::pair{PS5LIFT_SF, 7}, std::pair{PS5LIFT_ZF, 6}, std::pair{PS5LIFT_AF, 4}, std::pair{PS5LIFT_PF, 2}, std::pair{PS5LIFT_CF, 0}})
+                value = _builder.CreateOr(value, _builder.CreateShl(_builder.CreateZExt(Flag(flag), _builder.getInt8Ty()), bit));
+            WriteRegister(ZYDIS_REGISTER_AH, value);
+            return;
+        }
+        case ZYDIS_MNEMONIC_SAHF: {
+            auto* value = ReadRegister(ZYDIS_REGISTER_AH);
+            for (const auto& [flag, bit] : {std::pair{PS5LIFT_SF, 7}, std::pair{PS5LIFT_ZF, 6}, std::pair{PS5LIFT_AF, 4}, std::pair{PS5LIFT_PF, 2}, std::pair{PS5LIFT_CF, 0}})
+                SetFlag(flag, _builder.CreateTrunc(_builder.CreateLShr(value, bit), _builder.getInt1Ty()));
+            return;
+        }
         case ZYDIS_MNEMONIC_EMMS:
             StateStore(_builder.getInt8(0), offsetof(Ps5LiftState, X87Valid));
             return;

@@ -437,6 +437,67 @@ __attribute__((noinline)) static void string_instructions(void) {
     line_hex("rep movsb from fs", word_at(buffer + 40));
 }
 
+__attribute__((noinline)) static void advertised_instructions(void) {
+    static const char digits[9] = {'1', '2', '3', '4', '5', '6', '7', '8', '9'};
+    u64 crc = 0xffffffff, eight;
+    memcpy(&eight, digits, 8);
+    __asm__("crc32q %1, %0" : "+r"(crc) : "r"(eight));
+    __asm__("crc32b %1, %k0" : "+r"(crc) : "q"((u8)digits[8]));
+    line_hex("crc32c of 123456789 by qword", ~crc & 0xffffffff);
+    u32 crc32 = 0xffffffff, four;
+    u16 two;
+    memcpy(&four, digits, 4);
+    __asm__("crc32l %1, %0" : "+r"(crc32) : "r"(four));
+    memcpy(&two, digits + 4, 2);
+    __asm__("crc32w %1, %0" : "+r"(crc32) : "r"(two));
+    __asm__("crc32b %1, %0" : "+r"(crc32) : "q"((u8)digits[6]));
+    memcpy(&two, digits + 7, 2);
+    __asm__("crc32w %1, %0" : "+r"(crc32) : "r"(two));
+    line_hex("crc32c of 123456789 by word and byte", ~crc32);
+
+    static __attribute__((aligned(16))) volatile u64 pair[2] = {1, 2};
+    u64 low = 1, high = 2;
+    u8 matched;
+    __asm__ volatile("lock cmpxchg16b %0\n\tsetz %1" : "+m"(*pair), "=q"(matched), "+a"(low), "+d"(high) : "b"(3UL), "c"(4UL) : "memory", "cc");
+    line("cmpxchg16b matched", matched);
+    line_hex("cmpxchg16b stored", pair[0] << 32 | pair[1]);
+    low = 1;
+    high = 2;
+    __asm__ volatile("lock cmpxchg16b %0\n\tsetz %1" : "+m"(*pair), "=q"(matched), "+a"(low), "+d"(high) : "b"(5UL), "c"(6UL) : "memory", "cc");
+    line("cmpxchg16b mismatched", matched);
+    line_hex("cmpxchg16b loaded", low << 32 | high);
+    static volatile u64 single = 0x0000000200000001UL;
+    u32 eax = 1, edx = 2;
+    __asm__ volatile("lock cmpxchg8b %0\n\tsetz %1" : "+m"(single), "=q"(matched), "+a"(eax), "+d"(edx) : "b"(7u), "c"(8u) : "memory", "cc");
+    line("cmpxchg8b matched", matched);
+    line_hex("cmpxchg8b stored", single);
+
+    u64 flags_byte;
+    __asm__("mov $1, %%al\n\tcmp $2, %%al\n\tlahf\n\tmovzbl %%ah, %k0" : "=r"(flags_byte) : : "rax", "cc");
+    line_hex("lahf after 1 - 2", flags_byte);
+    u8 zero, carry;
+    __asm__("mov $0x41, %%ah\n\tsahf\n\tsetz %0\n\tsetc %1" : "=q"(zero), "=q"(carry) : : "rax", "cc");
+    line("sahf zero and carry", zero * 2 + carry);
+
+    u64 random;
+    __asm__ volatile("rdrand %0\n\tsetc %1" : "=r"(random), "=q"(carry) : : "cc");
+    line("rdrand carry", carry);
+    __asm__ volatile("rdseed %0\n\tsetc %1" : "=r"(random), "=q"(carry) : : "cc");
+    line("rdseed carry", carry);
+    u32 first_low, first_high, second_low, second_high, aux;
+    __asm__ volatile("rdtscp" : "=a"(first_low), "=d"(first_high), "=c"(aux));
+    __asm__ volatile("rdtscp" : "=a"(second_low), "=d"(second_high), "=c"(aux));
+    line("rdtscp counts on", ((u64)second_high << 32 | second_low) >= ((u64)first_high << 32 | first_low));
+    u64 processor = ~0UL;
+    __asm__ volatile("rdpid %0" : "+r"(processor));
+    line("rdpid fits 32 bits", processor >> 32 == 0);
+    __asm__ volatile("prefetchw %0" : : "m"(pair[0]));
+    u32 used_low, used_high, enabled_low, enabled_high;
+    __asm__("xgetbv" : "=a"(used_low), "=d"(used_high) : "c"(1));
+    __asm__("xgetbv" : "=a"(enabled_low), "=d"(enabled_high) : "c"(0));
+    line("xinuse within xcr0", (used_low & ~enabled_low) == 0 && (used_high & ~enabled_high) == 0);
+}
+
 static volatile u64 divide_inputs[4] = {3, 5, 7, 0x8000000000000000UL};
 
 __attribute__((noinline)) static void divisions(void) {
@@ -579,6 +640,7 @@ int main(void) {
     locked_forms();
     string_instructions();
     divisions();
+    advertised_instructions();
 
     struct Record record = make_record(41);
     struct Record copy;
