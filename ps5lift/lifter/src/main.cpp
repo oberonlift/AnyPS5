@@ -1,8 +1,8 @@
 #include <lifter/Compile.hpp>
 #include <lifter/Program.hpp>
 
-#include <llvm/ADT/StringMap.h>
-#include <llvm/Config/llvm-config.h>
+#include "LlvmCompatibility.hpp"
+
 #include <llvm/TargetParser/Host.h>
 
 #include <algorithm>
@@ -23,7 +23,7 @@ int main(int argc, char** argv) {
     std::string input;
     Ps5Lift::CompileOptions compile{std::max(1u, std::thread::hardware_concurrency()), "", ""};
     Ps5Lift::LiftOptions lift;
-    Ps5Lift::CodegenOptions codegen{"aarch64-unknown-linux-gnu", "", "", true};
+    Ps5Lift::CodegenOptions codegen{llvm::Triple("aarch64-unknown-linux-gnu"), "", "", true};
 
     for (int i = 1; i < argc; ++i) {
         const std::string_view argument = argv[i];
@@ -43,7 +43,7 @@ int main(int argc, char** argv) {
                 return 2;
             }
         }
-        else if (argument == "--triple") codegen.Triple = value();
+        else if (argument == "--triple") codegen.Triple = llvm::Triple(value());
         else if (argument == "--cpu") codegen.Cpu = value();
         else if (argument == "--features") codegen.Features = value();
         else if (argument == "--emit-ir") compile.IrPrefix = value();
@@ -79,18 +79,12 @@ int main(int argc, char** argv) {
 
     if (codegen.Cpu == "native") {
         codegen.Cpu = llvm::sys::getHostCPUName().str();
-#if LLVM_VERSION_MAJOR >= 19
-        const auto features = llvm::sys::getHostCPUFeatures();
-#else
-        llvm::StringMap<bool> features;
-        llvm::sys::getHostCPUFeatures(features);
-#endif
-        for (const auto& feature : features) {
+        for (const auto& feature : Ps5Lift::HostCpuFeatures()) {
             if (!codegen.Features.empty()) codegen.Features += ",";
             codegen.Features += (feature.getValue() ? "+" : "-") + feature.getKey().str();
         }
     } else if (codegen.Cpu.empty()) {
-        codegen.Cpu = codegen.Triple.starts_with("aarch64") ? "neoverse-v2" : "generic";
+        codegen.Cpu = codegen.Triple.isAArch64() ? "neoverse-v2" : "generic";
     }
 
     try {

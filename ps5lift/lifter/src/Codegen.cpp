@@ -1,5 +1,7 @@
 #include <lifter/Codegen.hpp>
 
+#include "LlvmCompatibility.hpp"
+
 #include <llvm/IR/LegacyPassManager.h>
 #include <llvm/MC/TargetRegistry.h>
 #include <llvm/Passes/PassBuilder.h>
@@ -38,23 +40,23 @@ void InitializeTargets() {
 // aarch64 crypto extension, which LLVM's aes feature enables with PMULL, and crc32 its CRC32C instructions; on x86-64
 // they stay what they are.
 std::string Features(const CodegenOptions& options) {
-    const auto required = llvm::Triple(options.Triple).isAArch64() ? "+aes,+crc" : "+aes,+pclmul,+sse4.2";
+    const auto required = options.Triple.isAArch64() ? "+aes,+crc" : "+aes,+pclmul,+sse4.2";
     return options.Features.empty() ? required : options.Features + "," + required;
 }
 
 std::unique_ptr<llvm::TargetMachine> CreateTargetMachine(const CodegenOptions& options) {
     InitializeTargets();
     std::string error;
-    const auto* target = llvm::TargetRegistry::lookupTarget(options.Triple, error);
-    if (target == nullptr) throw std::runtime_error("Unknown target " + options.Triple + ": " + error);
+    const auto* target = llvm::TargetRegistry::lookupTarget(TripleArgument(options.Triple), error);
+    if (target == nullptr) throw std::runtime_error("Unknown target " + options.Triple.str() + ": " + error);
     llvm::TargetOptions targetOptions;
-    auto* machine = target->createTargetMachine(options.Triple, options.Cpu, Features(options), targetOptions, llvm::Reloc::PIC_, std::nullopt, options.Optimize ? llvm::CodeGenOptLevel::Aggressive : llvm::CodeGenOptLevel::None);
-    if (machine == nullptr) throw std::runtime_error("Cannot create a target machine for " + options.Triple);
+    auto* machine = target->createTargetMachine(TripleArgument(options.Triple), options.Cpu, Features(options), targetOptions, llvm::Reloc::PIC_, std::nullopt, options.Optimize ? llvm::CodeGenOptLevel::Aggressive : llvm::CodeGenOptLevel::None);
+    if (machine == nullptr) throw std::runtime_error("Cannot create a target machine for " + options.Triple.str());
     return std::unique_ptr<llvm::TargetMachine>(machine);
 }
 
 void Configure(llvm::Module& module, llvm::TargetMachine& machine, const CodegenOptions& options) {
-    module.setTargetTriple(options.Triple);
+    module.setTargetTriple(TripleArgument(options.Triple));
     module.setDataLayout(machine.createDataLayout());
 }
 
