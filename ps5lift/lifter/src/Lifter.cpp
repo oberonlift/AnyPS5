@@ -2263,7 +2263,8 @@ private:
             llvm::CmpInst::FCMP_UNE, llvm::CmpInst::FCMP_UGE, llvm::CmpInst::FCMP_UGT, llvm::CmpInst::FCMP_ORD,
             llvm::CmpInst::FCMP_UEQ, llvm::CmpInst::FCMP_ULT, llvm::CmpInst::FCMP_ULE, llvm::CmpInst::FCMP_FALSE,
             llvm::CmpInst::FCMP_ONE, llvm::CmpInst::FCMP_OGE, llvm::CmpInst::FCMP_OGT, llvm::CmpInst::FCMP_TRUE};
-        auto* compare = _builder.CreateFCmp(Predicates[predicate & 15], a, b);
+        const bool legacy = _instruction->Info.encoding == ZYDIS_INSTRUCTION_ENCODING_LEGACY;
+        auto* compare = _builder.CreateFCmp(Predicates[predicate & (legacy ? 7 : 15)], a, b);
         return _builder.CreateBitCast(_builder.CreateSExt(compare, IntegerLike(a->getType())), a->getType());
     }
 
