@@ -181,6 +181,7 @@ atomic exchanged = 1
 16-bit push and pop = 0x0000000412345678
 gcc-style jump table = 99
 jump table in a shared tail = 599
+function found by its padding = 1129
 loop sum = 55
 loopne remaining = 2
 loope remaining = 2
