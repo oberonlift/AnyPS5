@@ -7,6 +7,7 @@
 #include <llvm/MC/MCSubtargetInfo.h>
 #include <llvm/MC/TargetRegistry.h>
 #include <llvm/Passes/PassBuilder.h>
+#include <llvm/Support/CommandLine.h>
 #include <llvm/Support/FileSystem.h>
 #include <llvm/Support/TargetSelect.h>
 #include <llvm/Support/raw_ostream.h>
@@ -37,6 +38,13 @@ void InitializeTargets() {
         LLVMInitializeX86Target();
         LLVMInitializeX86TargetMC();
         LLVMInitializeX86AsmPrinter();
+        // AArch64's complex deinterleaving pass (LLVM 18 and 19) can place the llvm.vector.deinterleave2 it forms
+        // after a use of its result, which the instruction scheduler then crashes on. Lifted x86 code has little
+        // complex arithmetic for it to form.
+        auto& options = llvm::cl::getRegisteredOptions();
+        const auto deinterleaving = options.find("enable-complex-deinterleaving");
+        if (deinterleaving == options.end()) throw std::logic_error("LLVM has no enable-complex-deinterleaving option to turn the pass off");
+        static_cast<llvm::cl::opt<bool>*>(deinterleaving->second)->setValue(false);
     });
 }
 
