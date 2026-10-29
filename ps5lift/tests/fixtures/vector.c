@@ -442,6 +442,32 @@ LEGACY_SCALAR(cvtsd2ss, "cvtsd2ss", from_floats(1, 2, 3, 4), from_doubles(6, 8))
 LEGACY_SCALAR(roundss, "roundss $1,", from_floats(1, 2, 3, 4), from_floats(2.5f, 20, 30, 40))
 LEGACY_SCALAR(cmpps9, "cmpps $9,", from_floats(__builtin_nanf(""), 1, 5, 2), from_floats(1, 2, 3, 4))
 
+static volatile float half_inputs[4] = {0.0f, -0.0f, 1e-40f, 1.0f};
+
+/* Directed rounding keeps zeros exact and rounds a single denormal to the smallest half one, unless DAZ makes it zero.
+   Assembly keeps the conversions in order with the MXCSR writes, which a compiler may move them across. */
+#define CONVERT_HALF(result, values, control, mxcsr)                                                          \
+    do {                                                                                                     \
+        unsigned mode = mxcsr;                                                                               \
+        __m128i halves;                                                                                      \
+        __asm__ volatile("ldmxcsr %2\n\tvcvtps2ph $" #control ", %1, %0" : "=x"(halves) : "x"(values), "m"(mode) : "memory"); \
+        _mm_storel_epi64((__m128i*)&result, halves);                                                         \
+    } while (0)
+
+__attribute__((noinline)) static void half_conversions(void) {
+    const __m128 values = _mm_setr_ps(half_inputs[0], half_inputs[1], half_inputs[2], half_inputs[3]);
+    u64 up, down, flushed;
+    unsigned saved;
+    __asm__ volatile("stmxcsr %0" : "=m"(saved) : : "memory");
+    CONVERT_HALF(up, values, 2, saved & ~0x40u);
+    CONVERT_HALF(down, values, 1, saved & ~0x40u);
+    CONVERT_HALF(flushed, values, 2, saved | 0x40u);
+    __asm__ volatile("ldmxcsr %0" : : "m"(saved) : "memory");
+    report("cvtps2ph up", up);
+    report("cvtps2ph down", down);
+    report("cvtps2ph up with daz", flushed);
+}
+
 __attribute__((noinline)) static void legacy_cvtsi2sd(void) {
     __m128i result = from_doubles(16, 5);
     const long seven = 7;
@@ -496,6 +522,7 @@ int main(void) {
     legacy_roundss();
     legacy_cmpps9();
     legacy_cvtsi2sd();
+    half_conversions();
     return 0;
 }
 
