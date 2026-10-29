@@ -1479,16 +1479,28 @@ private:
         }
     }
 
+    static unsigned BroadcastElementBits(const ZydisMnemonic mnemonic) {
+        switch (mnemonic) {
+        case ZYDIS_MNEMONIC_VPBROADCASTB: return 8;
+        case ZYDIS_MNEMONIC_VPBROADCASTW: return 16;
+        case ZYDIS_MNEMONIC_VPBROADCASTD: case ZYDIS_MNEMONIC_VBROADCASTSS: return 32;
+        case ZYDIS_MNEMONIC_VPBROADCASTQ: case ZYDIS_MNEMONIC_VBROADCASTSD: return 64;
+        case ZYDIS_MNEMONIC_VBROADCASTF128: case ZYDIS_MNEMONIC_VBROADCASTI128: return 128;
+        default: throw std::logic_error("broadcast of an unknown element");
+        }
+    }
+
     llvm::Value* LowRdx(const unsigned bits) {
         return _builder.CreateTrunc(Gpr(PS5LIFT_RDX), Int(bits));
     }
 
-    void Broadcast() {
+    // The element comes from the mnemonic: Zydis sizes a register source of vbroadcastss and vbroadcastsd as the whole
+    // register, not the element the instruction repeats.
+    void Broadcast(const ZydisMnemonic mnemonic) {
         const auto& destination = Operand(0);
         const auto width = ZydisRegisterGetWidth(ZYDIS_MACHINE_MODE_LONG_64, destination.reg.value);
-        auto* element = Read(1);
-        const auto elementBits = Bits(1);
-        if (element->getType()->getIntegerBitWidth() != elementBits) element = _builder.CreateTrunc(element, Int(elementBits));
+        const auto elementBits = BroadcastElementBits(mnemonic);
+        auto* element = ReadAs(1, elementBits);
         auto* vectorType = llvm::FixedVectorType::get(Int(elementBits), width / elementBits);
         auto* splat = _builder.CreateVectorSplat(vectorType->getNumElements(), element);
         WriteRegister(destination.reg.value, _builder.CreateBitCast(splat, Int(width)));
@@ -3021,7 +3033,7 @@ private:
             return true;
         }
         case ZYDIS_MNEMONIC_VBROADCASTSS: case ZYDIS_MNEMONIC_VBROADCASTSD: case ZYDIS_MNEMONIC_VBROADCASTF128: case ZYDIS_MNEMONIC_VBROADCASTI128:
-            Broadcast();
+            Broadcast(mnemonic);
             return true;
         default:
             return false;
@@ -3553,7 +3565,7 @@ private:
             BitManipulation(mnemonic);
             return;
         case ZYDIS_MNEMONIC_VPBROADCASTB: case ZYDIS_MNEMONIC_VPBROADCASTW: case ZYDIS_MNEMONIC_VPBROADCASTD: case ZYDIS_MNEMONIC_VPBROADCASTQ:
-            Broadcast();
+            Broadcast(mnemonic);
             return;
         case ZYDIS_MNEMONIC_VZEROUPPER:
             for (int i = 0; i < VectorCount; ++i) SetVector(i, _builder.CreateZExt(_builder.CreateTrunc(Vector(i), Int(128)), Int(256)));

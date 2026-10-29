@@ -193,13 +193,28 @@ static v2 minimum_position_vex(v2 value) {
     return result;
 }
 
+#define BROADCAST(name, instruction, type)                                                 \
+    static type name(v2 value) {                                                          \
+        type result;                                                                      \
+        __asm__(instruction " %[v], %[r]" : [r] "=x"(result) : [v] "x"(value)); \
+        return result;                                                                    \
+    }
+
+BROADCAST(broadcast_ss128, "vbroadcastss", v2)
+BROADCAST(broadcast_ss256, "vbroadcastss", v4)
+BROADCAST(broadcast_sd256, "vbroadcastsd", v4)
+BROADCAST(broadcast_b128, "vpbroadcastb", v2)
+BROADCAST(broadcast_w256, "vpbroadcastw", v4)
+BROADCAST(broadcast_d128, "vpbroadcastd", v2)
+BROADCAST(broadcast_q256, "vpbroadcastq", v4)
+
 static v2 small_words(void) {
     v2 value = random_vector128();
     for (int i = 0; i < 2; ++i) value[i] &= 0x0007000700070007ll;
     return value;
 }
 
-enum { Rounds = 4096, Kinds = 8, PermuteKinds = 6 };
+enum { Rounds = 4096, Kinds = 8, PermuteKinds = 6, BroadcastKinds = 7 };
 
 int main(void) {
     static const char* const names[Kinds] = {"vmaskmovps 128", "vmaskmovps 256", "vmaskmovpd 128", "vmaskmovpd 256", "vpmaskmovd 128", "vpmaskmovd 256", "vpmaskmovq 128", "vpmaskmovq 256"};
@@ -299,6 +314,25 @@ int main(void) {
         mix(&permutes[5], &r5, sizeof(r5));
     }
     for (int i = 0; i < PermuteKinds; ++i) line(permute_names[i], permutes[i]);
+
+    static const char* const broadcast_names[BroadcastKinds] = {"vbroadcastss register 128", "vbroadcastss register 256", "vbroadcastsd register 256",
+                                                                "vpbroadcastb register 128", "vpbroadcastw register 256", "vpbroadcastd register 128",
+                                                                "vpbroadcastq register 256"};
+    u64 broadcasts[BroadcastKinds];
+    for (int i = 0; i < BroadcastKinds; ++i) broadcasts[i] = 0xcbf29ce484222325ul;
+    for (int round = 0; round < 64; ++round) {
+        const v2 source = random_vector128();
+        const v2 r0 = broadcast_ss128(source), r3 = broadcast_b128(source), r5 = broadcast_d128(source);
+        const v4 r1 = broadcast_ss256(source), r2 = broadcast_sd256(source), r4 = broadcast_w256(source), r6 = broadcast_q256(source);
+        mix(&broadcasts[0], &r0, sizeof(r0));
+        mix(&broadcasts[1], &r1, sizeof(r1));
+        mix(&broadcasts[2], &r2, sizeof(r2));
+        mix(&broadcasts[3], &r3, sizeof(r3));
+        mix(&broadcasts[4], &r4, sizeof(r4));
+        mix(&broadcasts[5], &r5, sizeof(r5));
+        mix(&broadcasts[6], &r6, sizeof(r6));
+    }
+    for (int i = 0; i < BroadcastKinds; ++i) line(broadcast_names[i], broadcasts[i]);
     return 0;
 }
 
