@@ -579,11 +579,6 @@ static volatile i64 opaque_signed = -1234567890123l;
 static volatile u32 opaque_count = 13;
 static volatile i32 opaque_small = -77;
 
-__asm__(".text\n"
-        "never_called_absolute_read:\n"
-        "    movl -1, %eax\n"
-        "    ret\n");
-
 // GCC loads the table into the register it jumps through and adds the entry to it; clang adds the table to the entry.
 long gcc_style_switch(long index);
 __asm__(".text\n"
