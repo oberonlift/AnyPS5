@@ -382,6 +382,10 @@ extern "C" void ps5lift_unsupported(Ps5LiftState*, const std::uint64_t address, 
     ps5lift_fail("reached unsupported instruction %s at 0x%" PRIx64, mnemonic, address);
 }
 
+extern "C" void ps5lift_unknown_resume(Ps5LiftState*, const std::uint64_t function, const std::uint64_t resume) {
+    ps5lift_fail("a longjmp or exception resumes at 0x%" PRIx64 " in the frame of 0x%" PRIx64 ", which has no resume point there", resume, function);
+}
+
 extern "C" void ps5lift_trap(Ps5LiftState*, const std::uint64_t address) {
     ps5lift_fail("guest trap at 0x%" PRIx64, address);
 }

@@ -6,6 +6,7 @@
 #include <array>
 #include <atomic>
 #include <cfenv>
+#include <cinttypes>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
@@ -219,7 +220,7 @@ R CallGuest(const std::uint64_t target, Args... arguments) {
     state->Gpr[PS5LIFT_RSP] = rsp;
     state->Gpr[PS5LIFT_RAX] = static_cast<std::uint64_t>(floats);
     ps5lift_dispatch(state, target);
-    if (state->Unwinding) ps5lift_unsupported(state, state->ResumeRip, "longjmp or an exception across native code");
+    if (state->Unwinding) ps5lift_fail("a longjmp or exception in guest code that native code called leaves through native code for 0x%" PRIx64, state->ResumeRip);
     state->Gpr[PS5LIFT_RSP] = savedRsp;
     if constexpr (!std::is_void_v<R>) return GuestResult<R>(state);
 }
@@ -263,7 +264,7 @@ struct CallbackPool<R(Args...)> {
         for (std::size_t i = count; i < current; ++i) {
             if (Targets[i].load(std::memory_order_relaxed) == target) return Thunks[i];
         }
-        if (current == Capacity) ps5lift_unsupported(nullptr, target, "callback pool is full");
+        if (current == Capacity) ps5lift_fail("guest function 0x%" PRIx64 " needs a callback thunk, but its signature's %zu are taken", target, Capacity);
         Targets[current].store(target, std::memory_order_release);
         Count.store(current + 1, std::memory_order_release);
         return Thunks[current];

@@ -805,8 +805,8 @@ private:
             _builder.CreateBr(_blocks.at(point));
         }
         _builder.SetInsertPoint(unknown);
-        auto callee = _module.Runtime("ps5lift_unsupported", llvm::FunctionType::get(_builder.getVoidTy(), {_module.Pointer(), I64(), _module.Pointer()}, false));
-        _builder.CreateCall(callee, {_state, StateLoad(I64(), offsetof(Ps5LiftState, ResumeRip)), _builder.CreateGlobalStringPtr("resume at an address this frame cannot continue from")})->setDoesNotReturn();
+        auto callee = _module.Runtime("ps5lift_unknown_resume", llvm::FunctionType::get(_builder.getVoidTy(), {_module.Pointer(), I64(), I64()}, false));
+        _builder.CreateCall(callee, {_state, _builder.getInt64(_function.Entry), StateLoad(I64(), offsetof(Ps5LiftState, ResumeRip))})->setDoesNotReturn();
         _builder.CreateUnreachable();
         return _unwind;
     }
