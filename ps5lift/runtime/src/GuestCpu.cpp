@@ -115,6 +115,14 @@ extern "C" std::uint64_t GuestCpuReadTsc_nid_no_patch(void) {
     return ps5lift_read_tsc();
 }
 
+extern "C" void GuestCpuUseStack_nid_no_patch(const std::uint64_t stackTop) {
+    ps5lift_use_guest_stack(stackTop);
+}
+
+extern "C" std::uint64_t GuestCpuHostStackSize_nid_no_patch(void) {
+    return ps5lift_host_stack_size();
+}
+
 extern "C" void GuestCpuCallInterrupted_nid_no_patch(const std::uint64_t target, const std::uint64_t first, const std::uint64_t second) {
     constexpr std::uint64_t InterruptedStackGap = 64ull << 10;
     auto* state = ps5lift_current_state();

@@ -122,11 +122,13 @@ void RestoreHostFloatingPoint(const HostFloatingPoint& saved) {
 #endif
 }
 
-// A native thread that runs guest code. Its own code keeps the host's floating-point environment, and the host FPU
-// holds the guest's only while a callback runs. A thread that jumps out of its callbacks, as scePthreadExit does to
-// leave the guest's frames, stays in the guest's environment until it exits.
+// A native thread that runs guest code, on a stack the runtime maps or one its creator gives. Its own code keeps the
+// host's floating-point environment, and the host FPU holds the guest's only while a callback runs. A thread that
+// jumps out of its callbacks, as scePthreadExit does to leave the guest's frames, stays in the guest's environment
+// until it exits.
 struct ForeignThread {
-    GuestThread Thread;
+    std::uint8_t* OwnedStack = nullptr;
+    std::uint8_t* Tls = nullptr;
     Ps5LiftState State{};
     std::uint64_t Entered = 0;
     HostFloatingPoint Host;
@@ -139,23 +141,24 @@ bool GuestEnvironmentLive() {
     return Foreign == nullptr || Foreign->Entered != 0;
 }
 
-void MapThreadMemory(GuestThread& thread) {
+std::uint8_t* MapGuestStack() {
     const auto guard = PageSize();
-    auto* stackMapping = static_cast<std::uint8_t*>(MapAnonymous(guard + GuestStackSize));
-    if (mprotect(stackMapping, guard, PROT_NONE) != 0) ps5lift_fail("cannot protect the guard page below a guest stack: %s", std::strerror(errno));
-    thread.Stack = stackMapping + guard;
-    thread.Tls = static_cast<std::uint8_t*>(MapAnonymous(TlsSize));
+    auto* mapping = static_cast<std::uint8_t*>(MapAnonymous(guard + GuestStackSize));
+    if (mprotect(mapping, guard, PROT_NONE) != 0) ps5lift_fail("cannot protect the guard page below a guest stack: %s", std::strerror(errno));
+    return mapping + guard;
 }
 
-void UnmapThreadMemory(const GuestThread& thread) {
+void UnmapGuestStack(std::uint8_t* const stack) {
     const auto guard = PageSize();
-    munmap(thread.Stack - guard, guard + GuestStackSize);
-    munmap(thread.Tls, TlsSize);
+    munmap(stack - guard, guard + GuestStackSize);
 }
 
-std::uint64_t PrepareThread(GuestThread& thread, Ps5LiftState& state) {
-    MapThreadMemory(thread);
-    const auto threadPointer = reinterpret_cast<std::uint64_t>(thread.Tls + TlsSize / 2);
+std::uint64_t StackTop(const std::uint8_t* const stack) {
+    return reinterpret_cast<std::uint64_t>(stack + GuestStackSize);
+}
+
+void PrepareState(Ps5LiftState& state, std::uint8_t* const tls, const std::uint32_t mxcsr) {
+    const auto threadPointer = reinterpret_cast<std::uint64_t>(tls + TlsSize / 2);
     std::memcpy(reinterpret_cast<void*>(threadPointer), &threadPointer, sizeof(threadPointer));
     for (std::uint64_t i = 0; i < ps5lift_program.ImageCount; ++i) {
         const auto& image = ps5lift_program.Images[i];
@@ -164,9 +167,8 @@ std::uint64_t PrepareThread(GuestThread& thread, Ps5LiftState& state) {
         std::memcpy(reinterpret_cast<void*>(threadPointer - image.TlsOffset), reinterpret_cast<const void*>(image.TlsAddress), image.TlsFileSize);
     }
     state.FsBase = threadPointer;
-    state.Mxcsr = thread.Mxcsr & ~0x3fu;
+    state.Mxcsr = mxcsr & ~0x3fu;
     state.X87Control = ConsoleX87Control;
-    return reinterpret_cast<std::uint64_t>(thread.Stack + GuestStackSize);
 }
 
 void Initialize(const std::uint64_t argc, const std::uint64_t argv, const std::uint64_t environment) {
@@ -184,7 +186,10 @@ void Initialize(const std::uint64_t argc, const std::uint64_t argv, const std::u
 void* RunThread(void* argument) {
     auto& thread = *static_cast<GuestThread*>(argument);
     Ps5LiftState state{};
-    const auto top = PrepareThread(thread, state);
+    thread.Stack = MapGuestStack();
+    thread.Tls = static_cast<std::uint8_t*>(MapAnonymous(TlsSize));
+    PrepareState(state, thread.Tls, thread.Mxcsr);
+    const auto top = StackTop(thread.Stack);
     CurrentState = &state;
     ps5lift_apply_mxcsr(&state);
     const auto function = Lookup(thread.Entry);
@@ -429,7 +434,8 @@ void ReleaseForeignThread(void* pointer) {
     auto* foreign = static_cast<ForeignThread*>(pointer);
     Foreign = nullptr;
     CurrentState = nullptr;
-    UnmapThreadMemory(foreign->Thread);
+    if (foreign->OwnedStack != nullptr) UnmapGuestStack(foreign->OwnedStack);
+    munmap(foreign->Tls, TlsSize);
     delete foreign;
 }
 
@@ -444,17 +450,33 @@ pthread_key_t ForeignThreadKey() {
     return key;
 }
 
+Ps5LiftState* StartForeignThread(const std::uint64_t stackTop, std::uint8_t* const ownedStack) {
+    auto* foreign = new ForeignThread;
+    foreign->OwnedStack = ownedStack;
+    foreign->Tls = static_cast<std::uint8_t*>(MapAnonymous(TlsSize));
+    if (const int error = pthread_setspecific(ForeignThreadKey(), foreign); error != 0) ps5lift_fail("cannot keep a native thread's guest state: %s", std::strerror(error));
+    PrepareState(foreign->State, foreign->Tls, ConsoleMxcsr);
+    foreign->State.Gpr[PS5LIFT_RSP] = stackTop & ~std::uint64_t{15};
+    Foreign = foreign;
+    CurrentState = &foreign->State;
+    return CurrentState;
+}
+
 }
 
 extern "C" Ps5LiftState* ps5lift_current_state(void) {
     if (CurrentState != nullptr) return CurrentState;
-    auto* foreign = new ForeignThread;
-    if (const int error = pthread_setspecific(ForeignThreadKey(), foreign); error != 0) ps5lift_fail("cannot keep a native thread's guest state: %s", std::strerror(error));
-    const auto top = PrepareThread(foreign->Thread, foreign->State);
-    foreign->State.Gpr[PS5LIFT_RSP] = top & ~std::uint64_t{15};
-    Foreign = foreign;
-    CurrentState = &foreign->State;
-    return CurrentState;
+    auto* stack = MapGuestStack();
+    return StartForeignThread(StackTop(stack), stack);
+}
+
+extern "C" void ps5lift_use_guest_stack(const std::uint64_t stackTop) {
+    if (CurrentState != nullptr) ps5lift_fail("a thread that already runs guest code cannot move to another guest stack");
+    StartForeignThread(stackTop, nullptr);
+}
+
+extern "C" std::uint64_t ps5lift_host_stack_size(void) {
+    return HostStackSize;
 }
 
 extern "C" Ps5LiftState* ps5lift_enter_guest(void) {
@@ -480,7 +502,8 @@ extern "C" std::uint64_t ps5lift_thread_join(const std::uint64_t handle) {
     const auto error = pthread_join(thread->Handle, nullptr);
     if (error != 0) ps5lift_fail("cannot join a guest thread: %s", std::strerror(error));
     const auto result = thread->Result;
-    UnmapThreadMemory(*thread);
+    UnmapGuestStack(thread->Stack);
+    munmap(thread->Tls, TlsSize);
     delete thread;
     return result;
 }
