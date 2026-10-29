@@ -427,6 +427,14 @@ GuestFunction DiscoverFunction(const GuestImage& image, const Decoder& decoder, 
     for (const auto& [address, instruction] : function.Instructions) {
         if (const auto taken = TakenFunctionAddress(image, function, instruction)) reachedStarts.insert(*taken);
     }
+    // An instruction that another overlaps, such as a cmpxchg after a lock prefix that a jump skips, continues at its own
+    // end, which then needs a block of its own.
+    for (auto current = function.Instructions.begin(); current != function.Instructions.end(); ++current) {
+        const auto& instruction = current->second;
+        const auto following = std::next(current);
+        const bool adjacent = following != function.Instructions.end() && following->first == instruction.Next();
+        if (!EndsFlow(instruction) && !adjacent && function.Instructions.contains(instruction.Next())) function.Leaders.insert(instruction.Next());
+    }
     const auto predecessors = PredecessorsOf(function);
     for (const auto& [jump, targets] : function.JumpTables) {
         if (RecoverJumpTable(image, function, predecessors, function.Instructions.at(jump), limit, references).Targets != targets)

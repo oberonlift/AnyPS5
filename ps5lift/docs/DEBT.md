@@ -7,7 +7,6 @@ A review of the whole tree in October 2026 found these. Each gives a wrong resul
 ### Lifter
 
 - Prefixes and branch types are not checked in one place: a 16-bit `push` or `pop` moves `rsp` by 8, the 14-byte `fnstenv` and `fldenv` format is read and written as 28 bytes, `rep movs` and `rep stos` ignore an address-size override and a segment override on the source, and a far `call`, `jmp` or `ret` is lifted as a near one (a far `ret` pops 8 bytes; a far call through memory fails module verification without an address).
-- Overlapping instructions get a wrong edge. When the lifter reaches a leader with its block still open it branches to the leader even if the previous instruction ends elsewhere, so in `je 0f; lock; 0: cmpxchg` the locked path runs the `cmpxchg` twice and reports a successful exchange as failed.
 - `movs` and `stos` clear CF, ZF, SF, OF, PF and AF: `StringOp` reloads the cached registers as after a call, where the status flags are dead, but they are live across a string instruction. The runtime also moves each element with its own `memmove` or `memcpy` call, and under `--memory tso` neither is ordered.
 - `div` and `idiv` never raise #DE. A zero divisor or a quotient that does not fit is an LLVM `udiv` or `sdiv` with undefined behaviour or a truncated result, where x86 delivers SIGFPE. Every 64-bit division also divides in 128 bits, which is a compiler-rt call on aarch64.
 - Under `--memory tso` some guest loads of 64 bits or less are plain: the memory forms that `ReadRegisterOrMemory`, `HalfMove` and `insertps` load (`movlps`, `movhpd`, `movddup`, `cvtps2pd`, `cvtdq2pd`, `vcvtph2ps` and others), and every x87 memory operand, which [the x87 runtime](../runtime/src/X87.cpp) copies with `memcpy`.
@@ -80,7 +79,7 @@ A review of the whole tree in October 2026 found these. Each gives a wrong resul
 
 - Every fixture is built for `znver2`, so the compiler encodes SSE with VEX, and the only legacy SSE forms tested are AES, `pclmulqdq`, SHA, MMX and a set of scalar arithmetic, comparison, rounding and conversion forms, which come from assembly. `vector.c` and `float.c` use AVX throughout, so covering the packed legacy forms needs SSE-only builds of their tests.
 - No test runs `--float fast`, `--preserve-flags`, an unoptimized lift or `--emit-ir`, and no fixture splits an image into more than one part, so calls between the parts of one image are tested only by EVO Player.
-- Untested paths: string instructions with live flags, division traps, overlapping instructions, jump tables sized by layout, fibers resumed on another thread, `sceKernelRaiseException`, `vcvtps2ph` with directed rounding, `fscale` by large scales, and the generator's forwarded variadics and 128-bit stack arguments.
+- Untested paths: string instructions with live flags, division traps, jump tables sized by layout, fibers resumed on another thread, `sceKernelRaiseException`, `vcvtps2ph` with directed rounding, `fscale` by large scales, and the generator's forwarded variadics and 128-bit stack arguments.
 - The TSO check in `threads.c` can only fail when the lifted code runs on aarch64 hardware.
 
 ## Cleanup

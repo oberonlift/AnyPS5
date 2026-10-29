@@ -327,6 +327,10 @@ public:
 
         std::optional<std::uint64_t> expected;
         for (const auto& [address, instruction] : _function.Instructions) {
+            if (expected && *expected != address && !_builder.GetInsertBlock()->getTerminator()) {
+                if (!_blocks.contains(*expected)) throw std::logic_error("The instruction before 0x" + Hex(address) + " continues at 0x" + Hex(*expected) + ", which has no block");
+                _builder.CreateBr(_blocks.at(*expected));
+            }
             if (_blocks.contains(address)) {
                 if (!_builder.GetInsertBlock()->getTerminator()) _builder.CreateBr(_blocks.at(address));
                 _builder.SetInsertPoint(_blocks.at(address));
