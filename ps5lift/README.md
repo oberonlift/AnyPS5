@@ -30,11 +30,11 @@ build/anyps5/core/relinker/relinker eboot.bin eboot.elf
 ```sh
 build/lifter/ps5lift eboot.elf -o guest.a --cpu native
 python3 tools/generate_bridges.py libc libkernel --anyps5-build build/anyps5 -o bridges.cpp
-python3 tools/build_runtime.py --triple aarch64-unknown-linux-gnu --output build/runtime-aarch64
+python3 tools/build_runtime.py --triple aarch64-unknown-linux-gnu --output build/runtime-aarch64-unknown-linux-gnu
 L=build/anyps5/core/libs/libs/unpatched
 clang++ -O2 -Iruntime/include guest.a bridges.cpp $L/libc.prx $L/libkernel.prx -Wl,-rpath,$PWD/$L \
     -Wl,--undefined-glob='GuestCpu*_nid_no_patch' -Wl,--export-dynamic-symbol='GuestCpu*_nid_no_patch' \
-    build/runtime-aarch64/libps5lift_runtime.a build/runtime-aarch64/libps5lift_main.a -fuse-ld=lld -latomic -pthread -ldl -o guest
+    build/runtime-aarch64-unknown-linux-gnu/libps5lift_runtime.a build/runtime-aarch64-unknown-linux-gnu/libps5lift_main.a -fuse-ld=lld -latomic -pthread -ldl -o guest
 ./guest
 ```
 

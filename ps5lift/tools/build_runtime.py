@@ -2,7 +2,9 @@
 import argparse
 import concurrent.futures
 import fcntl
+import hashlib
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -22,25 +24,44 @@ def softfloat_sources():
     return [ROOT / line.strip() for line in (ROOT / "runtime" / "softfloat_sources.txt").read_text().splitlines() if line.strip()]
 
 
-def needs_build(source, output, headers):
-    if not output.exists():
+def directory_for(build_root, triple):
+    return Path(build_root) / f"runtime-{triple}"
+
+
+def fingerprint(*parts):
+    return hashlib.sha256("\0".join(map(str, parts)).encode()).hexdigest()
+
+
+def dependencies(depfile):
+    body = depfile.read_text().replace("\\\n", " ").split(":", 1)[1]
+    return [Path(token.replace("\\ ", " ")) for token in re.split(r"(?<!\\)\s+", body.strip()) if token]
+
+
+def needs_build(record, output, depfile):
+    if not output.exists() or not depfile.exists() or not output.with_suffix(".cmd").exists():
         return True
-    newest = max([source.stat().st_mtime, *(header.stat().st_mtime for header in headers)])
-    return newest > output.stat().st_mtime
+    if output.with_suffix(".cmd").read_text() != record:
+        return True
+    built = output.stat().st_mtime
+    return any(not path.exists() or path.stat().st_mtime > built for path in dependencies(depfile))
 
 
-def compile_one(command, source, output):
+def compile_one(command, source, output, record):
     output.parent.mkdir(parents=True, exist_ok=True)
-    result = subprocess.run([*command, "-c", str(source), "-o", str(output)], capture_output=True, text=True)
+    result = subprocess.run([*command, "-MMD", "-MF", str(output.with_suffix(".d")), "-c", str(source), "-o", str(output)], capture_output=True, text=True)
     if result.returncode != 0:
         raise SystemExit(f"compiling {source} failed:\n{result.stderr}")
+    output.with_suffix(".cmd").write_text(record)
+
+
+def compiler_version(compiler):
+    return subprocess.run([compiler, "--version"], capture_output=True, text=True, check=True).stdout
 
 
 def build(triple, output_directory, clang, clangxx, jobs):
     output_directory = Path(output_directory)
     library = output_directory / "libps5lift_runtime.a"
     main_library = output_directory / "libps5lift_main.a"
-    headers = list((ROOT / "runtime" / "include" / "ps5lift").glob("*")) + list((SOFTFLOAT / "source" / "include").glob("*.h"))
     target = [f"--target={triple}", "-O2", "-fPIC"]
     units = []
     for path in softfloat_sources():
@@ -48,20 +69,26 @@ def build(triple, output_directory, clang, clangxx, jobs):
     for relative in [*RUNTIME_SOURCES, MAIN_SOURCE]:
         path = ROOT / relative
         units.append(([clangxx, *target, "-std=c++20", f"-I{ROOT / 'runtime' / 'include'}", f"-I{SOFTFLOAT / 'source' / 'include'}", "-DTHREAD_LOCAL=thread_local", "-DSOFTFLOAT_FAST_INT64", "-DLITTLEENDIAN=1"], path, output_directory / "runtime" / (path.stem + ".o")))
+    versions = {compiler: compiler_version(compiler) for compiler in (clang, clangxx)}
+    units = [(command, source, output, fingerprint(versions[command[0]], *command, source)) for command, source, output in units]
     # Parallel tests share this directory: build under a lock, and replace archives whole so a link never sees one missing.
     output_directory.mkdir(parents=True, exist_ok=True)
     with open(output_directory / ".lock", "w") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
-        stale = [unit for unit in units if needs_build(unit[1], unit[2], headers)]
-        if stale or not library.exists() or not main_library.exists():
-            with concurrent.futures.ThreadPoolExecutor(jobs) as pool:
-                list(pool.map(lambda unit: compile_one(*unit), stale))
-            archiver = subprocess.run([clang, "--print-prog-name=llvm-ar"], capture_output=True, text=True, check=True).stdout.strip()
-            for archive, members in ((library, units[:-1]), (main_library, units[-1:])):
-                temporary = archive.with_suffix(".a.tmp")
-                temporary.unlink(missing_ok=True)
-                subprocess.run([archiver, "crs", str(temporary), *(str(unit[2]) for unit in members)], check=True)
-                temporary.replace(archive)
+        stale = [unit for unit in units if needs_build(unit[3], unit[2], unit[2].with_suffix(".d"))]
+        with concurrent.futures.ThreadPoolExecutor(jobs) as pool:
+            list(pool.map(lambda unit: compile_one(*unit), stale))
+        archiver = subprocess.run([clang, "--print-prog-name=llvm-ar"], capture_output=True, text=True, check=True).stdout.strip()
+        for archive, members in ((library, units[:-1]), (main_library, units[-1:])):
+            record = fingerprint(archiver, *(unit[2] for unit in members))
+            listing = archive.with_suffix(".a.cmd")
+            if archive.exists() and listing.exists() and listing.read_text() == record and not any(unit in stale for unit in members):
+                continue
+            temporary = archive.with_suffix(".a.tmp")
+            temporary.unlink(missing_ok=True)
+            subprocess.run([archiver, "crs", str(temporary), *(str(unit[2]) for unit in members)], check=True)
+            temporary.replace(archive)
+            listing.write_text(record)
     return library, main_library
 
 
