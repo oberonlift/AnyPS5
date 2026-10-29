@@ -1,3 +1,5 @@
+#include "Runtime.hpp"
+
 #include <ps5lift/Bridge.hpp>
 #include <ps5lift/State.h>
 
@@ -72,14 +74,6 @@ void* MapAnonymous(const std::uint64_t size) {
     auto* mapped = mmap(nullptr, size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
     if (mapped == MAP_FAILED) ps5lift_fail("cannot allocate %" PRIu64 " bytes: %s", size, std::strerror(errno));
     return mapped;
-}
-
-Ps5LiftFunction Lookup(const std::uint64_t target) {
-    const auto* begin = ps5lift_program.Functions;
-    const auto* end = begin + ps5lift_program.FunctionCount;
-    const auto* found = std::lower_bound(begin, end, target, [](const Ps5LiftFunctionEntry& entry, const std::uint64_t address) { return entry.GuestAddress < address; });
-    if (found == end || found->GuestAddress != target) return nullptr;
-    return found->Host;
 }
 
 // What a thread needs to run guest code besides its state: a guest stack, unless its creator gives one, a TLS block
@@ -219,7 +213,7 @@ void* RunThread(void* argument) {
     const auto top = StackTop(thread.Memory.Stack);
     BindThread(&state, thread.Memory);
     ps5lift_apply_mxcsr(&state);
-    const auto function = Lookup(thread.Entry);
+    const auto function = Ps5Lift::LookupFunction(thread.Entry);
     if (function == nullptr) ps5lift_fail("the thread entry 0x%" PRIx64 " was not lifted", thread.Entry);
 
     if (thread.Main) {
@@ -377,7 +371,7 @@ extern "C" std::uint32_t ps5lift_read_mxcsr(Ps5LiftState* state) {
 }
 
 extern "C" Ps5LiftFunction ps5lift_resolve(const std::uint64_t target) {
-    const auto function = Lookup(target);
+    const auto function = Ps5Lift::LookupFunction(target);
     if (function == nullptr) ps5lift_fail("indirect branch to 0x%" PRIx64 ", which was not lifted", target);
     return function;
 }
@@ -562,11 +556,20 @@ void RequireHostFeatures() {
 
 }
 
+Ps5LiftFunction Ps5Lift::LookupFunction(const std::uint64_t address) {
+    const auto* begin = ps5lift_program.Functions;
+    const auto* end = begin + ps5lift_program.FunctionCount;
+    const auto* found = std::lower_bound(begin, end, address, [](const Ps5LiftFunctionEntry& entry, const std::uint64_t target) { return entry.GuestAddress < target; });
+    if (found == end || found->GuestAddress != address) return nullptr;
+    return found->Host;
+}
+
 extern "C" void ps5lift_run_main(void) {
     RequireHostFeatures();
     for (std::uint64_t i = 0; i < ps5lift_program.ImageCount; ++i) {
         MapSegments(ps5lift_program.Images[i]);
     }
+    Ps5Lift::InstallNativeCalls();
     GuestThread thread;
     thread.Entry = ps5lift_program.Entry;
     thread.Main = true;

@@ -165,6 +165,19 @@ extern "C" void ps5lift_import_host__call__eight(Ps5LiftState* state) {
     Return(state, function(1, 2, 3, 4, 5, 6, 7, 8) + function(10, 20, 30, 40, 50, 60, 70, 80));
 }
 
+struct RecordedCalls {
+    long (*integers)(long, long, long, long, long, long, long, long);
+    double (*mixed)(double, long, double);
+};
+
+// The record holds guest function pointers that no bridge turned into thunks, so these are native calls straight into
+// guest code, as a library makes when it calls a callback the guest stored in a structure.
+extern "C" void ps5lift_import_host__call__recorded(Ps5LiftState* state) {
+    const auto* calls = Integer<const RecordedCalls*>(state, 0);
+    const auto base = Integer<long>(state, 1);
+    Return(state, calls->integers(base, base + 1, base + 2, base + 3, base + 4, base + 5, base + 6, base + 7) + static_cast<long>(calls->mixed(1.5, base, 0.25) * 1000.0));
+}
+
 extern "C" void ps5lift_import_host__extended(Ps5LiftState* state) {
     const ExtendedScope scope(state);
     long sum = Stack<long>(state, 0);
