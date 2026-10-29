@@ -264,8 +264,10 @@ struct RecoveredTable {
     bool Guarded = false;
 };
 
-RecoveredTable RecoverJumpTable(const GuestImage& image, const GuestFunction& function, const Predecessors& predecessors, const Instruction& jump, const std::uint64_t limit,
-                                const std::set<std::uint64_t>& references) {
+// A table's targets lie in the code between the function starts around its jump, which is the function's own code
+// unless the function jumped into code another one starts, as functions sharing a tail do.
+RecoveredTable RecoverJumpTable(const GuestImage& image, const GuestFunction& function, const Predecessors& predecessors, const Instruction& jump,
+                                const std::set<std::uint64_t>& starts, const std::set<std::uint64_t>& references) {
     constexpr std::uint64_t MaximumEntries = 4096;
     const auto shape = MatchTable(function, predecessors, jump);
     if (!shape) return {};
@@ -273,13 +275,16 @@ RecoveredTable RecoverJumpTable(const GuestImage& image, const GuestFunction& fu
     if (bound && *bound > MaximumEntries) return {};
     auto count = bound.value_or(MaximumEntries);
     if (const auto next = references.upper_bound(shape->Address); !bound && next != references.end()) count = std::min(count, (*next - shape->Address) / shape->EntrySize);
+    const auto after = starts.upper_bound(jump.Address);
+    const auto lower = after == starts.begin() ? std::uint64_t{0} : *std::prev(after);
+    const auto upper = after == starts.end() ? ~std::uint64_t{0} : *after;
     RecoveredTable table{{}, bound.has_value()};
     auto& targets = table.Targets;
     for (std::uint64_t i = 0; i < count; ++i) {
         const auto raw = image.ReadData(shape->Address + shape->EntrySize * i, shape->EntrySize);
         if (!raw) break;
         const auto destination = shape->EntrySize == 8 ? *raw : shape->Address + static_cast<std::uint64_t>(static_cast<std::int64_t>(static_cast<std::int32_t>(*raw)));
-        const bool inside = destination >= function.Entry && destination < limit && image.IsExecutable(destination);
+        const bool inside = destination >= lower && destination < upper && image.IsExecutable(destination);
         if (!inside) {
             if (bound) return {};
             break;
@@ -374,8 +379,6 @@ GuestFunction DiscoverFunction(const GuestImage& image, const Decoder& decoder, 
             pending.emplace_back(pad, entry);
         }
     }
-    const auto next = starts.upper_bound(entry);
-    const auto limit = next == starts.end() ? ~std::uint64_t{0} : *next;
     const auto ownCode = [&](const std::uint64_t address) { return address == entry || !starts.contains(address); };
     std::vector<std::uint64_t> indirectJumps;
     while (true) {
@@ -413,7 +416,7 @@ GuestFunction DiscoverFunction(const GuestImage& image, const Decoder& decoder, 
         const auto predecessors = PredecessorsOf(function);
         std::vector<std::uint64_t> unresolved;
         for (const auto jump : indirectJumps) {
-            auto table = RecoverJumpTable(image, function, predecessors, function.Instructions.at(jump), limit, references);
+            auto table = RecoverJumpTable(image, function, predecessors, function.Instructions.at(jump), starts, references);
             if (table.Targets.empty()) {
                 unresolved.push_back(jump);
                 continue;
@@ -442,7 +445,7 @@ GuestFunction DiscoverFunction(const GuestImage& image, const Decoder& decoder, 
     }
     const auto predecessors = PredecessorsOf(function);
     for (const auto& [jump, targets] : function.JumpTables) {
-        if (RecoverJumpTable(image, function, predecessors, function.Instructions.at(jump), limit, references).Targets != targets)
+        if (RecoverJumpTable(image, function, predecessors, function.Instructions.at(jump), starts, references).Targets != targets)
             throw std::runtime_error("The jump table of the jump at 0x" + Hex(jump) + " in the function at 0x" + Hex(entry) + " reads differently once the code it leads to is known");
     }
     return function;

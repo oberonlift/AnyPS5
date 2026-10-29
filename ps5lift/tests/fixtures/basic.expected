@@ -143,4 +143,5 @@ atomic counter = 1000
 atomic exchanged = 1
 16-bit push and pop = 0x0000000412345678
 gcc-style jump table = 99
+jump table in a shared tail = 599
 done
