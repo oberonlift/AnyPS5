@@ -14,6 +14,8 @@ void* guest_pthread_self(void) __asm__(NID_scePthreadSelf);
 int guest_install_exception_handler(int signal, void (*handler)(int, void*)) __asm__(NID_sceKernelInstallExceptionHandler);
 int guest_remove_exception_handler(int signal) __asm__(NID_sceKernelRemoveExceptionHandler);
 int guest_raise_exception(void* thread, int signal) __asm__(NID_sceKernelRaiseException);
+int guest_load_start_module(const char* name, unsigned long args, const void* argp, unsigned flags, const void* option, int* result) __asm__(NID_sceKernelLoadStartModule);
+int guest_dlsym(int module, const char* symbol, void** address) __asm__(NID_sceKernelDlsym);
 int guest_mutex_init(void** mutex, const void* attr, const char* name) __asm__(NID_scePthreadMutexInit);
 int guest_mutex_lock(void** mutex) __asm__(NID_scePthreadMutexLock);
 int guest_mutex_unlock(void** mutex) __asm__(NID_scePthreadMutexUnlock);
@@ -170,6 +172,15 @@ int main(void) {
     guest_pthread_join(target, &damaged);
     guest_remove_exception_handler(RaisedSignal);
     guest_printf("raised %d, frame intact %d, rip after the last call %d\n", raised, damaged == 0, interrupted_rip - (unsigned long)interrupted_worker < 0x100);
+
+    int started = -1;
+    const int module = guest_load_start_module("/app0/libkernelmodule.so", 0, 0, 0, 0, &started);
+    void* answer = 0;
+    const int found = guest_dlsym(module, "kernel_module_answer", &answer);
+    void* missing = 0;
+    const int absent = guest_dlsym(module, "kernel_module_absent", &missing);
+    guest_printf("module loaded %d started %d, dlsym %d answer %ld, absent symbol %d\n", module > 0, started, found, answer ? ((long (*)(long))answer)(6) : -1,
+                 absent != 0 && missing == 0);
 
     const unsigned long before = guest_process_time();
     guest_usleep(20000);

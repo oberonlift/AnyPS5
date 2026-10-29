@@ -142,6 +142,11 @@ typedef struct Ps5LiftImport {
     const char* Name;
 } Ps5LiftImport;
 
+typedef struct Ps5LiftExport {
+    const char* Name;
+    uint64_t Address;
+} Ps5LiftExport;
+
 typedef struct Ps5LiftImage {
     const char* Name;
     uint64_t LoadBias;
@@ -162,6 +167,8 @@ typedef struct Ps5LiftImage {
     uint64_t Init;
     uint64_t InitArray;
     uint64_t InitCount;
+    const Ps5LiftExport* Exports;
+    uint64_t ExportCount;
 } Ps5LiftImage;
 
 typedef struct Ps5LiftProgram {

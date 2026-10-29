@@ -228,7 +228,9 @@ public:
         _segmentType = llvm::StructType::create(_context, {_i64, _i64, _i64, _pointer, i32}, "Ps5LiftSegment");
         _dataImportType = llvm::StructType::create(_context, {_i64, _pointer, _i64}, "Ps5LiftDataImport");
         _importType = llvm::StructType::create(_context, {_i64, _pointer}, "Ps5LiftImport");
-        _imageType = llvm::StructType::create(_context, {_pointer, _i64, _i64, _i64, _pointer, _i64, _i64, _i64, _i64, _i64, _i64, _i64, _pointer, _i64, _pointer, _i64, _i64, _i64, _i64}, "Ps5LiftImage");
+        _exportType = llvm::StructType::create(_context, {_pointer, _i64}, "Ps5LiftExport");
+        _imageType = llvm::StructType::create(_context, {_pointer, _i64, _i64, _i64, _pointer, _i64, _i64, _i64, _i64, _i64, _i64, _i64, _pointer, _i64, _pointer, _i64, _i64, _i64, _i64, _pointer, _i64},
+                                              "Ps5LiftImage");
         auto* functionType = llvm::StructType::create(_context, {_i64, _pointer}, "Ps5LiftFunctionEntry");
         auto* programType = llvm::StructType::create(_context, {_pointer, _i64, _pointer, _i64, _pointer, _i64, _i64}, "Ps5LiftProgram");
 
@@ -260,6 +262,7 @@ private:
     llvm::StructType* _segmentType = nullptr;
     llvm::StructType* _dataImportType = nullptr;
     llvm::StructType* _importType = nullptr;
+    llvm::StructType* _exportType = nullptr;
     llvm::StructType* _imageType = nullptr;
     std::map<std::string, llvm::GlobalVariable*> _dataSymbols;
 
@@ -292,11 +295,17 @@ private:
             auto* text = llvm::IRBuilder<>(_context).CreateGlobalString(ImportName(_options, name), "import_name", 0, _module.get());
             imports.push_back(llvm::ConstantStruct::get(_importType, {Int(address), text}));
         }
+        std::vector<llvm::Constant*> exports;
+        for (const auto& [symbol, address] : image.Exports()) {
+            auto* text = llvm::IRBuilder<>(_context).CreateGlobalString(symbol, "export_name", 0, _module.get());
+            exports.push_back(llvm::ConstantStruct::get(_exportType, {text, Int(address)}));
+        }
         auto* name = llvm::IRBuilder<>(_context).CreateGlobalString(_program.LoaderName(index), "image_name", 0, _module.get());
         const auto& tls = image.Tls();
         return llvm::ConstantStruct::get(_imageType, {name, Int(image.LoadBias()), Int(image.ProgramHeaders().Address), Int(image.ProgramHeaders().Count), Table(_segmentType, segments, "ps5lift_segments"), Int(segments.size()),
             Int(tls.Module), Int(tls.Address), Int(tls.FileSize), Int(tls.MemorySize), Int(tls.Alignment), Int(tls.Offset), Table(_dataImportType, dataImports, "ps5lift_data_imports"), Int(dataImports.size()),
-            Table(_importType, imports, "ps5lift_imports"), Int(imports.size()), Int(image.Init()), Int(image.InitArray().Address), Int(image.InitArray().Count)});
+            Table(_importType, imports, "ps5lift_imports"), Int(imports.size()), Int(image.Init()), Int(image.InitArray().Address), Int(image.InitArray().Count),
+            Table(_exportType, exports, "ps5lift_exports"), Int(exports.size())});
     }
 };
 

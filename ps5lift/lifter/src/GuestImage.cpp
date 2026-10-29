@@ -379,6 +379,10 @@ std::optional<std::uint64_t> GuestImage::Export(const std::string& name) const {
     return found->second;
 }
 
+const std::map<std::string, std::uint64_t>& GuestImage::Exports() const {
+    return _exports;
+}
+
 const std::set<std::uint64_t>& GuestImage::FunctionExports() const {
     return _functionExports;
 }
