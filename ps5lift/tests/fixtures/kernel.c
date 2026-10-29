@@ -5,6 +5,12 @@ void guest_exit(int code) __asm__(NID_exit) __attribute__((noreturn));
 int guest_pthread_create(void** thread, const void* attr, void* (*entry)(void*), void* argument, const char* name) __asm__(NID_scePthreadCreate);
 int guest_pthread_join(void* thread, void** result) __asm__(NID_scePthreadJoin);
 void guest_pthread_exit(void* result) __asm__(NID_scePthreadExit) __attribute__((noreturn));
+int guest_attr_init(void** attr) __asm__(NID_scePthreadAttrInit);
+int guest_attr_destroy(void** attr) __asm__(NID_scePthreadAttrDestroy);
+int guest_attr_set_stack_size(void** attr, unsigned long size) __asm__(NID_scePthreadAttrSetstacksize);
+int guest_attr_get(void* thread, void** attr) __asm__(NID_scePthreadAttrGet);
+int guest_attr_get_stack(void** attr, void** address, unsigned long* size) __asm__(NID_scePthreadAttrGetstack);
+void* guest_pthread_self(void) __asm__(NID_scePthreadSelf);
 int guest_mutex_init(void** mutex, const void* attr, const char* name) __asm__(NID_scePthreadMutexInit);
 int guest_mutex_lock(void** mutex) __asm__(NID_scePthreadMutexLock);
 int guest_mutex_unlock(void** mutex) __asm__(NID_scePthreadMutexUnlock);
@@ -39,6 +45,31 @@ static void* worker(void* argument) {
 
 static void* exiting_worker(void* argument) {
     guest_pthread_exit((void*)((long)argument + 70));
+}
+
+enum { LargeStack = 32 << 20, Levels = 5000 };
+
+__attribute__((noinline)) static long reach(long depth, volatile char* above) {
+    volatile char frame[4096];
+    frame[0] = above[0];
+    if (depth == 0) return frame[0];
+    return reach(depth - 1, frame) + 1;
+}
+
+static long stack_reported;
+
+static void* deep_worker(void* argument) {
+    (void)argument;
+    volatile char top = 0;
+    void* attr = 0;
+    void* address = 0;
+    unsigned long size = 0;
+    guest_attr_init(&attr);
+    guest_attr_get(guest_pthread_self(), &attr);
+    guest_attr_get_stack(&attr, &address, &size);
+    guest_attr_destroy(&attr);
+    stack_reported = size >= LargeStack && (volatile char*)address <= &top && &top < (volatile char*)address + size;
+    return (void*)reach(Levels, &top);
 }
 
 enum { SigBlock = 1, SigSetmask = 3, Sigusr1 = 30 };
@@ -85,6 +116,15 @@ int main(void) {
     void* exited = 0;
     guest_pthread_create(&exiting, 0, exiting_worker, (void*)7, "exiting");
     guest_printf("scePthreadExit join %d result %ld\n", guest_pthread_join(exiting, &exited), (long)exited);
+
+    void* large = 0;
+    void* large_attr = 0;
+    void* levels = 0;
+    guest_attr_init(&large_attr);
+    guest_attr_set_stack_size(&large_attr, LargeStack);
+    guest_pthread_create(&large, &large_attr, deep_worker, 0, "deep");
+    guest_attr_destroy(&large_attr);
+    guest_printf("32 MiB stack join %d levels %ld, reported stack holds it %ld\n", guest_pthread_join(large, &levels), (long)levels, stack_reported);
 
     const unsigned long before = guest_process_time();
     guest_usleep(20000);
