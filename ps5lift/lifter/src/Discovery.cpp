@@ -496,6 +496,9 @@ bool IsConditionalJump(const ZydisMnemonic mnemonic) {
     case ZYDIS_MNEMONIC_JNLE:
     case ZYDIS_MNEMONIC_JRCXZ:
     case ZYDIS_MNEMONIC_JECXZ:
+    case ZYDIS_MNEMONIC_LOOP:
+    case ZYDIS_MNEMONIC_LOOPE:
+    case ZYDIS_MNEMONIC_LOOPNE:
         return true;
     default:
         return false;
