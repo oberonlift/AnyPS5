@@ -108,6 +108,7 @@ i64 table_index_copied_after_compare(i64 value);
 i64 table_index_copied_before_compare(i64 value);
 i64 table_base_before_loop(i64 value);
 i64 overlapping_exchange(volatile u64* word, u64 expected, u64 desired, i64 skip_lock);
+i64 tail_ping(i64 count);
 i64 jump_falls_into_next(i64 value);
 i64 next_after_jump(i64 value);
 void store_address_taken_by_lea(i64 (**slot)(void));
@@ -207,6 +208,26 @@ __asm__(".text\n"
         "9:  .long 3b-9b, 4b-9b, 5b-9b, 6b-9b\n"
         ".popsection\n"
         ".text\n");
+
+/* Two functions that tail-jump to each other, directly one way and through a register the other, more times than host
+   frames of an unoptimized lift would fit in the host stack. */
+__asm__(".text\n"
+        ".globl tail_ping\n"
+        ".type tail_ping, @function\n"
+        "tail_ping:\n"
+        "    test %rdi, %rdi\n"
+        "    jz 1f\n"
+        "    dec %rdi\n"
+        "    jmp tail_pong\n"
+        "1:  mov $42, %eax\n"
+        "    ret\n"
+        ".size tail_ping, .-tail_ping\n"
+        ".globl tail_pong\n"
+        ".type tail_pong, @function\n"
+        "tail_pong:\n"
+        "    lea tail_ping(%rip), %rax\n"
+        "    jmp *%rax\n"
+        ".size tail_pong, .-tail_pong\n");
 
 /* A jump over the lock prefix lands inside the locked cmpxchg, as code that skips the lock when single-threaded does. */
 __asm__(".text\n"
@@ -545,6 +566,7 @@ int main(void) {
         line(skip ? "exchange past the lock prefix" : "exchange with the lock prefix", overlapping_exchange(&exchanged_word, 5, 9, skip));
         line("exchanged word", (i64)exchanged_word);
     }
+    line("a hundred million tail jumps", tail_ping(100000000));
     line("jump taken before the next function", jump_falls_into_next(0));
     line("jump falling into the next function", jump_falls_into_next(5));
     line("the next function itself", next_after_jump(2));

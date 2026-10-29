@@ -8,7 +8,6 @@ A review of the whole tree in October 2026 found these. Each gives a wrong resul
 
 - Prefixes and branch types are not checked in one place: a 16-bit `push` or `pop` moves `rsp` by 8, the 14-byte `fnstenv` and `fldenv` format is read and written as 28 bytes, and a far `call`, `jmp` or `ret` is lifted as a near one (a far `ret` pops 8 bytes; a far call through memory fails module verification without an address).
 - A divide error (a zero divisor or a quotient wider than the operand) stops the program with its address, as `ud2` and `int3` do; a guest exception handler does not see it.
-- Guest tail jumps are `tail` calls, which LLVM may ignore and does at `-O0`, and an indirect `jmp` through dispatch is not marked at all, so a long chain of guest tail jumps can exhaust the host stack. Caller and callee share a prototype, so `musttail` would be legal.
 
 ### x87
 
@@ -74,7 +73,7 @@ A review of the whole tree in October 2026 found these. Each gives a wrong resul
 ## Tests
 
 - Every fixture is built for `znver2`, so the compiler encodes SSE with VEX, and the only legacy SSE forms tested are AES, `pclmulqdq`, SHA, MMX and a set of scalar arithmetic, comparison, rounding and conversion forms, which come from assembly. `vector.c` and `float.c` use AVX throughout, so covering the packed legacy forms needs SSE-only builds of their tests.
-- No test runs `--float fast`, `--preserve-flags`, an unoptimized lift or `--emit-ir`, and no fixture splits an image into more than one part, so calls between the parts of one image are tested only by EVO Player.
+- No test runs `--float fast`, `--preserve-flags` or `--emit-ir`, and no fixture splits an image into more than one part, so calls between the parts of one image are tested only by EVO Player.
 - Untested paths: division traps, jump tables sized by layout, fibers resumed on another thread, `sceKernelRaiseException`, `fscale` by large scales, and the generator's forwarded variadics and 128-bit stack arguments.
 - The TSO check in `threads.c` can only fail when the lifted code runs on aarch64 hardware.
 

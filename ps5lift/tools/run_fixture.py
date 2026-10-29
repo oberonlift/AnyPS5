@@ -119,6 +119,7 @@ def main():
     parser.add_argument("--optimization", action="append")
     parser.add_argument("--memory", action="append", choices=["tso", "relaxed"])
     parser.add_argument("--cpu", help="CPU for the lifted code; native on the host by default")
+    parser.add_argument("--unoptimized-lift", action="store_true", help="lift with ps5lift -O0, which skips LLVM's optimizations")
     parser.add_argument("--keep", action="store_true")
     args = parser.parse_args()
 
@@ -140,9 +141,9 @@ def main():
                 native = run([guest], env={**os.environ, "LD_LIBRARY_PATH": str(work)}).stdout
                 failures += not compare(expected, native, f"native {optimization}")
             for memory in memories:
-                label = f"{args.triple} {optimization} {memory}"
+                label = f"{args.triple} {optimization} {memory}{' unoptimized lift' if args.unoptimized_lift else ''}"
                 lifted = work / f"{guest.name}-{memory}.a"
-                report = run([args.ps5lift, guest, "-o", lifted, "--triple", args.triple, "--memory", memory, *lifter_target(args.triple, runner, args.cpu)]).stderr
+                report = run([args.ps5lift, guest, "-o", lifted, "--triple", args.triple, "--memory", memory, *lifter_target(args.triple, runner, args.cpu), *(["-O0"] if args.unoptimized_lift else [])]).stderr
                 program = work / f"{guest.name}-{memory}"
                 run([args.clangxx, f"--target={args.triple}", "-std=c++20", "-O2", f"-I{ROOT / 'runtime' / 'include'}", FIXTURES / "host_bridge.cpp", lifted, *runtime_link_arguments(args.ps5lift, args.triple, args.clang, args.clangxx), "-fuse-ld=lld", "-pthread", "-o", program])
                 try:
