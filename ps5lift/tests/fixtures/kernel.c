@@ -11,6 +11,9 @@ int guest_attr_set_stack_size(void** attr, unsigned long size) __asm__(NID_scePt
 int guest_attr_get(void* thread, void** attr) __asm__(NID_scePthreadAttrGet);
 int guest_attr_get_stack(void** attr, void** address, unsigned long* size) __asm__(NID_scePthreadAttrGetstack);
 void* guest_pthread_self(void) __asm__(NID_scePthreadSelf);
+int guest_install_exception_handler(int signal, void (*handler)(int, void*)) __asm__(NID_sceKernelInstallExceptionHandler);
+int guest_remove_exception_handler(int signal) __asm__(NID_sceKernelRemoveExceptionHandler);
+int guest_raise_exception(void* thread, int signal) __asm__(NID_sceKernelRaiseException);
 int guest_mutex_init(void** mutex, const void* attr, const char* name) __asm__(NID_scePthreadMutexInit);
 int guest_mutex_lock(void** mutex) __asm__(NID_scePthreadMutexLock);
 int guest_mutex_unlock(void** mutex) __asm__(NID_scePthreadMutexUnlock);
@@ -72,6 +75,34 @@ static void* deep_worker(void* argument) {
     return (void*)reach(Levels, &top);
 }
 
+enum { RaisedSignal = 30, InterruptedRipOffset = 0xe0, LargeFrame = 1 << 18 };
+
+static volatile int interrupt_ready;
+static volatile int interrupt_handled;
+static volatile unsigned long interrupted_rip;
+
+static void on_exception(int signal, void* context) {
+    (void)signal;
+    interrupted_rip = *(volatile unsigned long*)((char*)context + InterruptedRipOffset);
+    interrupt_handled = 1;
+}
+
+__attribute__((noinline)) static long spin_in_large_frame(void) {
+    volatile char frame[LargeFrame];
+    for (int i = 0; i < LargeFrame; ++i) frame[i] = (char)i;
+    interrupt_ready = 1;
+    while (!interrupt_handled) {
+    }
+    long damaged = 0;
+    for (int i = 0; i < LargeFrame; ++i) damaged += frame[i] != (char)i;
+    return damaged;
+}
+
+__attribute__((disable_tail_calls)) static void* interrupted_worker(void* argument) {
+    (void)argument;
+    return (void*)spin_in_large_frame();
+}
+
 enum { SigBlock = 1, SigSetmask = 3, Sigusr1 = 30 };
 
 static long jump_buffer[12];
@@ -125,6 +156,20 @@ int main(void) {
     guest_pthread_create(&large, &large_attr, deep_worker, 0, "deep");
     guest_attr_destroy(&large_attr);
     guest_printf("32 MiB stack join %d levels %ld, reported stack holds it %ld\n", guest_pthread_join(large, &levels), (long)levels, stack_reported);
+
+    void* target = 0;
+    void* target_attr = 0;
+    void* damaged = 0;
+    guest_install_exception_handler(RaisedSignal, on_exception);
+    guest_attr_init(&target_attr);
+    guest_attr_set_stack_size(&target_attr, 1 << 20);
+    guest_pthread_create(&target, &target_attr, interrupted_worker, 0, "interrupted");
+    guest_attr_destroy(&target_attr);
+    while (!interrupt_ready) guest_usleep(1000);
+    const int raised = guest_raise_exception(target, RaisedSignal);
+    guest_pthread_join(target, &damaged);
+    guest_remove_exception_handler(RaisedSignal);
+    guest_printf("raised %d, frame intact %d, rip after the last call %d\n", raised, damaged == 0, interrupted_rip - (unsigned long)interrupted_worker < 0x100);
 
     const unsigned long before = guest_process_time();
     guest_usleep(20000);

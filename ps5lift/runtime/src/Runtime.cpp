@@ -82,14 +82,22 @@ Ps5LiftFunction Lookup(const std::uint64_t target) {
     return found->Host;
 }
 
+// What a thread needs to run guest code besides its state: a guest stack, unless its creator gives one, a TLS block
+// and a stack for exception handlers, since the stack pointer of the code they interrupt is only known as of its last
+// call.
+struct ThreadMemory {
+    std::uint8_t* Stack = nullptr;
+    std::uint8_t* Tls = nullptr;
+    std::uint8_t* InterruptStack = nullptr;
+};
+
 struct GuestThread {
     std::uint64_t Entry = 0;
     std::uint64_t Argument = 0;
     std::uint32_t Mxcsr = ConsoleMxcsr;
     bool Main = false;
     std::uint64_t Result = 0;
-    std::uint8_t* Stack = nullptr;
-    std::uint8_t* Tls = nullptr;
+    ThreadMemory Memory;
     pthread_t Handle{};
 };
 
@@ -127,14 +135,14 @@ void RestoreHostFloatingPoint(const HostFloatingPoint& saved) {
 // jumps out of its callbacks, as scePthreadExit does to leave the guest's frames, stays in the guest's environment
 // until it exits.
 struct ForeignThread {
-    std::uint8_t* OwnedStack = nullptr;
-    std::uint8_t* Tls = nullptr;
+    ThreadMemory Memory;
     Ps5LiftState State{};
     std::uint64_t Entered = 0;
     HostFloatingPoint Host;
 };
 
 thread_local Ps5LiftState* CurrentState = nullptr;
+thread_local std::uint64_t InterruptStackTop = 0;
 thread_local ForeignThread* Foreign = nullptr;
 
 bool GuestEnvironmentLive() {
@@ -155,6 +163,26 @@ void UnmapGuestStack(std::uint8_t* const stack) {
 
 std::uint64_t StackTop(const std::uint8_t* const stack) {
     return reinterpret_cast<std::uint64_t>(stack + GuestStackSize);
+}
+
+ThreadMemory MapThreadMemory(const bool ownStack) {
+    return {ownStack ? MapGuestStack() : nullptr, static_cast<std::uint8_t*>(MapAnonymous(TlsSize)), MapGuestStack()};
+}
+
+void UnmapThreadMemory(const ThreadMemory& memory) {
+    if (memory.Stack != nullptr) UnmapGuestStack(memory.Stack);
+    munmap(memory.Tls, TlsSize);
+    UnmapGuestStack(memory.InterruptStack);
+}
+
+void BindThread(Ps5LiftState* const state, const ThreadMemory& memory) {
+    CurrentState = state;
+    InterruptStackTop = StackTop(memory.InterruptStack);
+}
+
+void UnbindThread() {
+    CurrentState = nullptr;
+    InterruptStackTop = 0;
 }
 
 void PrepareState(Ps5LiftState& state, std::uint8_t* const tls, const std::uint32_t mxcsr) {
@@ -186,11 +214,10 @@ void Initialize(const std::uint64_t argc, const std::uint64_t argv, const std::u
 void* RunThread(void* argument) {
     auto& thread = *static_cast<GuestThread*>(argument);
     Ps5LiftState state{};
-    thread.Stack = MapGuestStack();
-    thread.Tls = static_cast<std::uint8_t*>(MapAnonymous(TlsSize));
-    PrepareState(state, thread.Tls, thread.Mxcsr);
-    const auto top = StackTop(thread.Stack);
-    CurrentState = &state;
+    thread.Memory = MapThreadMemory(true);
+    PrepareState(state, thread.Memory.Tls, thread.Mxcsr);
+    const auto top = StackTop(thread.Memory.Stack);
+    BindThread(&state, thread.Memory);
     ps5lift_apply_mxcsr(&state);
     const auto function = Lookup(thread.Entry);
     if (function == nullptr) ps5lift_fail("the thread entry 0x%" PRIx64 " was not lifted", thread.Entry);
@@ -218,7 +245,7 @@ void* RunThread(void* argument) {
     function(&state);
     if (state.Unwinding) ps5lift_fail("nothing on a guest thread's stack resumes at 0x%" PRIx64, state.ResumeRip);
     thread.Result = state.Gpr[PS5LIFT_RAX];
-    CurrentState = nullptr;
+    UnbindThread();
     return nullptr;
 }
 
@@ -437,9 +464,8 @@ namespace {
 void ReleaseForeignThread(void* pointer) {
     auto* foreign = static_cast<ForeignThread*>(pointer);
     Foreign = nullptr;
-    CurrentState = nullptr;
-    if (foreign->OwnedStack != nullptr) UnmapGuestStack(foreign->OwnedStack);
-    munmap(foreign->Tls, TlsSize);
+    UnbindThread();
+    UnmapThreadMemory(foreign->Memory);
     delete foreign;
 }
 
@@ -454,15 +480,14 @@ pthread_key_t ForeignThreadKey() {
     return key;
 }
 
-Ps5LiftState* StartForeignThread(const std::uint64_t stackTop, std::uint8_t* const ownedStack) {
+Ps5LiftState* StartForeignThread(const ThreadMemory& memory, const std::uint64_t stackTop) {
     auto* foreign = new ForeignThread;
-    foreign->OwnedStack = ownedStack;
-    foreign->Tls = static_cast<std::uint8_t*>(MapAnonymous(TlsSize));
+    foreign->Memory = memory;
     if (const int error = pthread_setspecific(ForeignThreadKey(), foreign); error != 0) ps5lift_fail("cannot keep a native thread's guest state: %s", std::strerror(error));
-    PrepareState(foreign->State, foreign->Tls, ConsoleMxcsr);
+    PrepareState(foreign->State, memory.Tls, ConsoleMxcsr);
     foreign->State.Gpr[PS5LIFT_RSP] = stackTop & ~std::uint64_t{15};
     Foreign = foreign;
-    CurrentState = &foreign->State;
+    BindThread(&foreign->State, memory);
     return CurrentState;
 }
 
@@ -470,13 +495,18 @@ Ps5LiftState* StartForeignThread(const std::uint64_t stackTop, std::uint8_t* con
 
 extern "C" Ps5LiftState* ps5lift_current_state(void) {
     if (CurrentState != nullptr) return CurrentState;
-    auto* stack = MapGuestStack();
-    return StartForeignThread(StackTop(stack), stack);
+    const auto memory = MapThreadMemory(true);
+    return StartForeignThread(memory, StackTop(memory.Stack));
 }
 
 extern "C" void ps5lift_use_guest_stack(const std::uint64_t stackTop) {
     if (CurrentState != nullptr) ps5lift_fail("a thread that already runs guest code cannot move to another guest stack");
-    StartForeignThread(stackTop, nullptr);
+    StartForeignThread(MapThreadMemory(false), stackTop);
+}
+
+extern "C" std::uint64_t ps5lift_interrupt_stack(void) {
+    ps5lift_current_state();
+    return InterruptStackTop;
 }
 
 extern "C" std::uint64_t ps5lift_host_stack_size(void) {
@@ -506,8 +536,7 @@ extern "C" std::uint64_t ps5lift_thread_join(const std::uint64_t handle) {
     const auto error = pthread_join(thread->Handle, nullptr);
     if (error != 0) ps5lift_fail("cannot join a guest thread: %s", std::strerror(error));
     const auto result = thread->Result;
-    UnmapGuestStack(thread->Stack);
-    munmap(thread->Tls, TlsSize);
+    UnmapThreadMemory(thread->Memory);
     delete thread;
     return result;
 }

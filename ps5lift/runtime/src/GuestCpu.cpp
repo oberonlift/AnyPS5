@@ -124,13 +124,15 @@ extern "C" std::uint64_t GuestCpuHostStackSize_nid_no_patch(void) {
 }
 
 extern "C" void GuestCpuCallInterrupted_nid_no_patch(const std::uint64_t target, const std::uint64_t first, const std::uint64_t second) {
-    constexpr std::uint64_t InterruptedStackGap = 64ull << 10;
     auto* state = ps5lift_current_state();
     const Ps5LiftState saved = *state;
-    state->Gpr[PS5LIFT_RSP] = (saved.Gpr[PS5LIFT_RSP] - InterruptedStackGap) & ~std::uint64_t{15};
+    const auto mxcsr = ps5lift_read_mxcsr(state);
+    state->Gpr[PS5LIFT_RSP] = ps5lift_interrupt_stack();
     state->Unwinding = 0;
     Ps5Lift::Bridge::CallGuest<void>(target, first, second);
     *state = saved;
+    state->Mxcsr = mxcsr;
+    ps5lift_apply_mxcsr(state);
 }
 
 extern "C" void GuestCpuInterruptedContext_nid_no_patch(std::uint64_t* registers, std::uint64_t* flags) {

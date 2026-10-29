@@ -17,7 +17,8 @@ IMPORTS = ["printf", "snprintf", "vsnprintf", "sscanf", "puts", "strtold", "strt
 KERNEL_IMPORTS = ["printf", "exit", "scePthreadCreate", "scePthreadJoin", "scePthreadMutexInit", "scePthreadMutexLock", "scePthreadMutexUnlock",
                   "scePthreadMutexDestroy", "sceKernelUsleep", "sceKernelGetProcessTime", "sceKernelReadTsc", "sceKernelGetTscFrequency", "signal", "raise",
                   "sigprocmask", "sigsetjmp", "siglongjmp", "scePthreadExit",
-                  "scePthreadAttrInit", "scePthreadAttrDestroy", "scePthreadAttrSetstacksize", "scePthreadAttrGet", "scePthreadAttrGetstack", "scePthreadSelf"]
+                  "scePthreadAttrInit", "scePthreadAttrDestroy", "scePthreadAttrSetstacksize", "scePthreadAttrGet", "scePthreadAttrGetstack", "scePthreadSelf",
+                  "sceKernelInstallExceptionHandler", "sceKernelRemoveExceptionHandler", "sceKernelRaiseException"]
 FIBER_IMPORTS = ["printf", "exit", "_sceFiberInitializeImpl", "sceFiberFinalize", "sceFiberRun", "sceFiberSwitch", "sceFiberReturnToThread", "sceFiberGetSelf"]
 LOG_LINE = re.compile(r"^\[[^\]\s]+:\d+ [^\]]+\] .*\n", re.MULTILINE)
 GUEST_LINK = ["-no-pie", "-Wl,--image-base=0x20000000", "-Wl,--dynamic-linker=/lib64/ld-linux-x86-64.so.2"]
