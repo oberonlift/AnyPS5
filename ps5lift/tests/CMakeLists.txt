@@ -1,6 +1,6 @@
 find_package(Python3 REQUIRED COMPONENTS Interpreter)
 
-set(PS5LIFT_FIXTURES basic vector float threads callbacks x87 setjmp cpu mmx modules strings sse41)
+set(PS5LIFT_FIXTURES basic vector float threads callbacks x87 setjmp cpu mmx modules strings sse41 avx)
 
 if(NOT CMAKE_SYSTEM_NAME STREQUAL "Linux")
     # ps5lift writes Linux programs, so on another host the tests lift every fixture for both Linux targets without
