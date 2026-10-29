@@ -30,14 +30,16 @@ ctest --test-dir build --output-on-failure
 
 ## Use
 
-A PS5 executable goes through the AnyPS5 relinker first, which the test build compiles as `build/anyps5/core/relinker/relinker`:
+A title's `eboot.bin` and the modules in its `sce_module` directory are SELF containers. AnyPS5's `unwrap_self.py` turns each decrypted one into a plain ELF, and the AnyPS5 relinker, which the test build compiles as `build/anyps5/core/relinker/relinker`, then converts the executable and the modules in the `sce_module` directory beside it:
 
 ```sh
-build/anyps5/core/relinker/relinker eboot.bin eboot.elf
+python3 3rdparty/anyps5/tools/unwrap_self.py title/eboot.bin unwrapped/eboot.elf
+for prx in title/sce_module/*.prx; do python3 3rdparty/anyps5/tools/unwrap_self.py $prx unwrapped/sce_module/${prx##*/}; done
+build/anyps5/core/relinker/relinker unwrapped/eboot.elf app.elf
 ```
 
 ```sh
-build/lifter/ps5lift eboot.elf -o guest.a --cpu native
+build/lifter/ps5lift app.elf -o guest.a --cpu native
 python3 tools/generate_bridges.py libc libkernel --anyps5-build build/anyps5 -o bridges.cpp
 python3 tools/build_runtime.py --triple aarch64-unknown-linux-gnu --output build/runtime-aarch64-unknown-linux-gnu
 L=build/anyps5/core/libs/libs/unpatched
