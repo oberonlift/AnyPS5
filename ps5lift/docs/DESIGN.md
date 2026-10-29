@@ -77,7 +77,7 @@ libSceFiber built for a lifted guest gives every fiber a host stack of its own (
 
 ## Callbacks
 
-Native code cannot call a guest address. A bridge that receives a function pointer passes the native code a thunk instead: `Callback<R(Args...)>(guestAddress)` in [Bridge.hpp](../runtime/include/ps5lift/Bridge.hpp) returns one of 256 compile-time thunks per signature, the same one every time for the same guest address, so pointer comparisons keep working. A thunk places its arguments in the SysV registers and on the guest stack, pushes a return address and calls the lifted target through dispatch on the calling thread's guest state.
+Native code cannot call a guest address. A bridge that receives a function pointer passes the native code a thunk instead: `Callback<R(Args...)>(guestAddress)` in [Bridge.hpp](../runtime/include/ps5lift/Bridge.hpp) returns one of 256 compile-time thunks per signature, the same one every time for the same guest address, so pointer comparisons keep working. Values that cannot be code pass through unchanged, since callees read them as conventions: anything in the null page, where `NULL`, `SIG_DFL`, `SIG_IGN` and `SIG_HOLD` lie, and all ones, which is `SIG_ERR`. A thunk places its arguments in the SysV registers and on the guest stack, pushes a return address and calls the lifted target through dispatch on the calling thread's guest state.
 
 The runtime keeps each guest thread's state in a thread-local. A native thread that calls a thunk without one, such as a thread a native library started, gets a guest stack, a TLS block and a state on its first call, which is how a native `pthread_create` or a worker pool can run guest code.
 

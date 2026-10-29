@@ -208,6 +208,10 @@ R CallGuest(const std::uint64_t target, Args... arguments) {
     if constexpr (!std::is_void_v<R>) return GuestResult<R>(state);
 }
 
+inline bool SentinelFunction(const std::uint64_t value) {
+    return value < 4096 || value == ~std::uint64_t{0};
+}
+
 template <typename Signature>
 struct CallbackPool;
 
@@ -233,7 +237,7 @@ struct CallbackPool<R(Args...)> {
     static inline constexpr std::array<Native, Capacity> Thunks = MakeThunks(std::make_index_sequence<Capacity>{});
 
     static Native For(const std::uint64_t target) {
-        if (target == 0) return nullptr;
+        if (SentinelFunction(target)) return reinterpret_cast<Native>(target);
         const auto count = Count.load(std::memory_order_acquire);
         for (std::size_t i = 0; i < count; ++i) {
             if (Targets[i].load(std::memory_order_relaxed) == target) return Thunks[i];
