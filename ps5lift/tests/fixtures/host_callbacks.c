@@ -81,3 +81,7 @@ long host_stack_guarded(void) {
 long host_call_eight(long (*function)(long, long, long, long, long, long, long, long)) {
     return function(1, 2, 3, 4, 5, 6, 7, 8) + function(10, 20, 30, 40, 50, 60, 70, 80);
 }
+
+long host_call_recorded(const struct RecordedCalls* calls, long base) {
+    return calls->integers(base, base + 1, base + 2, base + 3, base + 4, base + 5, base + 6, base + 7) + (long)(calls->mixed(1.5, base, 0.25) * 1000.0);
+}

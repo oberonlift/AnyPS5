@@ -112,6 +112,10 @@ static long eight(long a, long b, long c, long d, long e, long f, long g, long h
     return a + 2 * b + 3 * c + 4 * d + 5 * e + 6 * f + 7 * g + 8 * h;
 }
 
+static double mixed(double a, long b, double c) {
+    return a * (double)b + c;
+}
+
 int main(void) {
     struct Item items[12];
     for (int i = 0; i < 12; ++i) {
@@ -130,6 +134,8 @@ int main(void) {
     line("on thread", host_on_thread(on_thread, 23));
     line("main thread value", thread_value);
     line("eight arguments", host_call_eight(eight));
+    const struct RecordedCalls recorded = {eight, mixed};
+    line("native calls through a record", host_call_recorded(&recorded, 10));
     line("native thread keeps its floating-point environment", host_thread_keeps_environment(round_up_on_thread, 5));
     line("callback rounds up on a native thread", rounded_up > rounded_nearest);
     line("callback at native thread exit", host_call_at_thread_exit(at_exit, 9));

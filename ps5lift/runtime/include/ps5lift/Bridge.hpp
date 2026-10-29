@@ -230,12 +230,28 @@ R GuestResult(const Ps5LiftState* state) {
     }
 }
 
+// Runs a guest function on the current thread's state, whose argument registers are set: pushes its stack arguments and
+// a return to native code below the guest's stack pointer, and sets al to the vector registers that carry arguments, as
+// a variadic callee reads it.
+inline void RunGuest(Ps5LiftState* state, const std::uint64_t target, const std::uint64_t* stackArguments, const int stackCount, const int vectors) {
+    const auto savedRsp = state->Gpr[PS5LIFT_RSP];
+    auto rsp = (savedRsp - 8 * static_cast<std::uint64_t>(stackCount)) & ~std::uint64_t{15};
+    std::memcpy(reinterpret_cast<void*>(rsp), stackArguments, 8 * static_cast<std::size_t>(stackCount));
+    rsp -= 8;
+    constexpr std::uint64_t ReturnSentinel = 0;
+    std::memcpy(reinterpret_cast<void*>(rsp), &ReturnSentinel, sizeof(ReturnSentinel));
+    state->Gpr[PS5LIFT_RSP] = rsp;
+    state->Gpr[PS5LIFT_RAX] = static_cast<std::uint64_t>(vectors);
+    ps5lift_dispatch(state, target);
+    if (state->Unwinding) ps5lift_fail("a longjmp or exception in guest code that native code called leaves through native code for 0x%" PRIx64, state->ResumeRip);
+    state->Gpr[PS5LIFT_RSP] = savedRsp;
+}
+
 template <typename R, typename... Args>
 R CallGuest(const std::uint64_t target, Args... arguments) {
     static_assert(((std::is_arithmetic_v<Args> || std::is_pointer_v<Args> || std::is_enum_v<Args>) && ...), "callbacks take scalar arguments");
     const GuestEntry entry;
     auto* state = entry.State();
-    const auto savedRsp = state->Gpr[PS5LIFT_RSP];
     std::uint64_t stackArguments[sizeof...(Args) + 1]{};
     int stackCount = 0;
     int integers = 0;
@@ -258,16 +274,7 @@ R CallGuest(const std::uint64_t target, Args... arguments) {
         stackArguments[stackCount++] = bits;
     };
     (place(arguments), ...);
-    auto rsp = (savedRsp - 8 * static_cast<std::uint64_t>(stackCount)) & ~std::uint64_t{15};
-    std::memcpy(reinterpret_cast<void*>(rsp), stackArguments, 8 * static_cast<std::size_t>(stackCount));
-    rsp -= 8;
-    constexpr std::uint64_t ReturnSentinel = 0;
-    std::memcpy(reinterpret_cast<void*>(rsp), &ReturnSentinel, sizeof(ReturnSentinel));
-    state->Gpr[PS5LIFT_RSP] = rsp;
-    state->Gpr[PS5LIFT_RAX] = static_cast<std::uint64_t>(floats);
-    ps5lift_dispatch(state, target);
-    if (state->Unwinding) ps5lift_fail("a longjmp or exception in guest code that native code called leaves through native code for 0x%" PRIx64, state->ResumeRip);
-    state->Gpr[PS5LIFT_RSP] = savedRsp;
+    RunGuest(state, target, stackArguments, stackCount, floats);
     if constexpr (!std::is_void_v<R>) return GuestResult<R>(state);
 }
 
