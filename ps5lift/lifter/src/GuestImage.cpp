@@ -25,13 +25,21 @@ constexpr std::uint32_t SectionDynamicSymbols = 11;
 constexpr std::uint8_t SymbolObject = 1;
 constexpr std::uint8_t SymbolFunction = 2;
 constexpr std::uint8_t SymbolTls = 6;
+constexpr std::uint8_t SymbolIndirectFunction = 10;
+constexpr std::uint16_t SectionAbsolute = 0xfff1;
 constexpr std::int64_t DynamicNeeded = 1;
 constexpr std::int64_t DynamicHash = 4;
 constexpr std::int64_t DynamicStringTable = 5;
 constexpr std::int64_t DynamicSymbolTable = 6;
 constexpr std::int64_t DynamicRela = 7;
 constexpr std::int64_t DynamicRelaSize = 8;
+constexpr std::int64_t DynamicRelaEntry = 9;
 constexpr std::int64_t DynamicSymbolEntry = 11;
+constexpr std::int64_t DynamicRel = 17;
+constexpr std::int64_t DynamicPltRel = 20;
+constexpr std::int64_t DynamicRelrSize = 35;
+constexpr std::int64_t DynamicRelr = 36;
+constexpr std::int64_t DynamicRelrEntry = 37;
 constexpr std::int64_t DynamicInit = 12;
 constexpr std::int64_t DynamicInitArray = 25;
 constexpr std::int64_t DynamicInitArraySize = 27;
@@ -111,6 +119,10 @@ std::uint64_t MappedProgramHeaders(const std::string& path, const Domain::ElfHea
     throw std::runtime_error("No loadable segment of " + path + " maps its program headers");
 }
 
+std::uint64_t Address(const Symbol& symbol, const std::uint64_t bias) {
+    return symbol.Section == SectionAbsolute ? symbol.Value : symbol.Value + bias;
+}
+
 bool Exported(const Symbol& symbol) {
     constexpr std::uint8_t Hidden = 2;
     constexpr std::uint8_t Internal = 1;
@@ -159,7 +171,7 @@ GuestImage GuestImage::Read(const std::string& path, const std::optional<std::ui
         const auto& strings = sections.at(section.Link);
         for (std::uint64_t offset = section.Offset; offset + 24 <= section.Offset + section.SectionSize; offset += 24) {
             const auto symbol = ReadSymbol(bytes, offset, strings.Offset);
-            if (symbol.Type == SymbolFunction && symbol.Section != 0 && symbol.Value != 0) image._functionSymbols.emplace(symbol.Value + bias, symbol.Name);
+            if (symbol.Type == SymbolFunction && symbol.Section != 0 && symbol.Section != SectionAbsolute && symbol.Value != 0) image._functionSymbols.emplace(symbol.Value + bias, symbol.Name);
         }
     }
 
@@ -177,13 +189,31 @@ GuestImage GuestImage::Read(const std::string& path, const std::optional<std::ui
         if (tags.contains(DynamicStringTable)) {
             for (const auto name : needed) image._needed.push_back(ReadString(bytes, fileOffset(DynamicStringTable) + name));
         }
+        const auto requireTag = [&](const std::int64_t tag, const std::int64_t with, const char* what) {
+            if (tags.contains(with) && !tags.contains(tag)) throw std::runtime_error(path + " has " + what + " without its size or entry size");
+        };
+        const auto requireValue = [&](const std::int64_t tag, const std::uint64_t value, const char* what) {
+            if (tags.contains(tag) && tags.at(tag) != value) throw std::runtime_error(path + " has " + what + " of " + std::to_string(tags.at(tag)) + ", not " + std::to_string(value));
+        };
+        if (tags.contains(DynamicRel)) throw std::runtime_error(path + " has REL relocations, which x86-64 images do not use");
+        requireTag(DynamicInitArraySize, DynamicInitArray, "DT_INIT_ARRAY");
+        requireTag(DynamicSymbolEntry, DynamicSymbolTable, "DT_SYMTAB");
+        requireTag(DynamicRelaSize, DynamicRela, "DT_RELA");
+        requireTag(DynamicRelaEntry, DynamicRela, "DT_RELA");
+        requireTag(DynamicJumpRelocationsSize, DynamicJumpRelocations, "DT_JMPREL");
+        requireTag(DynamicPltRel, DynamicJumpRelocations, "DT_JMPREL");
+        requireTag(DynamicRelrSize, DynamicRelr, "DT_RELR");
+        requireTag(DynamicRelrEntry, DynamicRelr, "DT_RELR");
+        requireValue(DynamicSymbolEntry, 24, "DT_SYMENT");
+        requireValue(DynamicRelaEntry, 24, "DT_RELAENT");
+        requireValue(DynamicPltRel, DynamicRela, "DT_PLTREL");
+        requireValue(DynamicRelrEntry, 8, "DT_RELRENT");
         if (tags.contains(DynamicInit)) image._init = tags.at(DynamicInit) + bias;
-        if (tags.contains(DynamicInitArray)) image._initArray = {tags.at(DynamicInitArray) + bias, tags.contains(DynamicInitArraySize) ? tags.at(DynamicInitArraySize) / 8 : 0};
+        if (tags.contains(DynamicInitArray)) image._initArray = {tags.at(DynamicInitArray) + bias, tags.at(DynamicInitArraySize) / 8};
 
-        const auto symbolEntry = tags.contains(DynamicSymbolEntry) ? tags.at(DynamicSymbolEntry) : 24;
         const auto symbolAt = [&](const std::uint32_t index) {
             if (!tags.contains(DynamicSymbolTable) || !tags.contains(DynamicStringTable)) throw std::runtime_error("Relocations name symbols but the dynamic segment has no symbol table");
-            return ReadSymbol(bytes, fileOffset(DynamicSymbolTable) + index * symbolEntry, fileOffset(DynamicStringTable));
+            return ReadSymbol(bytes, fileOffset(DynamicSymbolTable) + index * std::uint64_t{24}, fileOffset(DynamicStringTable));
         };
         if (tags.contains(DynamicSymbolTable)) {
             std::uint64_t count = 0;
@@ -192,17 +222,19 @@ GuestImage GuestImage::Read(const std::string& path, const std::optional<std::ui
             } else {
                 const auto table = std::find_if(sections.begin(), sections.end(), [](const auto& section) { return section.Type == SectionDynamicSymbols; });
                 if (table == sections.end()) throw std::runtime_error(path + " has dynamic symbols but neither DT_HASH nor a .dynsym section to count them");
-                count = table->SectionSize / symbolEntry;
+                count = table->SectionSize / 24;
             }
             for (std::uint32_t index = 1; index < count; ++index) {
                 const auto symbol = symbolAt(index);
-                if (Exported(symbol)) image._exports.emplace(symbol.Name, symbol.Value + bias);
+                if (!Exported(symbol)) continue;
+                if (symbol.Type == SymbolIndirectFunction) image._indirectFunctions.insert(symbol.Name);
+                else image._exports.emplace(symbol.Name, Address(symbol, bias));
             }
         }
 
         std::vector<Relocation> relocations;
         const auto readTable = [&](const std::int64_t table, const std::int64_t size) {
-            if (!tags.contains(table) || !tags.contains(size)) return;
+            if (!tags.contains(table)) return;
             const auto begin = fileOffset(table);
             for (std::uint64_t offset = begin; offset + 24 <= begin + tags.at(size); offset += 24) {
                 const auto info = ReadAt<std::uint64_t>(bytes, offset + 8);
@@ -211,6 +243,25 @@ GuestImage GuestImage::Read(const std::string& path, const std::optional<std::ui
         };
         readTable(DynamicRela, DynamicRelaSize);
         readTable(DynamicJumpRelocations, DynamicJumpRelocationsSize);
+        if (tags.contains(DynamicRelr)) {
+            const auto relative = [&](const std::uint64_t address) {
+                relocations.push_back({address, RelocationRelative, 0, ReadAt<std::int64_t>(bytes, reader.TranslateVirtualAddress(address))});
+            };
+            const auto begin = fileOffset(DynamicRelr);
+            std::uint64_t base = 0;
+            for (std::uint64_t offset = begin; offset + 8 <= begin + tags.at(DynamicRelrSize); offset += 8) {
+                const auto entry = ReadAt<std::uint64_t>(bytes, offset);
+                if ((entry & 1) == 0) {
+                    relative(entry);
+                    base = entry + 8;
+                    continue;
+                }
+                for (std::uint64_t bits = entry >> 1, slot = base; bits != 0; bits >>= 1, slot += 8) {
+                    if (bits & 1) relative(slot);
+                }
+                base += 63 * 8;
+            }
+        }
 
         std::set<std::string> imported;
         for (const auto& relocation : relocations) {
@@ -218,13 +269,18 @@ GuestImage GuestImage::Read(const std::string& path, const std::optional<std::ui
             if (relocation.Type == RelocationRelative) {
                 relocated[relocation.Offset] = static_cast<std::uint64_t>(relocation.Addend);
                 image._relocations.push_back({relocation.Offset + bias, relocation.Type, relocation.Addend, "", true, false, static_cast<std::uint64_t>(relocation.Addend) + bias});
+            } else if ((relocation.Type == RelocationAbsolute || relocation.Type == RelocationGlobalData || relocation.Type == RelocationJumpSlot) && relocation.Symbol == 0) {
+                const auto value = relocation.Type == RelocationAbsolute ? static_cast<std::uint64_t>(relocation.Addend) : 0;
+                relocated[relocation.Offset] = value;
+                image._relocations.push_back({relocation.Offset + bias, relocation.Type, relocation.Addend, "", true, false, 0});
             } else if (relocation.Type == RelocationAbsolute || relocation.Type == RelocationGlobalData || relocation.Type == RelocationJumpSlot) {
                 const auto symbol = symbolAt(relocation.Symbol);
                 const bool defined = symbol.Section != 0;
+                if (defined && symbol.Type == SymbolIndirectFunction) throw std::runtime_error("Relocation at 0x" + Hex(relocation.Offset + bias) + " in " + path + " binds " + symbol.Name + ", an IFUNC, whose resolver ps5lift does not run");
                 if (!defined && symbol.Type != SymbolObject) imported.insert(symbol.Name);
                 if (defined) relocated[relocation.Offset] = symbol.Value + (relocation.Type == RelocationAbsolute ? static_cast<std::uint64_t>(relocation.Addend) : 0);
                 else importSlots.insert(relocation.Offset);
-                image._relocations.push_back({relocation.Offset + bias, relocation.Type, relocation.Addend, symbol.Name, defined, symbol.Type == SymbolObject, defined ? symbol.Value + bias : 0});
+                image._relocations.push_back({relocation.Offset + bias, relocation.Type, relocation.Addend, symbol.Name, defined, symbol.Type == SymbolObject, defined ? Address(symbol, bias) : 0});
             } else if (relocation.Type == RelocationTlsModule || relocation.Type == RelocationTlsOffset || relocation.Type == RelocationThreadPointerOffset) {
                 const auto symbol = relocation.Symbol == 0 ? Symbol{} : symbolAt(relocation.Symbol);
                 if (relocation.Symbol != 0 && symbol.Section == 0) throw std::runtime_error("TLS relocation at 0x" + Hex(relocation.Offset + bias) + " in " + path + " names " + symbol.Name + ", which another image defines");
@@ -309,6 +365,7 @@ const GuestArray& GuestImage::ProgramHeaders() const {
 }
 
 std::optional<std::uint64_t> GuestImage::Export(const std::string& name) const {
+    if (_indirectFunctions.contains(name)) throw std::runtime_error(_path + " defines " + name + " as an IFUNC, whose resolver ps5lift does not run");
     const auto found = _exports.find(name);
     if (found == _exports.end()) return std::nullopt;
     return found->second;
