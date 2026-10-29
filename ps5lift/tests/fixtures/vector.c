@@ -411,6 +411,43 @@ __attribute__((noinline)) static void sha1_abc(void) {
     report_words("sha1 abc", state, 5);
 }
 
+static __m128i from_floats(float a, float b, float c, float d) {
+    const float values[4] = {a, b, c, d};
+    __m128i result;
+    memcpy(&result, values, sizeof(result));
+    return result;
+}
+
+static __m128i from_doubles(double a, double b) {
+    const double values[2] = {a, b};
+    __m128i result;
+    memcpy(&result, values, sizeof(result));
+    return result;
+}
+
+/* Legacy-encoded scalar instructions keep the destination's lanes above the scalar. */
+#define LEGACY_SCALAR(name, instruction, destination, source)            \
+    __attribute__((noinline)) static void legacy_##name(void) {         \
+        __m128i result = destination;                                    \
+        __asm__(instruction " %1, %0" : "+x"(result) : "x"(source));     \
+        report_bytes("legacy " #name, result);                           \
+    }
+
+LEGACY_SCALAR(addss, "addss", from_floats(1, 2, 3, 4), from_floats(10, 20, 30, 40))
+LEGACY_SCALAR(maxss, "maxss", from_floats(1, 2, 3, 4), from_floats(10, 20, 30, 40))
+LEGACY_SCALAR(sqrtsd, "sqrtsd", from_doubles(16, 5), from_doubles(9, 7))
+LEGACY_SCALAR(cmpltss, "cmpltss", from_floats(1, 2, 3, 4), from_floats(10, 20, 30, 40))
+LEGACY_SCALAR(cvtss2sd, "cvtss2sd", from_doubles(16, 5), from_floats(10, 20, 30, 40))
+LEGACY_SCALAR(cvtsd2ss, "cvtsd2ss", from_floats(1, 2, 3, 4), from_doubles(6, 8))
+LEGACY_SCALAR(roundss, "roundss $1,", from_floats(1, 2, 3, 4), from_floats(2.5f, 20, 30, 40))
+
+__attribute__((noinline)) static void legacy_cvtsi2sd(void) {
+    __m128i result = from_doubles(16, 5);
+    const long seven = 7;
+    __asm__("cvtsi2sdq %1, %0" : "+x"(result) : "r"(seven));
+    report_bytes("legacy cvtsi2sd", result);
+}
+
 AES128_TEST(VEX, "vex")
 AES128_TEST(SSE, "sse")
 CLMUL_TEST(VEX, "vex")
@@ -449,6 +486,14 @@ int main(void) {
     clmul_SSE();
     sha256_abc();
     sha1_abc();
+    legacy_addss();
+    legacy_maxss();
+    legacy_sqrtsd();
+    legacy_cmpltss();
+    legacy_cvtss2sd();
+    legacy_cvtsd2ss();
+    legacy_roundss();
+    legacy_cvtsi2sd();
     return 0;
 }
 
