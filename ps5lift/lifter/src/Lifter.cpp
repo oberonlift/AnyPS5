@@ -2891,6 +2891,35 @@ private:
     // vpermilps and vpermilpd with a vector of selectors: each element takes one from its own 128-bit lane, picked by
     // bits 1:0 of its selector for vpermilps and by bit 1 for vpermilpd. phminposuw returns the smallest unsigned word
     // and the index of its first occurrence.
+    // SSE4a's extrq and insertq work on a bit field of the destination's low quadword, whose length (0 meaning 64) and
+    // index come from the immediates. AMD leaves the upper quadword of the result undefined, and it keeps the
+    // destination's here; a field past bit 63, which AMD leaves undefined too, and the forms that take the field from a
+    // register stop the lift.
+    bool EmitBitField(const ZydisMnemonic mnemonic) {
+        if (mnemonic != ZYDIS_MNEMONIC_EXTRQ && mnemonic != ZYDIS_MNEMONIC_INSERTQ) return false;
+        const bool insert = mnemonic == ZYDIS_MNEMONIC_INSERTQ;
+        const int lengthOperand = insert ? 2 : 1;
+        if (Operand(0).type != ZYDIS_OPERAND_TYPE_REGISTER || (insert && Operand(1).type != ZYDIS_OPERAND_TYPE_REGISTER))
+            throw std::logic_error("extrq or insertq without its registers");
+        if (Operand(lengthOperand).type != ZYDIS_OPERAND_TYPE_IMMEDIATE) throw UnsupportedInstruction("extrq or insertq with its field in a register");
+        const auto length = (Immediate(lengthOperand) & 63) == 0 ? 64 : Immediate(lengthOperand) & 63;
+        const auto index = Immediate(lengthOperand + 1) & 63;
+        if (index + length > 64) throw UnsupportedInstruction("extrq or insertq field past bit 63");
+        const auto field = length == 64 ? ~std::uint64_t{0} : (std::uint64_t{1} << length) - 1;
+        auto* destination = ReadVector(0, 128);
+        auto* low = _builder.CreateTrunc(destination, I64());
+        llvm::Value* result = nullptr;
+        if (insert) {
+            auto* source = _builder.CreateAnd(_builder.CreateTrunc(ReadVector(1, 128), I64()), _builder.getInt64(field));
+            result = _builder.CreateOr(_builder.CreateAnd(low, _builder.getInt64(~(field << index))), _builder.CreateShl(source, index));
+        } else {
+            result = _builder.CreateAnd(_builder.CreateLShr(low, index), _builder.getInt64(field));
+        }
+        auto* high = _builder.CreateAnd(destination, llvm::ConstantInt::get(Int(128), llvm::APInt::getHighBitsSet(128, 64)));
+        Write(0, _builder.CreateOr(high, _builder.CreateZExt(result, Int(128))));
+        return true;
+    }
+
     bool EmitPermute(const ZydisMnemonic mnemonic) {
         if (mnemonic == ZYDIS_MNEMONIC_PHMINPOSUW || mnemonic == ZYDIS_MNEMONIC_VPHMINPOSUW) {
             auto* words = AsVector(ReadAs(1, 128), 16);
@@ -3630,6 +3659,7 @@ private:
         }
         default:
             if (EmitStringCompare(mnemonic)) return;
+            if (EmitBitField(mnemonic)) return;
             if (EmitPermute(mnemonic)) return;
             if (EmitVector(mnemonic)) return;
             if (EmitCrypto(mnemonic)) return;
