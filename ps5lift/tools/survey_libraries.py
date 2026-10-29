@@ -18,7 +18,7 @@ def bridge_report(library, anyps5_build):
     if result.returncode != 0 or not lines:
         return {"error": (result.stderr.strip().splitlines() or ["generator failed"])[-1]}
     words = lines[0].split()
-    return {"bridges": int(words[1]), "data": int(words[3]), "unbridged": int(words[6]), "parse_errors": int(words[10]), "reasons": [line.strip() for line in lines[1:]]}
+    return {"bridges": int(words[1]), "data": int(words[3]), "unbridged": int(words[6]), "reasons": [line.strip() for line in lines[1:]]}
 
 
 def main():
@@ -35,7 +35,7 @@ def main():
         if "error" in entry:
             print(f"{library}: {entry['error']}", flush=True)
         else:
-            print(f"{library}: {entry['bridges']} bridges, {entry['data']} data, {entry['unbridged']} unbridged, {entry['parse_errors']} parse errors", flush=True)
+            print(f"{library}: {entry['bridges']} bridges, {entry['data']} data, {entry['unbridged']} unbridged", flush=True)
     if args.json:
         Path(args.json).write_text(json.dumps(results, indent=1, sort_keys=True))
     return 0
