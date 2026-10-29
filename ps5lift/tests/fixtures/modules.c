@@ -7,6 +7,8 @@ long module_value(long x);
 long (*module_function(void))(long);
 long module_tls(void);
 long* module_local_address(void);
+long module_table_call(int index, long x);
+long module_absolute_address(void);
 
 struct program_header {
     unsigned int type;
@@ -118,6 +120,8 @@ int main(void) {
     line("through a module pointer", module_function()(3));
     module_counter = 100;
     line("after writing its data", module_value(1));
+    line("module table", module_table_call(0, 3) * 10000 + module_table_call(1, 3) * 100 + module_table_call(2, 0));
+    line("module absolute symbol", module_absolute_address());
     line("module tls", module_tls());
     line("module tls again", module_tls());
     executable_local += module_tls();

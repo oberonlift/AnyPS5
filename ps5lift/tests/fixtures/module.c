@@ -32,3 +32,24 @@ long (*module_function(void))(long) {
 long* module_local_address(void) {
     return &module_local;
 }
+
+static long twice(long x) {
+    return 2 * x;
+}
+
+static long squared(long x) {
+    return x * x;
+}
+
+static long (*const module_table[])(long) = {twice, squared, module_value};
+
+long module_table_call(int index, long x) {
+    return module_table[index](x);
+}
+
+__asm__(".globl module_absolute\n.set module_absolute, 0x12345");
+extern char module_absolute[];
+
+long module_absolute_address(void) {
+    return (long)module_absolute;
+}

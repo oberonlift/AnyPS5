@@ -86,6 +86,7 @@ private:
     std::string _path;
     std::vector<std::string> _needed;
     std::map<std::string, std::uint64_t> _exports;
+    std::set<std::string> _indirectFunctions;
     std::vector<GuestRelocation> _relocations;
     std::uint64_t _mappedEnd = 0;
     std::uint64_t _loadBias = 0;

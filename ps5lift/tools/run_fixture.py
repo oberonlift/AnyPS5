@@ -90,7 +90,7 @@ def build_guest(clang, work, name, optimization, defines=(), vectorize=False, su
         module_name, source = GUEST_MODULES[name]
         module = work / f"lib{module_name}.so"
         if not module.exists():
-            run([clang, *GUEST_FLAGS, "-O2", "-fPIC", "-shared", f"-Wl,-soname,$ORIGIN/lib{module_name}.so", FIXTURES / source, f"-L{work}", "-lhost", "-o", module])
+            run([clang, *GUEST_FLAGS, "-O2", "-fPIC", "-shared", "-Wl,-z,pack-relative-relocs", f"-Wl,-soname,$ORIGIN/lib{module_name}.so", FIXTURES / source, f"-L{work}", "-lhost", "-o", module])
         extra = [f"-l{module_name}", "-lc", "-Wl,--allow-shlib-undefined"]
         code = ["-fpie"]
     guest = work / f"{name}{optimization}{suffix}"
