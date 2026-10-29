@@ -556,7 +556,7 @@ std::map<std::uint64_t, GuestFunction> DiscoverFunctions(const GuestImage& image
         if (start != 0) starts.insert(start);
     }
     for (const auto& [address, name] : image.Imports()) starts.insert(address);
-    for (const auto& [name, address] : image.Exports()) {
+    for (const auto address : image.FunctionExports()) {
         if (image.IsExecutable(address)) starts.insert(address);
     }
     for (const auto address : image.CodePointers()) starts.insert(address);
