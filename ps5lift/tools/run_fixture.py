@@ -34,9 +34,8 @@ def run(command, **kwargs):
 
 
 def runtime_link_arguments(ps5lift, triple, clang, clangxx):
-    from build_runtime import build, link_arguments
-    directory = Path(ps5lift).resolve().parent.parent / f"runtime-{triple.split('-')[0]}"
-    return link_arguments(*build(triple, directory, clang, clangxx, os.cpu_count()))
+    from build_runtime import build, directory_for, link_arguments
+    return link_arguments(*build(triple, directory_for(Path(ps5lift).resolve().parent.parent, triple), clang, clangxx, os.cpu_count()))
 
 
 def host_triple():

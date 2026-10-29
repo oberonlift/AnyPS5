@@ -8,7 +8,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from anyps5_build import LIBS, Build, compiler_arguments
-from build_runtime import build as build_runtime, link_arguments
+from build_runtime import build as build_runtime, directory_for, link_arguments
 from run_fixture import ROOT, host_triple
 
 TESTS = {
@@ -64,7 +64,7 @@ def main():
         source = LIBS / "tests" / f"{test}.cpp"
         units.append((source, compiler_arguments(anyps5.source(source)), work / f"{test}.o"))
     compile_all(args.clangxx, units)
-    runtime, _ = build_runtime(triple, Path(args.build) / f"runtime-{triple.split('-')[0]}", args.clang, args.clangxx, os.cpu_count())
+    runtime, _ = build_runtime(triple, directory_for(args.build, triple), args.clang, args.clangxx, os.cpu_count())
 
     failures = 0
     for test in tests:
