@@ -7,7 +7,7 @@ A review of the whole tree in October 2026 found these. Each gives a wrong resul
 ### Lifter
 
 - Prefixes and branch types are not checked in one place: a 16-bit `push` or `pop` moves `rsp` by 8, the 14-byte `fnstenv` and `fldenv` format is read and written as 28 bytes, and a far `call`, `jmp` or `ret` is lifted as a near one (a far `ret` pops 8 bytes; a far call through memory fails module verification without an address).
-- `div` and `idiv` never raise #DE. A zero divisor or a quotient that does not fit is an LLVM `udiv` or `sdiv` with undefined behaviour or a truncated result, where x86 delivers SIGFPE. Every 64-bit division also divides in 128 bits, which is a compiler-rt call on aarch64.
+- A divide error (a zero divisor or a quotient wider than the operand) stops the program with its address, as `ud2` and `int3` do; a guest exception handler does not see it.
 - Under `--memory tso` some guest loads of 64 bits or less are plain: the memory forms that `ReadRegisterOrMemory`, `HalfMove` and `insertps` load (`movlps`, `movhpd`, `movddup`, `cvtps2pd`, `cvtdq2pd`, `vcvtph2ps` and others), and every x87 memory operand, which [the x87 runtime](../runtime/src/X87.cpp) copies with `memcpy`.
 - Guest tail jumps are `tail` calls, which LLVM may ignore and does at `-O0`, and an indirect `jmp` through dispatch is not marked at all, so a long chain of guest tail jumps can exhaust the host stack. Caller and callee share a prototype, so `musttail` would be legal.
 

@@ -1003,14 +1003,82 @@ private:
         ResultFlags(low);
     }
 
+    // x86 raises a divide error for a zero divisor or a quotient wider than the operand, which LLVM leaves undefined, so
+    // those stop before any division. A dividend whose high half only extends its low half, the usual case, divides at
+    // the operand's width rather than at twice it, which aarch64 has no instruction for.
     void Divide(const bool isSigned) {
         const auto bits = Bits(0);
+        auto* type = Int(bits);
+        auto* wide = Int(bits * 2);
         auto* divisor = Read(0);
         auto* dividend = AccumulatorPair(bits);
-        auto* wideDivisor = isSigned ? _builder.CreateSExt(divisor, Int(bits * 2)) : _builder.CreateZExt(divisor, Int(bits * 2));
-        auto* quotient = isSigned ? _builder.CreateSDiv(dividend, wideDivisor) : _builder.CreateUDiv(dividend, wideDivisor);
-        auto* remainder = isSigned ? _builder.CreateSRem(dividend, wideDivisor) : _builder.CreateURem(dividend, wideDivisor);
-        WriteAccumulatorPair(bits, _builder.CreateTrunc(quotient, Int(bits)), _builder.CreateTrunc(remainder, Int(bits)));
+        auto* low = _builder.CreateTrunc(dividend, type);
+        auto* high = _builder.CreateTrunc(_builder.CreateLShr(dividend, bits), type);
+        auto* minusOne = _builder.CreateICmpEQ(divisor, llvm::ConstantInt::getAllOnesValue(type));
+        const auto block = [&](const char* name) { return llvm::BasicBlock::Create(Context(), name, _host); };
+        auto* nonzero = block("divide_nonzero");
+        auto* narrow = block("divide_narrow");
+        auto* wideDivide = block("divide_wide");
+        auto* fault = block("divide_error");
+        auto* done = block("divide_done");
+        const auto unlikely = llvm::MDBuilder(Context()).createBranchWeights(1, 1u << 20);
+        _builder.CreateCondBr(_builder.CreateICmpEQ(divisor, llvm::ConstantInt::get(type, 0)), fault, nonzero, unlikely);
+
+        _builder.SetInsertPoint(nonzero);
+        auto* extended = isSigned ? _builder.CreateAShr(low, bits - 1) : llvm::ConstantInt::get(type, 0);
+        _builder.CreateCondBr(_builder.CreateICmpEQ(high, extended), narrow, wideDivide);
+
+        _builder.SetInsertPoint(narrow);
+        if (isSigned) {
+            auto* overflow = _builder.CreateAnd(minusOne, _builder.CreateICmpEQ(low, llvm::ConstantInt::get(Context(), llvm::APInt::getSignedMinValue(bits))));
+            auto* divide = block("divide_narrow_signed");
+            _builder.CreateCondBr(overflow, fault, divide, unlikely);
+            _builder.SetInsertPoint(divide);
+        }
+        auto* narrowQuotient = isSigned ? _builder.CreateSDiv(low, divisor) : _builder.CreateUDiv(low, divisor);
+        auto* narrowRemainder = isSigned ? _builder.CreateSRem(low, divisor) : _builder.CreateURem(low, divisor);
+        auto* narrowEnd = _builder.GetInsertBlock();
+        _builder.CreateBr(done);
+
+        _builder.SetInsertPoint(wideDivide);
+        llvm::Value* wideQuotient = nullptr;
+        llvm::Value* wideRemainder = nullptr;
+        llvm::Value* fits = nullptr;
+        if (isSigned) {
+            auto* safeDivisor = _builder.CreateSelect(minusOne, llvm::ConstantInt::get(wide, 1), _builder.CreateSExt(divisor, wide));
+            wideQuotient = _builder.CreateSelect(minusOne, _builder.CreateNeg(dividend), _builder.CreateSDiv(dividend, safeDivisor));
+            wideRemainder = _builder.CreateSelect(minusOne, llvm::ConstantInt::get(wide, 0), _builder.CreateSRem(dividend, safeDivisor));
+            fits = _builder.CreateICmpEQ(_builder.CreateSExt(_builder.CreateTrunc(wideQuotient, type), wide), wideQuotient);
+        } else {
+            fits = _builder.CreateICmpULT(high, divisor);
+            auto* divide = block("divide_wide_unsigned");
+            _builder.CreateCondBr(fits, divide, fault);
+            _builder.SetInsertPoint(divide);
+            auto* wideDivisor = _builder.CreateZExt(divisor, wide);
+            wideQuotient = _builder.CreateUDiv(dividend, wideDivisor);
+            wideRemainder = _builder.CreateURem(dividend, wideDivisor);
+            fits = nullptr;
+        }
+        auto* quotientBits = _builder.CreateTrunc(wideQuotient, type);
+        auto* remainderBits = _builder.CreateTrunc(wideRemainder, type);
+        auto* wideEnd = _builder.GetInsertBlock();
+        if (fits != nullptr) _builder.CreateCondBr(fits, done, fault);
+        else _builder.CreateBr(done);
+
+        _builder.SetInsertPoint(fault);
+        Flush();
+        auto callee = _module.Runtime("ps5lift_divide_error", llvm::FunctionType::get(_builder.getVoidTy(), {_module.Pointer(), I64()}, false));
+        _builder.CreateCall(callee, {_state, _builder.getInt64(_instruction->Address)})->setDoesNotReturn();
+        _builder.CreateUnreachable();
+
+        _builder.SetInsertPoint(done);
+        auto* quotient = _builder.CreatePHI(type, 2);
+        quotient->addIncoming(narrowQuotient, narrowEnd);
+        quotient->addIncoming(quotientBits, wideEnd);
+        auto* remainder = _builder.CreatePHI(type, 2);
+        remainder->addIncoming(narrowRemainder, narrowEnd);
+        remainder->addIncoming(remainderBits, wideEnd);
+        WriteAccumulatorPair(bits, quotient, remainder);
     }
 
     void SignedMultiply() {

@@ -303,6 +303,10 @@ extern "C" void ps5lift_trap(Ps5LiftState*, const std::uint64_t address) {
     ps5lift_fail("guest trap at 0x%" PRIx64, address);
 }
 
+extern "C" void ps5lift_divide_error(Ps5LiftState*, const std::uint64_t address) {
+    ps5lift_fail("divide error at 0x%" PRIx64 ": the divisor is zero or the quotient does not fit", address);
+}
+
 // movs copies element by element, so a forward copy is a memmove unless the destination starts inside the source,
 // where each element repeats one written before it; stos of bytes is a memset.
 extern "C" void ps5lift_string_op(Ps5LiftState* state, const std::uint32_t operation, const std::uint32_t width, const std::uint32_t repeat, const std::uint64_t sourceBase) {
