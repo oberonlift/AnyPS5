@@ -22,6 +22,9 @@ void GuestCpuMakingWritable_nid_no_patch(std::uint64_t address, std::uint64_t le
 [[noreturn]] void GuestCpuUnwindResume_nid_no_patch(const std::uint64_t* registers);
 std::uint64_t GuestCpuReadTsc_nid_no_patch(void);
 void GuestCpuUseStack_nid_no_patch(std::uint64_t stackTop);
+std::uint64_t GuestCpuFindImage_nid_no_patch(const char* fileName);
+std::uint64_t GuestCpuImageSymbol_nid_no_patch(std::uint64_t image, const char* name);
+std::uint64_t GuestCpuCall_nid_no_patch(std::uint64_t target, std::uint64_t first, std::uint64_t second, std::uint64_t third);
 std::uint64_t GuestCpuHostStackSize_nid_no_patch(void);
 void GuestCpuCallInterrupted_nid_no_patch(std::uint64_t target, std::uint64_t first, std::uint64_t second);
 void GuestCpuInterruptedContext_nid_no_patch(std::uint64_t* registers, std::uint64_t* flags);
