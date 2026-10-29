@@ -630,6 +630,7 @@ __attribute__((noinline)) static void advertised_instructions(void) {
     u64 processor = ~0UL;
     __asm__ volatile("rdpid %0" : "+r"(processor));
     line("rdpid fits 32 bits", processor >> 32 == 0);
+    __asm__ volatile("prefetch %0" : : "m"(pair[0]));
     __asm__ volatile("prefetchw %0" : : "m"(pair[0]));
     u32 used_low, used_high, enabled_low, enabled_high;
     __asm__("xgetbv" : "=a"(used_low), "=d"(used_high) : "c"(1));
