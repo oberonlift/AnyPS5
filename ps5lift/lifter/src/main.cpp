@@ -78,13 +78,23 @@ int main(int argc, char** argv) {
     }
 
     if (codegen.Cpu == "native") {
-        codegen.Cpu = llvm::sys::getHostCPUName().str();
-        for (const auto& feature : Ps5Lift::HostCpuFeatures()) {
-            if (!codegen.Features.empty()) codegen.Features += ",";
-            codegen.Features += (feature.getValue() ? "+" : "-") + feature.getKey().str();
+        if (llvm::Triple(llvm::sys::getProcessTriple()).getArch() != codegen.Triple.getArch()) {
+            std::cerr << "ps5lift: --cpu native describes this " << llvm::sys::getProcessTriple() << " host, which cannot run " << codegen.Triple.str() << " code\n";
+            return 2;
         }
+        codegen.Cpu = llvm::sys::getHostCPUName().str();
+        std::string host;
+        for (const auto& feature : Ps5Lift::HostCpuFeatures()) host += (host.empty() ? "" : ",") + std::string(feature.getValue() ? "+" : "-") + feature.getKey().str();
+        codegen.Features = codegen.Features.empty() ? host : host + "," + codegen.Features;
     } else if (codegen.Cpu.empty()) {
         codegen.Cpu = codegen.Triple.isAArch64() ? "neoverse-v2" : "generic";
+    }
+
+    try {
+        Ps5Lift::ValidateTarget(codegen);
+    } catch (const std::exception& error) {
+        std::cerr << "ps5lift: " << error.what() << "\n";
+        return 2;
     }
 
     try {

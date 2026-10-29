@@ -16,6 +16,7 @@ struct CodegenOptions {
     bool Optimize = true;
 };
 
+void ValidateTarget(const CodegenOptions& options);
 void Optimize(llvm::Module& module, const CodegenOptions& options);
 llvm::SmallVector<char, 0> CompileObject(llvm::Module& module, const CodegenOptions& options);
 void WriteIr(const llvm::Module& module, const std::string& path);
