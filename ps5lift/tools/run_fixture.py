@@ -70,6 +70,7 @@ def lifter_target(triple, runner, cpu=None):
 
 
 CONSOLE_OUTPUT = {"cpu"}
+PROGRAM_TIMEOUT = 300
 GUEST_MODULES = {"modules": ("guestmodule", "module.c")}
 HOST_LIBRARIES = {"threads": ("hostthread", "host_thread.c"), "callbacks": ("hostcallbacks", "host_callbacks.c"), "x87": ("hostx87", "host_x87.c"), "setjmp": ("hostsetjmp", "host_setjmp.c")}
 
@@ -144,7 +145,13 @@ def main():
                 report = run([args.ps5lift, guest, "-o", lifted, "--triple", args.triple, "--memory", memory, *lifter_target(args.triple, runner, args.cpu)]).stderr
                 program = work / f"{guest.name}-{memory}"
                 run([args.clangxx, f"--target={args.triple}", "-std=c++20", "-O2", f"-I{ROOT / 'runtime' / 'include'}", FIXTURES / "host_bridge.cpp", lifted, *runtime_link_arguments(args.ps5lift, args.triple, args.clang, args.clangxx), "-fuse-ld=lld", "-pthread", "-o", program])
-                result = subprocess.run([*runner, program], capture_output=True, text=True)
+                try:
+                    result = subprocess.run([*runner, program], capture_output=True, text=True, timeout=PROGRAM_TIMEOUT)
+                except subprocess.TimeoutExpired:
+                    sys.stderr.write(f"{label}: still running after {PROGRAM_TIMEOUT} s\n")
+                    print(f"FAIL {label}: timed out")
+                    failures += 1
+                    continue
                 ok = result.returncode == 0 and compare(expected, result.stdout, label)
                 if result.returncode != 0:
                     sys.stderr.write(f"{label}: exit code {result.returncode}\n{result.stderr}")
