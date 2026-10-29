@@ -196,6 +196,78 @@ static int is_nan(int index) {
     return (bits[index][1] & 0x7fff) == 0x7fff && (bits[index][0] << 1) != 0;
 }
 
+static void print_ld(long double x) {
+    u64 parts[2] = {0, 0};
+    memcpy(parts, &x, 10);
+    print_hex(parts[1] & 0xffff, 4);
+    print(":");
+    print_hex(parts[0], 16);
+}
+
+static long double scale_checked(long double x, long double y, u16* status) {
+    long double result;
+    u16 word;
+    __asm__ volatile("fnclex\n\tfscale\n\tfnstsw %%ax" : "=t"(result), "=a"(word) : "0"(x), "u"(y));
+    *status = word;
+    return result;
+}
+
+static short store_short(long double x, u16* status) {
+    short result;
+    u16 word;
+    __asm__ volatile("fnclex\n\tfistps %1\n\tfnstsw %%ax" : "=a"(word), "=m"(result) : "t"(x) : "st");
+    *status = word;
+    return result;
+}
+
+static u16 examine_freed(long double x) {
+    u16 word;
+    __asm__ volatile("fldt %1\n\tffree %%st(0)\n\tfxam\n\tfnstsw %%ax\n\tfincstp" : "=a"(word) : "m"(x));
+    return (u16)(word & 0x4700);
+}
+
+static void edge_cases(void) {
+    static const u64 huge[2] = {0x8000000000000000ul, 0x403f};
+    long double power64;
+    memcpy(&power64, huge, 10);
+    const long double one = value(0), minus_one = value(1), zero = value(3), infinity = value(5), minus_infinity = value(6);
+    const long double scales[][2] = {{one, infinity}, {minus_one, infinity}, {one, power64}, {one, minus_infinity}, {zero, infinity}, {infinity, minus_infinity}};
+    static const char* const scale_names[] = {"1*2^+inf", "-1*2^+inf", "1*2^(2^64)", "1*2^-inf", "0*2^+inf", "inf*2^-inf"};
+    for (int i = 0; i < 6; ++i) {
+        u16 status;
+        const long double result = scale_checked(scales[i][0], scales[i][1], &status);
+        print("fscale ");
+        print(scale_names[i]);
+        print(" = ");
+        print_ld(result);
+        print(" IE ");
+        print_hex(status & 1, 1);
+        print("\n");
+    }
+    static const u64 stores[][2] = {{0x88b8600000000000ul, 0x400f}, {0xb000000000000000ul, 0x4000}, {0x9000000000000000ul, 0x4000}};
+    static const char* const store_names[] = {"70000.75", "2.75", "2.25"};
+    for (int i = 0; i < 3; ++i) {
+        long double x;
+        memcpy(&x, stores[i], 10);
+        u16 status;
+        const short result = store_short(x, &status);
+        print("fistp m16 ");
+        print(store_names[i]);
+        print(" = ");
+        print_hex((u16)result, 4);
+        print(" C1 ");
+        print_hex((status >> 9) & 1, 1);
+        print(" IE ");
+        print_hex(status & 1, 1);
+        print("\n");
+    }
+    print("fxam freed -1 ");
+    print_hex(examine_freed(minus_one), 4);
+    print(", freed +1 ");
+    print_hex(examine_freed(one), 4);
+    print("\n");
+}
+
 static void host_calls(void) {
     for (int i = 0; i < Count; ++i)
         for (int j = 0; j < Count; ++j)
@@ -221,6 +293,7 @@ int main(void) {
         if (c < 4) host_calls();
     }
     set_control(0x037f);
+    edge_cases();
     return 0;
 }
 
