@@ -181,6 +181,7 @@ uint64_t ps5lift_thread_create(Ps5LiftState* parent, uint64_t entry, uint64_t ar
 uint64_t ps5lift_thread_join(uint64_t handle);
 Ps5LiftState* ps5lift_current_state(void);
 void ps5lift_use_guest_stack(uint64_t stack_top);
+uint64_t ps5lift_interrupt_stack(void);
 uint64_t ps5lift_host_stack_size(void);
 Ps5LiftState* ps5lift_enter_guest(void);
 void ps5lift_leave_guest(void);

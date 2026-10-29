@@ -767,6 +767,7 @@ private:
 
     void CallGuest(llvm::Value* callee, llvm::ArrayRef<llvm::Value*> extra = {}) {
         Flush();
+        StateStore(_builder.getInt64(_instruction->Next()), offsetof(Ps5LiftState, Rip));
         std::vector<llvm::Value*> arguments{_state};
         arguments.insert(arguments.end(), extra.begin(), extra.end());
         if (auto* function = llvm::dyn_cast<llvm::Function>(callee)) _builder.CreateCall(function, arguments);
