@@ -2,6 +2,8 @@
 #include <ps5lift/State.h>
 
 #include <pthread.h>
+#include <sched.h>
+#include <sys/random.h>
 #include <sys/auxv.h>
 #include <sys/mman.h>
 #include <unistd.h>
@@ -266,6 +268,18 @@ extern "C" void ps5lift_write_back_cache_line(const std::uint64_t address) {
 #endif
 }
 
+extern "C" std::uint64_t ps5lift_random(void) {
+    std::uint64_t value = 0;
+    if (getrandom(&value, sizeof(value), 0) != static_cast<ssize_t>(sizeof(value))) ps5lift_fail("rdrand: the host gave no random bytes: %s", std::strerror(errno));
+    return value;
+}
+
+extern "C" std::uint32_t ps5lift_processor_id(void) {
+    const int processor = sched_getcpu();
+    if (processor < 0) ps5lift_fail("rdpid: the host cannot tell which processor runs this thread: %s", std::strerror(errno));
+    return static_cast<std::uint32_t>(processor);
+}
+
 extern "C" std::uint32_t ps5lift_read_mxcsr(Ps5LiftState* state) {
     return (state->Mxcsr & ~MxcsrExceptions) | HostExceptions();
 }
@@ -379,12 +393,13 @@ extern "C" std::uint64_t ps5lift_thread_join(const std::uint64_t handle) {
 
 namespace {
 
-// cpuid reports the AES-NI and PCLMULQDQ of the PS5's Zen 2, and lifted code runs them on the host's own.
+// cpuid reports the AES-NI, PCLMULQDQ and crc32 of the PS5's Zen 2, and lifted code runs them on the host's own.
 void RequireHostFeatures() {
 #if defined(__aarch64__)
-    if ((getauxval(AT_HWCAP) & (HWCAP_AES | HWCAP_PMULL)) != (HWCAP_AES | HWCAP_PMULL)) ps5lift_fail("the host CPU lacks AES and PMULL, which lifted AES-NI and PCLMULQDQ use");
+    constexpr unsigned long required = HWCAP_AES | HWCAP_PMULL | HWCAP_CRC32;
+    if ((getauxval(AT_HWCAP) & required) != required) ps5lift_fail("the host CPU lacks AES, PMULL or CRC32, which lifted AES-NI, PCLMULQDQ and crc32 use");
 #else
-    if (!__builtin_cpu_supports("aes") || !__builtin_cpu_supports("pclmul")) ps5lift_fail("the host CPU lacks AES-NI and PCLMULQDQ, which lifted code uses");
+    if (!__builtin_cpu_supports("aes") || !__builtin_cpu_supports("pclmul") || !__builtin_cpu_supports("sse4.2")) ps5lift_fail("the host CPU lacks AES-NI, PCLMULQDQ or SSE4.2, which lifted code uses");
 #endif
 }
 

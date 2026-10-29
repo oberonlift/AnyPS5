@@ -65,6 +65,7 @@ extern "C" void ps5lift_cpuid(Ps5LiftState* state, const std::uint64_t address) 
 }
 
 extern "C" std::uint64_t ps5lift_xgetbv(const std::uint64_t address, const std::uint32_t index) {
-    if (index != 0) ps5lift_fail("xgetbv register 0x%" PRIx32 " at 0x%" PRIx64 " has no PS5 value", index, address);
+    if (index > 1) ps5lift_fail("xgetbv register 0x%" PRIx32 " at 0x%" PRIx64 " has no PS5 value", index, address);
+    // ECX=1 reads XINUSE, the components in use, which may be all that are enabled.
     return EnabledState;
 }
