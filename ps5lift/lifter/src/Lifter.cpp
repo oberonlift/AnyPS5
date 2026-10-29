@@ -2822,6 +2822,54 @@ private:
         Write(0, FloatBits(result));
     }
 
+    // vpermilps and vpermilpd with a vector of selectors: each element takes one from its own 128-bit lane, picked by
+    // bits 1:0 of its selector for vpermilps and by bit 1 for vpermilpd. phminposuw returns the smallest unsigned word
+    // and the index of its first occurrence.
+    bool EmitPermute(const ZydisMnemonic mnemonic) {
+        if (mnemonic == ZYDIS_MNEMONIC_PHMINPOSUW || mnemonic == ZYDIS_MNEMONIC_VPHMINPOSUW) {
+            auto* words = AsVector(ReadAs(1, 128), 16);
+            auto* minimum = _builder.CreateUnaryIntrinsic(llvm::Intrinsic::vector_reduce_umin, words);
+            auto* matches = _builder.CreateBitCast(_builder.CreateICmpEQ(words, _builder.CreateVectorSplat(8, minimum)), _builder.getInt8Ty());
+            auto* index = _builder.CreateBinaryIntrinsic(llvm::Intrinsic::cttz, matches, _builder.getTrue());
+            Write(0, _builder.CreateOr(_builder.CreateZExt(minimum, Int(128)), _builder.CreateShl(_builder.CreateZExt(index, Int(128)), 16)));
+            return true;
+        }
+        if ((mnemonic != ZYDIS_MNEMONIC_VPERMILPS && mnemonic != ZYDIS_MNEMONIC_VPERMILPD) || Operand(2).type == ZYDIS_OPERAND_TYPE_IMMEDIATE) return false;
+        const unsigned element = mnemonic == ZYDIS_MNEMONIC_VPERMILPS ? 32 : 64;
+        const auto width = Bits(0);
+        const unsigned count = width / element;
+        const unsigned perLane = 128 / element;
+        auto* source = AsVector(ReadAs(1, width), element);
+        auto* selectors = AsVector(ReadAs(2, width), element);
+        llvm::Value* result = llvm::Constant::getNullValue(source->getType());
+        for (unsigned i = 0; i < count; ++i) {
+            auto* selector = _builder.CreateExtractElement(selectors, _builder.getInt64(i));
+            auto* pick = element == 32 ? _builder.CreateAnd(selector, 3) : _builder.CreateAnd(_builder.CreateLShr(selector, 1), 1);
+            auto* index = _builder.CreateAdd(_builder.CreateZExtOrTrunc(pick, I64()), _builder.getInt64(i / perLane * perLane));
+            result = _builder.CreateInsertElement(result, _builder.CreateExtractElement(source, index), _builder.getInt64(i));
+        }
+        Write(0, AsInteger(result));
+        return true;
+    }
+
+    // vmaskmov and vpmaskmov access only the elements whose mask element has its sign bit set: a load reads those and
+    // zeroes the others, a store writes those and leaves the rest of memory alone, so a masked-off element cannot fault.
+    void MaskedMove(const unsigned element) {
+        const bool store = Operand(0).type == ZYDIS_OPERAND_TYPE_MEMORY;
+        const auto width = Bits(store ? 2 : 0);
+        auto* type = llvm::FixedVectorType::get(Int(element), width / element);
+        auto* zero = llvm::Constant::getNullValue(type);
+        auto* mask = _builder.CreateICmpSLT(AsVector(ReadAs(1, width), element), zero);
+        auto* pointer = MemoryPointer(store ? 0 : 2);
+        if (store) {
+            _builder.CreateMaskedStore(AsVector(ReadAs(2, width), element), pointer, llvm::Align(1), mask)->setMetadata(llvm::LLVMContext::MD_tbaa, _module.GuestTag());
+            return;
+        }
+        auto* loaded = _builder.CreateMaskedLoad(type, pointer, llvm::Align(1), mask, zero);
+        loaded->setMetadata(llvm::LLVMContext::MD_tbaa, _module.GuestTag());
+        Write(0, AsInteger(loaded));
+    }
+
     bool EmitFloat(const ZydisMnemonic mnemonic) {
         if (auto spec = FloatSpecOf(mnemonic)) {
             if (mnemonic == ZYDIS_MNEMONIC_CMPSD && Operand(0).type != ZYDIS_OPERAND_TYPE_REGISTER) return false;
@@ -2830,6 +2878,12 @@ private:
         }
         if (EmitFloatConversion(mnemonic)) return true;
         switch (mnemonic) {
+        case ZYDIS_MNEMONIC_VMASKMOVPS: case ZYDIS_MNEMONIC_VPMASKMOVD:
+            MaskedMove(32);
+            return true;
+        case ZYDIS_MNEMONIC_VMASKMOVPD: case ZYDIS_MNEMONIC_VPMASKMOVQ:
+            MaskedMove(64);
+            return true;
         case ZYDIS_MNEMONIC_DPPS: case ZYDIS_MNEMONIC_VDPPS:
             DotProduct(32);
             return true;
@@ -2891,7 +2945,6 @@ private:
             return true;
         }
         case ZYDIS_MNEMONIC_VPERMILPD: {
-            if (Operand(2).type != ZYDIS_OPERAND_TYPE_IMMEDIATE) throw UnsupportedInstruction("variable control");
             const auto width = Bits(0);
             auto* source = AsVector(ReadAs(1, width), 64);
             const auto control = Immediate(2);
@@ -3143,6 +3196,8 @@ private:
         case ZYDIS_MNEMONIC_PREFETCHT2:
         case ZYDIS_MNEMONIC_PREFETCHNTA:
         case ZYDIS_MNEMONIC_PREFETCHW:
+        case ZYDIS_MNEMONIC_MONITORX:
+        case ZYDIS_MNEMONIC_MWAITX:
             return;
         case ZYDIS_MNEMONIC_CMPXCHG8B:
         case ZYDIS_MNEMONIC_CMPXCHG16B:
@@ -3488,6 +3543,7 @@ private:
             return;
         default:
             if (EmitStringCompare(mnemonic)) return;
+            if (EmitPermute(mnemonic)) return;
             if (EmitVector(mnemonic)) return;
             if (EmitCrypto(mnemonic)) return;
             if (EmitSha(mnemonic)) return;
