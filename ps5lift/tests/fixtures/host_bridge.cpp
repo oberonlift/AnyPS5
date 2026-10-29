@@ -9,6 +9,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 
 extern "C" void ps5lift_import_host__write(Ps5LiftState* state) {
     const auto* text = reinterpret_cast<const char*>(state->Gpr[PS5LIFT_RDI]);
@@ -90,6 +91,33 @@ struct ThreadCall {
     long Result;
 };
 
+bool GuardedBelow(const std::uint64_t address) {
+    std::FILE* maps = std::fopen("/proc/self/maps", "r");
+    if (maps == nullptr) std::abort();
+    char text[512];
+    unsigned long previousEnd = 0;
+    bool previousGuard = false;
+    bool guarded = false;
+    while (std::fgets(text, sizeof(text), maps) != nullptr) {
+        unsigned long start = 0;
+        unsigned long end = 0;
+        char permissions[5] = {};
+        if (std::sscanf(text, "%lx-%lx %4s", &start, &end, permissions) != 3) std::abort();
+        if (address >= start && address < end) {
+            guarded = previousGuard && previousEnd == start;
+            break;
+        }
+        previousEnd = end;
+        previousGuard = std::strcmp(permissions, "---p") == 0;
+    }
+    std::fclose(maps);
+    return guarded;
+}
+
+}
+
+extern "C" void ps5lift_import_host__stack__guarded(Ps5LiftState* state) {
+    Return(state, static_cast<long>(GuardedBelow(state->Gpr[PS5LIFT_RSP])));
 }
 
 extern "C" void ps5lift_import_host__thread__keeps__environment(Ps5LiftState* state) {

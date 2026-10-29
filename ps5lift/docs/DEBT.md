@@ -29,7 +29,7 @@ A review of the whole tree in October 2026 found these. Each gives a wrong resul
 - A fiber resumed on another thread keeps running on the first thread's `Ps5LiftState`: [GuestCpu](../runtime/src/GuestCpu.cpp) restores its registers into the current thread's state, but each lifted and bridge frame on the fiber's stack holds the state it was entered with.
 - A guest function pointer inside a record, such as `sigaction`'s handler, reaches native code as a raw guest address, which native code then calls as host code.
 - [`cpuid`](../runtime/src/Cpuid.cpp) reports SSE4.2, whose string comparisons (`pcmpestri`, `pcmpestrm`, `pcmpistri` and `pcmpistrm`) the lifter does not lift, so code that picks a path by `cpuid` takes one that stops at run time where its fallback would run.
-- Guest stacks are a fixed 8 MiB with no guard page, whatever size the guest asks for, so an overflow writes into the mapping below.
+- A thread that `scePthreadCreate` starts runs the guest on the runtime's 8 MiB stack, whatever size the guest asks for, while libkernel reports a range of the host stack as the thread's stack and sizes that host stack, which holds the lifted frames, from the request.
 - `Ps5LiftState::Rip` is never written, so a `sceKernelRaiseException` handler sees `rip` as 0. The handler runs 64 KiB below the stack pointer of the target thread's last call, which overwrites a frame that has grown past that since.
 - A full callback pool, a `longjmp` across native code and a resume at an address the frame cannot continue from are all reported as "reached unsupported instruction".
 

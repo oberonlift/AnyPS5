@@ -139,9 +139,22 @@ bool GuestEnvironmentLive() {
     return Foreign == nullptr || Foreign->Entered != 0;
 }
 
-std::uint64_t PrepareThread(GuestThread& thread, Ps5LiftState& state) {
-    thread.Stack = static_cast<std::uint8_t*>(MapAnonymous(GuestStackSize));
+void MapThreadMemory(GuestThread& thread) {
+    const auto guard = PageSize();
+    auto* stackMapping = static_cast<std::uint8_t*>(MapAnonymous(guard + GuestStackSize));
+    if (mprotect(stackMapping, guard, PROT_NONE) != 0) ps5lift_fail("cannot protect the guard page below a guest stack: %s", std::strerror(errno));
+    thread.Stack = stackMapping + guard;
     thread.Tls = static_cast<std::uint8_t*>(MapAnonymous(TlsSize));
+}
+
+void UnmapThreadMemory(const GuestThread& thread) {
+    const auto guard = PageSize();
+    munmap(thread.Stack - guard, guard + GuestStackSize);
+    munmap(thread.Tls, TlsSize);
+}
+
+std::uint64_t PrepareThread(GuestThread& thread, Ps5LiftState& state) {
+    MapThreadMemory(thread);
     const auto threadPointer = reinterpret_cast<std::uint64_t>(thread.Tls + TlsSize / 2);
     std::memcpy(reinterpret_cast<void*>(threadPointer), &threadPointer, sizeof(threadPointer));
     for (std::uint64_t i = 0; i < ps5lift_program.ImageCount; ++i) {
@@ -416,8 +429,7 @@ void ReleaseForeignThread(void* pointer) {
     auto* foreign = static_cast<ForeignThread*>(pointer);
     Foreign = nullptr;
     CurrentState = nullptr;
-    munmap(foreign->Thread.Stack, GuestStackSize);
-    munmap(foreign->Thread.Tls, TlsSize);
+    UnmapThreadMemory(foreign->Thread);
     delete foreign;
 }
 
@@ -468,8 +480,7 @@ extern "C" std::uint64_t ps5lift_thread_join(const std::uint64_t handle) {
     const auto error = pthread_join(thread->Handle, nullptr);
     if (error != 0) ps5lift_fail("cannot join a guest thread: %s", std::strerror(error));
     const auto result = thread->Result;
-    munmap(thread->Stack, GuestStackSize);
-    munmap(thread->Tls, TlsSize);
+    UnmapThreadMemory(*thread);
     delete thread;
     return result;
 }
