@@ -413,6 +413,13 @@ extern "C" void ps5lift_unknown_resume(Ps5LiftState*, const std::uint64_t functi
     ps5lift_fail("a longjmp or exception resumes at 0x%" PRIx64 " in the frame of 0x%" PRIx64 ", which has no resume point there", resume, function);
 }
 
+// The console's libc stores a code at %fs:0x28 before it raises an interrupt to stop the program.
+extern "C" void ps5lift_interrupt(Ps5LiftState* state, const std::uint64_t address, const std::uint32_t vector) {
+    std::uint32_t code = 0;
+    std::memcpy(&code, reinterpret_cast<const void*>(state->FsBase + 0x28), sizeof(code));
+    ps5lift_fail("guest interrupt 0x%x at 0x%" PRIx64 ", with 0x%08x at %%fs:0x28", vector, address, code);
+}
+
 extern "C" void ps5lift_trap(Ps5LiftState*, const std::uint64_t address) {
     ps5lift_fail("guest trap at 0x%" PRIx64, address);
 }
