@@ -66,9 +66,13 @@ std::uint64_t AlignUp(const std::uint64_t value, const std::uint64_t alignment) 
     return (value + alignment - 1) & ~(alignment - 1);
 }
 
+bool Within(const std::uint64_t offset, const std::uint64_t size, const std::uint64_t limit) {
+    return offset <= limit && size <= limit - offset;
+}
+
 template <typename T>
 T ReadAt(const std::vector<std::uint8_t>& bytes, std::uint64_t offset) {
-    if (offset + sizeof(T) > bytes.size()) throw std::runtime_error("ELF read out of bounds at " + std::to_string(offset));
+    if (!Within(offset, sizeof(T), bytes.size())) throw std::runtime_error("ELF read out of bounds at " + std::to_string(offset));
     T value;
     std::memcpy(&value, bytes.data() + offset, sizeof(T));
     return value;
@@ -113,7 +117,7 @@ std::uint64_t MappedProgramHeaders(const std::string& path, const Domain::ElfHea
     }
     const std::uint64_t size = std::uint64_t{header.ProgramHeaderEntrySize} * programs.size();
     for (const auto& program : programs) {
-        if (program.Type == ProgramLoad && header.ProgramHeaderOffset >= program.Offset && header.ProgramHeaderOffset - program.Offset + size <= program.FileSize)
+        if (program.Type == ProgramLoad && header.ProgramHeaderOffset >= program.Offset && Within(header.ProgramHeaderOffset - program.Offset, size, program.FileSize))
             return program.MappedAddress + (header.ProgramHeaderOffset - program.Offset);
     }
     throw std::runtime_error("No loadable segment of " + path + " maps its program headers");
@@ -389,7 +393,7 @@ const GuestArray& GuestImage::InitArray() const {
 
 void GuestImage::Write64(const std::uint64_t address, const std::uint64_t value) {
     for (auto& segment : _segments) {
-        if (address < segment.Address || address + 8 > segment.Address + segment.MemorySize) continue;
+        if (address < segment.Address || !Within(address - segment.Address, 8, segment.MemorySize)) continue;
         const auto offset = address - segment.Address;
         if (offset + 8 > segment.Bytes.size()) segment.Bytes.resize(offset + 8, 0);
         std::memcpy(segment.Bytes.data() + offset, &value, 8);
@@ -424,7 +428,7 @@ std::span<const std::uint8_t> GuestImage::CodeAt(const std::uint64_t address) co
 
 std::optional<std::uint64_t> GuestImage::ReadData(const std::uint64_t address, const unsigned size) const {
     for (const auto& segment : _segments) {
-        if (address < segment.Address || address + size > segment.Address + segment.Bytes.size()) continue;
+        if (address < segment.Address || !Within(address - segment.Address, size, segment.Bytes.size())) continue;
         std::uint64_t value = 0;
         std::memcpy(&value, segment.Bytes.data() + (address - segment.Address), size);
         return value;
