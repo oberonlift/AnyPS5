@@ -28,6 +28,15 @@ foreach(triple IN LISTS PS5LIFT_TEST_TRIPLES)
                         --fixture ${fixture}
                         ${memory_models})
     endforeach()
+    add_test(NAME fixture_basic_unoptimized_${arch}
+            COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tools/run_fixture.py
+                    --ps5lift $<TARGET_FILE:ps5lift>
+                    --clang ${CMAKE_C_COMPILER}
+                    --clangxx ${CMAKE_CXX_COMPILER}
+                    --triple ${triple}
+                    --fixture basic
+                    --optimization=-O2
+                    --unoptimized-lift)
 endforeach()
 
 include(ExternalProject)

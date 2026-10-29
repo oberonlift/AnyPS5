@@ -171,6 +171,7 @@ typedef struct Ps5LiftProgram {
 extern const Ps5LiftProgram ps5lift_program;
 
 void ps5lift_dispatch(Ps5LiftState* state, uint64_t target);
+Ps5LiftFunction ps5lift_resolve(uint64_t target);
 void ps5lift_apply_mxcsr(Ps5LiftState* state);
 uint32_t ps5lift_read_mxcsr(Ps5LiftState* state);
 uint32_t ps5lift_x87(Ps5LiftState* state, uint32_t operation, uint32_t format, uint64_t address, uint32_t index);

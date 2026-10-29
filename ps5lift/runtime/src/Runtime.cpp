@@ -270,10 +270,14 @@ extern "C" std::uint32_t ps5lift_read_mxcsr(Ps5LiftState* state) {
     return (state->Mxcsr & ~MxcsrExceptions) | HostExceptions();
 }
 
-extern "C" void ps5lift_dispatch(Ps5LiftState* state, const std::uint64_t target) {
+extern "C" Ps5LiftFunction ps5lift_resolve(const std::uint64_t target) {
     const auto function = Lookup(target);
     if (function == nullptr) ps5lift_fail("indirect branch to 0x%" PRIx64 ", which was not lifted", target);
-    function(state);
+    return function;
+}
+
+extern "C" void ps5lift_dispatch(Ps5LiftState* state, const std::uint64_t target) {
+    ps5lift_resolve(target)(state);
 }
 
 extern "C" void ps5lift_fail(const char* format, ...) {

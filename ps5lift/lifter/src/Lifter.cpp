@@ -818,7 +818,7 @@ private:
     void TailCall(const std::uint64_t target) {
         if (!_module.Functions().contains(target)) throw std::runtime_error("Control leaves 0x" + Hex(_function.Entry) + " for undiscovered 0x" + Hex(target));
         Flush();
-        _builder.CreateCall(_module.Guest(target), {_state})->setTailCallKind(llvm::CallInst::TCK_Tail);
+        _builder.CreateCall(_module.Guest(target), {_state})->setTailCallKind(llvm::CallInst::TCK_MustTail);
         _builder.CreateRetVoid();
     }
 
@@ -3276,7 +3276,9 @@ private:
             }
             _builder.SetInsertPoint(fallback);
             Flush();
-            _builder.CreateCall(DispatchCallee(), {_state, destination});
+            auto resolve = _module.Runtime("ps5lift_resolve", llvm::FunctionType::get(_module.Pointer(), {I64()}, false));
+            auto* function = _builder.CreateCall(resolve, {destination});
+            _builder.CreateCall(_module.GuestType(), function, {_state})->setTailCallKind(llvm::CallInst::TCK_MustTail);
             _builder.CreateRetVoid();
             return;
         }
