@@ -689,6 +689,29 @@ __attribute__((noinline)) static void locked_forms(void) {
     line("xadd one register", (i64)doubled);
 }
 
+static volatile u64 bit_words[4] = {0, 8, 0, 0};
+
+/* A register bit offset addresses a bit string: the signed offset can reach operands before and after the one named. */
+#define BIT_STRING(name, instruction, base, offset)                                                                    \
+    do {                                                                                                               \
+        u8 carry;                                                                                                      \
+        __asm__ volatile(instruction " %2, %0\n\tsetc %1" : "+m"(*(base)), "=q"(carry) : "r"(offset) : "memory", "cc"); \
+        line(name " carry", carry);                                                                                    \
+    } while (0)
+
+__attribute__((noinline)) static void bit_strings(void) {
+    BIT_STRING("bts past the operand", "btsq", &bit_words[1], (i64)130);
+    BIT_STRING("btr before the operand", "btrq", &bit_words[2], (i64)-61);
+    BIT_STRING("btc 32-bit", "btcl", (volatile u32*)&bit_words[1], (i32)37);
+    BIT_STRING("bt 16-bit before the operand", "btw", (volatile u16*)&bit_words[2], (i16)-27);
+    BIT_STRING("lock bts past the operand", "lock btsq", &bit_words[0], (i64)200);
+    BIT_STRING("bt past the operand", "btq", &bit_words[0], (i64)194);
+    line_hex("bit string word 0", bit_words[0]);
+    line_hex("bit string word 1", bit_words[1]);
+    line_hex("bit string word 2", bit_words[2]);
+    line_hex("bit string word 3", bit_words[3]);
+}
+
 struct Record {
     i64 key;
     u32 values[6];
@@ -871,6 +894,7 @@ int main(void) {
     zen2_integer();
     unaligned_accesses();
     locked_forms();
+    bit_strings();
     string_instructions();
     string_reads();
     line("byte-guarded jump table", byte_guarded_switch(10) + byte_guarded_switch(11) * 100 + byte_guarded_switch(12) * 10000 + byte_guarded_switch(13) * 1000000);

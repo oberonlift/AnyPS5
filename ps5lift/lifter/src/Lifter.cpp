@@ -16,6 +16,7 @@
 
 #include <algorithm>
 #include <array>
+#include <bit>
 #include <cmath>
 #include <initializer_list>
 #include <cstddef>
@@ -1190,22 +1191,41 @@ private:
     }
 
     void BitTest(const ZydisMnemonic mnemonic) {
-        if (Operand(0).type == ZYDIS_OPERAND_TYPE_MEMORY && Operand(1).type == ZYDIS_OPERAND_TYPE_REGISTER) throw UnsupportedInstruction("bit string in memory");
         const auto bits = Bits(0);
         auto* type = Int(bits);
-        auto* index = _builder.CreateAnd(ReadAs(1, bits), bits - 1);
-        auto* mask = _builder.CreateShl(llvm::ConstantInt::get(type, 1), index);
+        auto* offset = ReadAs(1, bits);
+        auto* mask = _builder.CreateShl(llvm::ConstantInt::get(type, 1), _builder.CreateAnd(offset, bits - 1));
         llvm::Value* value = nullptr;
-        if (LockedMemory()) {
-            const auto operation = mnemonic == ZYDIS_MNEMONIC_BTS ? llvm::AtomicRMWInst::Or : mnemonic == ZYDIS_MNEMONIC_BTR ? llvm::AtomicRMWInst::And : llvm::AtomicRMWInst::Xor;
-            value = AtomicUpdate(operation, mnemonic == ZYDIS_MNEMONIC_BTR ? _builder.CreateNot(mask) : mask);
-        } else {
+        if (Operand(0).type != ZYDIS_OPERAND_TYPE_MEMORY) {
             value = Read(0);
-            if (mnemonic == ZYDIS_MNEMONIC_BTS) Write(0, _builder.CreateOr(value, mask));
-            if (mnemonic == ZYDIS_MNEMONIC_BTR) Write(0, _builder.CreateAnd(value, _builder.CreateNot(mask)));
-            if (mnemonic == ZYDIS_MNEMONIC_BTC) Write(0, _builder.CreateXor(value, mask));
+            if (mnemonic != ZYDIS_MNEMONIC_BT) Write(0, BitUpdate(mnemonic, value, mask));
+        } else if (Locked()) {
+            const auto operation = mnemonic == ZYDIS_MNEMONIC_BTS ? llvm::AtomicRMWInst::Or : mnemonic == ZYDIS_MNEMONIC_BTR ? llvm::AtomicRMWInst::And : llvm::AtomicRMWInst::Xor;
+            value = AtomicUpdate(BitStringAddress(offset), operation, mnemonic == ZYDIS_MNEMONIC_BTR ? _builder.CreateNot(mask) : mask);
+        } else {
+            auto* address = BitStringAddress(offset);
+            const auto ordered = NeedsOrdering(Operand(0), bits);
+            value = Load(address, bits, ordered);
+            if (mnemonic != ZYDIS_MNEMONIC_BT) Store(address, BitUpdate(mnemonic, value, mask), ordered);
         }
         SetFlag(PS5LIFT_CF, _builder.CreateICmpNE(_builder.CreateAnd(value, mask), llvm::ConstantInt::get(type, 0)));
+    }
+
+    llvm::Value* BitUpdate(const ZydisMnemonic mnemonic, llvm::Value* value, llvm::Value* mask) {
+        if (mnemonic == ZYDIS_MNEMONIC_BTS) return _builder.CreateOr(value, mask);
+        if (mnemonic == ZYDIS_MNEMONIC_BTR) return _builder.CreateAnd(value, _builder.CreateNot(mask));
+        return _builder.CreateXor(value, mask);
+    }
+
+    // A register bit offset is signed and indexes a bit string starting at the memory operand, so its high bits select
+    // the operand-sized unit the bit is in, which may lie before or after the operand. An immediate offset stays in the operand.
+    llvm::Value* BitStringAddress(llvm::Value* offset) {
+        auto* address = Address(Operand(0));
+        if (Operand(1).type != ZYDIS_OPERAND_TYPE_REGISTER) return address;
+        if (_instruction->Info.address_width != 64) throw UnsupportedInstruction("32-bit bit string addresses");
+        const auto bits = Bits(0);
+        auto* unit = _builder.CreateSExt(_builder.CreateAShr(offset, std::countr_zero(bits)), I64());
+        return _builder.CreateAdd(address, _builder.CreateShl(unit, std::countr_zero(bits / 8)));
     }
 
     static bool Lockable(const ZydisMnemonic mnemonic) {
@@ -1222,7 +1242,12 @@ private:
 
     // The value at the memory operand before an atomic update.
     llvm::Value* AtomicUpdate(const llvm::AtomicRMWInst::BinOp operation, llvm::Value* operand) {
-        return _builder.CreateAtomicRMW(operation, MemoryPointer(0), operand, llvm::MaybeAlign(operand->getType()->getIntegerBitWidth() / 8), llvm::AtomicOrdering::SequentiallyConsistent);
+        return AtomicUpdate(Address(Operand(0)), operation, operand);
+    }
+
+    llvm::Value* AtomicUpdate(llvm::Value* address, const llvm::AtomicRMWInst::BinOp operation, llvm::Value* operand) {
+        auto* pointer = _builder.CreateIntToPtr(address, _module.Pointer());
+        return _builder.CreateAtomicRMW(operation, pointer, operand, llvm::MaybeAlign(operand->getType()->getIntegerBitWidth() / 8), llvm::AtomicOrdering::SequentiallyConsistent);
     }
 
     // An update no atomicrmw operation performs, retried until no other write intervenes.
