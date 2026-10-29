@@ -91,6 +91,23 @@ __attribute__((noinline)) static i64 lock_worker(i64 argument) {
     return 0;
 }
 
+static volatile u64 bit_lock;
+static volatile u64 bit_locked_counter;
+static volatile u64 carried_counter;
+
+__attribute__((noinline)) static i64 bit_lock_worker(i64 argument) {
+    (void)argument;
+    for (int i = 0; i < LockSteps; ++i) {
+        u8 taken = 1;
+        while (taken) __asm__ volatile("lock btsq $0, %0\n\tsetc %1" : "+m"(bit_lock), "=q"(taken) : : "memory", "cc");
+        bit_locked_counter = bit_locked_counter + 1;
+        if (i & 1) __asm__ volatile("lock btrq $0, %0" : "+m"(bit_lock) : : "memory", "cc");
+        else __asm__ volatile("lock btcq $0, %0" : "+m"(bit_lock) : : "memory", "cc");
+        __asm__ volatile("stc\n\tlock adcq $0, %0\n\tclc\n\tlock sbbq $-1, %0" : "+m"(carried_counter) : : "memory", "cc");
+    }
+    return 0;
+}
+
 static volatile u64 message_data;
 static volatile u64 message_flag;
 
@@ -131,6 +148,13 @@ int main(void) {
     for (int i = 0; i < Threads; ++i) host_thread_join(threads[i]);
     line("locked counter / steps", locked_counter / LockSteps);
     line("locked counter remainder", locked_counter % LockSteps);
+
+    for (int i = 0; i < Threads; ++i) threads[i] = host_thread_create(bit_lock_worker, 0);
+    for (int i = 0; i < Threads; ++i) host_thread_join(threads[i]);
+    line("bit locked counter / steps", bit_locked_counter / LockSteps);
+    line("bit locked counter remainder", bit_locked_counter % LockSteps);
+    line("carried counter / steps", carried_counter / LockSteps);
+    line("carried counter remainder", carried_counter % LockSteps);
 
     unsigned long reader = host_thread_create(message_reader, 0);
     unsigned long writer = host_thread_create(message_writer, 0);

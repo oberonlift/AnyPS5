@@ -1040,17 +1040,61 @@ private:
     void BitTest(const ZydisMnemonic mnemonic) {
         if (Operand(0).type == ZYDIS_OPERAND_TYPE_MEMORY && Operand(1).type == ZYDIS_OPERAND_TYPE_REGISTER) throw UnsupportedInstruction("bit string in memory");
         const auto bits = Bits(0);
-        auto* value = Read(0);
+        auto* type = Int(bits);
         auto* index = _builder.CreateAnd(ReadAs(1, bits), bits - 1);
-        auto* mask = _builder.CreateShl(llvm::ConstantInt::get(value->getType(), 1), index);
-        SetFlag(PS5LIFT_CF, _builder.CreateICmpNE(_builder.CreateAnd(value, mask), llvm::ConstantInt::get(value->getType(), 0)));
-        if (mnemonic == ZYDIS_MNEMONIC_BTS) Write(0, _builder.CreateOr(value, mask));
-        if (mnemonic == ZYDIS_MNEMONIC_BTR) Write(0, _builder.CreateAnd(value, _builder.CreateNot(mask)));
-        if (mnemonic == ZYDIS_MNEMONIC_BTC) Write(0, _builder.CreateXor(value, mask));
+        auto* mask = _builder.CreateShl(llvm::ConstantInt::get(type, 1), index);
+        llvm::Value* value = nullptr;
+        if (LockedMemory()) {
+            const auto operation = mnemonic == ZYDIS_MNEMONIC_BTS ? llvm::AtomicRMWInst::Or : mnemonic == ZYDIS_MNEMONIC_BTR ? llvm::AtomicRMWInst::And : llvm::AtomicRMWInst::Xor;
+            value = AtomicUpdate(operation, mnemonic == ZYDIS_MNEMONIC_BTR ? _builder.CreateNot(mask) : mask);
+        } else {
+            value = Read(0);
+            if (mnemonic == ZYDIS_MNEMONIC_BTS) Write(0, _builder.CreateOr(value, mask));
+            if (mnemonic == ZYDIS_MNEMONIC_BTR) Write(0, _builder.CreateAnd(value, _builder.CreateNot(mask)));
+            if (mnemonic == ZYDIS_MNEMONIC_BTC) Write(0, _builder.CreateXor(value, mask));
+        }
+        SetFlag(PS5LIFT_CF, _builder.CreateICmpNE(_builder.CreateAnd(value, mask), llvm::ConstantInt::get(type, 0)));
+    }
+
+    static bool Lockable(const ZydisMnemonic mnemonic) {
+        switch (mnemonic) {
+        case ZYDIS_MNEMONIC_ADD: case ZYDIS_MNEMONIC_ADC: case ZYDIS_MNEMONIC_SUB: case ZYDIS_MNEMONIC_SBB: case ZYDIS_MNEMONIC_AND: case ZYDIS_MNEMONIC_OR:
+        case ZYDIS_MNEMONIC_XOR: case ZYDIS_MNEMONIC_INC: case ZYDIS_MNEMONIC_DEC: case ZYDIS_MNEMONIC_NEG: case ZYDIS_MNEMONIC_NOT: case ZYDIS_MNEMONIC_BTS:
+        case ZYDIS_MNEMONIC_BTR: case ZYDIS_MNEMONIC_BTC: case ZYDIS_MNEMONIC_XCHG: case ZYDIS_MNEMONIC_XADD: case ZYDIS_MNEMONIC_CMPXCHG:
+            return true;
+        default:
+            return false;
+        }
+    }
+
+    // The value at the memory operand before an atomic update.
+    llvm::Value* AtomicUpdate(const llvm::AtomicRMWInst::BinOp operation, llvm::Value* operand) {
+        return _builder.CreateAtomicRMW(operation, MemoryPointer(0), operand, llvm::MaybeAlign(operand->getType()->getIntegerBitWidth() / 8), llvm::AtomicOrdering::SequentiallyConsistent);
+    }
+
+    // An update no atomicrmw operation performs, retried until no other write intervenes.
+    template <typename Update>
+    llvm::Value* AtomicLoop(const unsigned bits, Update update) {
+        auto* pointer = MemoryPointer(0);
+        auto* initial = _builder.CreateAlignedLoad(Int(bits), pointer, llvm::Align(bits / 8));
+        initial->setAtomic(llvm::AtomicOrdering::Monotonic);
+        initial->setMetadata(llvm::LLVMContext::MD_tbaa, _module.GuestTag());
+        auto* entry = _builder.GetInsertBlock();
+        auto* loop = llvm::BasicBlock::Create(Context(), "atomic", _host);
+        auto* done = llvm::BasicBlock::Create(Context(), "atomic_done", _host);
+        _builder.CreateBr(loop);
+        _builder.SetInsertPoint(loop);
+        auto* old = _builder.CreatePHI(Int(bits), 2);
+        old->addIncoming(initial, entry);
+        auto* exchange = _builder.CreateAtomicCmpXchg(pointer, old, update(old), llvm::MaybeAlign(bits / 8), llvm::AtomicOrdering::SequentiallyConsistent, llvm::AtomicOrdering::SequentiallyConsistent);
+        old->addIncoming(_builder.CreateExtractValue(exchange, 0), loop);
+        _builder.CreateCondBr(_builder.CreateExtractValue(exchange, 1), done, loop);
+        _builder.SetInsertPoint(done);
+        return old;
     }
 
     void AtomicRmw(const llvm::AtomicRMWInst::BinOp operation, llvm::Value* operand, const ZydisMnemonic mnemonic) {
-        auto* old = _builder.CreateAtomicRMW(operation, MemoryPointer(0), operand, llvm::MaybeAlign(operand->getType()->getIntegerBitWidth() / 8), llvm::AtomicOrdering::SequentiallyConsistent);
+        auto* old = AtomicUpdate(operation, operand);
         switch (mnemonic) {
         case ZYDIS_MNEMONIC_ADD: Add(old, operand, _builder.getFalse()); return;
         case ZYDIS_MNEMONIC_SUB: Sub(old, operand, _builder.getFalse()); return;
@@ -1085,13 +1129,15 @@ private:
         auto* source = Read(1);
         llvm::Value* old = nullptr;
         if (Operand(0).type == ZYDIS_OPERAND_TYPE_MEMORY) {
-            old = _builder.CreateAtomicRMW(llvm::AtomicRMWInst::Add, MemoryPointer(0), source, llvm::MaybeAlign(Bits(1) / 8), llvm::AtomicOrdering::SequentiallyConsistent);
+            old = AtomicUpdate(llvm::AtomicRMWInst::Add, source);
             Add(old, source, _builder.getFalse());
+            Write(1, old);
         } else {
             old = Read(0);
-            Write(0, Add(old, source, _builder.getFalse()));
+            auto* sum = Add(old, source, _builder.getFalse());
+            Write(1, old);
+            Write(0, sum);
         }
-        Write(1, old);
     }
 
     void CompareExchange() {
@@ -2819,6 +2865,7 @@ private:
     }
 
     void EmitSemantics(const ZydisMnemonic mnemonic) {
+        if (Locked() && !(Lockable(mnemonic) && Operand(0).type == ZYDIS_OPERAND_TYPE_MEMORY)) throw UnsupportedInstruction("lock prefix");
         if (UsesMmx()) EnterMmx();
         if (IsConditionalJump(mnemonic)) {
             const auto target = *DirectTarget(*_instruction);
@@ -2900,14 +2947,23 @@ private:
             Write(0, Add(Read(0), ReadAs(1, Bits(0)), _builder.getFalse()));
             return;
         case ZYDIS_MNEMONIC_ADC:
-            Write(0, Add(Read(0), ReadAs(1, Bits(0)), Flag(PS5LIFT_CF)));
+        case ZYDIS_MNEMONIC_SBB: {
+            auto* source = ReadAs(1, Bits(0));
+            auto* carry = Flag(PS5LIFT_CF);
+            const bool add = mnemonic == ZYDIS_MNEMONIC_ADC;
+            if (LockedMemory()) {
+                auto* old = AtomicUpdate(add ? llvm::AtomicRMWInst::Add : llvm::AtomicRMWInst::Sub, _builder.CreateAdd(source, _builder.CreateZExt(carry, source->getType())));
+                if (add) Add(old, source, carry);
+                else Sub(old, source, carry);
+                return;
+            }
+            auto* value = Read(0);
+            Write(0, add ? Add(value, source, carry) : Sub(value, source, carry));
             return;
+        }
         case ZYDIS_MNEMONIC_SUB:
             if (LockedMemory()) return AtomicRmw(llvm::AtomicRMWInst::Sub, ReadAs(1, Bits(0)), mnemonic);
             Write(0, Sub(Read(0), ReadAs(1, Bits(0)), _builder.getFalse()));
-            return;
-        case ZYDIS_MNEMONIC_SBB:
-            Write(0, Sub(Read(0), ReadAs(1, Bits(0)), Flag(PS5LIFT_CF)));
             return;
         case ZYDIS_MNEMONIC_CMP:
             Sub(Read(0), ReadAs(1, Bits(0)), _builder.getFalse());
@@ -2937,13 +2993,18 @@ private:
             Write(0, Sub(Read(0), Const(Bits(0), 1), _builder.getFalse(), false));
             return;
         case ZYDIS_MNEMONIC_NEG: {
-            auto* value = Read(0);
-            auto* result = Sub(llvm::ConstantInt::get(value->getType(), 0), value, _builder.getFalse());
-            SetFlag(PS5LIFT_CF, _builder.CreateICmpNE(value, llvm::ConstantInt::get(value->getType(), 0)));
-            Write(0, result);
+            auto* zero = llvm::ConstantInt::get(Int(Bits(0)), 0);
+            auto* value = LockedMemory() ? AtomicLoop(Bits(0), [&](llvm::Value* old) { return _builder.CreateSub(zero, old); }) : Read(0);
+            auto* result = Sub(zero, value, _builder.getFalse());
+            SetFlag(PS5LIFT_CF, _builder.CreateICmpNE(value, zero));
+            if (!LockedMemory()) Write(0, result);
             return;
         }
         case ZYDIS_MNEMONIC_NOT:
+            if (LockedMemory()) {
+                AtomicUpdate(llvm::AtomicRMWInst::Xor, llvm::ConstantInt::getAllOnesValue(Int(Bits(0))));
+                return;
+            }
             Write(0, _builder.CreateNot(Read(0)));
             return;
         case ZYDIS_MNEMONIC_SHL:

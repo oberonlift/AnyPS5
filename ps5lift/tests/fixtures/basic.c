@@ -331,6 +331,31 @@ __attribute__((noinline)) static void unaligned_accesses(void) {
     }
 }
 
+static volatile u64 locked_word;
+
+#define LOCKED(name, setup, instruction, start)                                                                        \
+    do {                                                                                                               \
+        locked_word = start;                                                                                           \
+        u8 carry;                                                                                                      \
+        __asm__ volatile(setup "\n\t" instruction " %0\n\tsetc %1" : "+m"(locked_word), "=q"(carry) : : "memory", "cc"); \
+        line_hex(name, locked_word);                                                                                   \
+        line(name " carry", carry);                                                                                    \
+    } while (0)
+
+__attribute__((noinline)) static void locked_forms(void) {
+    LOCKED("lock adc", "stc", "lock adcq $0,", 0xffffffffffffffffUL);
+    LOCKED("lock sbb", "stc", "lock sbbq $0,", 0);
+    LOCKED("lock neg", "clc", "lock negq", 5);
+    LOCKED("lock neg zero", "stc", "lock negq", 0);
+    LOCKED("lock not", "stc", "lock notq", 0x0f);
+    LOCKED("lock bts", "clc", "lock btsq $3,", 0);
+    LOCKED("lock btr", "clc", "lock btrq $3,", 8);
+    LOCKED("lock btc", "stc", "lock btcq $3,", 0);
+    u64 doubled = 5;
+    __asm__("xaddq %0, %0" : "+r"(doubled) : : "cc");
+    line("xadd one register", (i64)doubled);
+}
+
 struct Record {
     i64 key;
     u32 values[6];
@@ -409,6 +434,7 @@ int main(void) {
     line("function passed through lea", pass_address_taken_by_lea());
     zen2_integer();
     unaligned_accesses();
+    locked_forms();
 
     struct Record record = make_record(41);
     struct Record copy;
