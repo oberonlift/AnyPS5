@@ -124,7 +124,8 @@ llvm::Function* DeclareGuest(llvm::Module& module, const std::uint64_t address) 
 }
 
 std::string ImportName(const LiftOptions& options, const std::string& name) {
-    return options.ImportNids ? Nid(name) : name;
+    const auto runtimeName = JumpBufferFunction(name).value_or(name);
+    return options.ImportNids ? Nid(runtimeName) : runtimeName;
 }
 
 std::unique_ptr<llvm::Module> Verified(std::unique_ptr<llvm::Module> module) {

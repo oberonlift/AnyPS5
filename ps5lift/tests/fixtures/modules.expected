@@ -7,6 +7,7 @@ module table = 61000
 module absolute symbol = 74565
 module tls = 6
 module tls again = 7
+setjmp and longjmp a module exports = 33
 executable tls = 108
 iteration result = 0
 executable images = 1

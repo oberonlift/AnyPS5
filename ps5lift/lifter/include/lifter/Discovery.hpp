@@ -51,6 +51,10 @@ std::optional<std::uint64_t> DirectTarget(const Instruction& instruction);
 std::optional<std::uint64_t> ImportTarget(const GuestImage& image, const Instruction& instruction);
 std::string BridgeSymbol(const std::string& import);
 std::string Nid(std::string_view name);
+// setjmp, longjmp and their variants save and restore the guest's registers, which only the runtime can do for lifted
+// code, so a call to one goes to the runtime even when a guest module exports it, as the relinker names a module's
+// export `<NID>#guest`. Returns the name the runtime knows it by.
+std::optional<std::string> JumpBufferFunction(const std::string& import);
 bool ReturnsTwice(const std::string& import);
 
 std::map<std::uint64_t, GuestFunction> DiscoverFunctions(const GuestImage& image);
