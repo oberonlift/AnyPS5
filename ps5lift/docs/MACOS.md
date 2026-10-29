@@ -1,6 +1,6 @@
 # macOS
 
-A plan for running lifted programs natively on Apple Silicon Macs. Nothing here is built yet. The facts below were checked on 2026-10-29 on an M4 running macOS 27.2 with Xcode's toolchain and Homebrew's LLVM.
+A plan for running lifted programs natively on Apple Silicon Macs. Phase 1 is done; the rest is not built yet. The facts below were checked on 2026-10-29 on an M4 running macOS 27.2 with Xcode's toolchain and Homebrew's LLVM.
 
 ## Goal
 
@@ -18,10 +18,10 @@ Not goals: Intel Macs; running guest code under Rosetta, which AnyPS5's own macO
 ## What exists
 
 - **The CPU.** The M4 has every extension the runtime requires or uses: AES, PMULL, CRC32, SHA-256 and SHA-512, LSE and LSE2, LRCPC and LRCPC2, so TSO loads become `LDAPR` and `LDAPUR` as on the GB10, and FEAT_AFP, which exact DAZ and FTZ need. It has no SVE, so the `neoverse-v2` default CPU is wrong for it. Pages are 16 KiB, the PS5's own page size. A process can map up to `0x7ffffe000000`, 32 MiB short of 128 TiB. AnyPS5 bounds guest addresses at `0x7fff00000000` in libkernel's direct memory, which fits, and at `0x800000000000` in its POSIX memory calls, which does not quite. The SDK's `mach/arm/vm_param.h` names 64 to 448 GiB as a GPU carve-out.
-- **ps5lift** builds against LLVM 18 and newer, Homebrew's included. Its output depends on the platform in two places only: it writes a GNU-format archive, and `main.cpp` picks the default CPU from the triple. Hidden visibility, the only symbol attribute it sets, means the same in Mach-O. AnyPS5's ELF reader, its other dependency, is part of AnyPS5's relinker, which already builds on Apple Silicon.
+- **ps5lift** builds against Ubuntu's LLVM 18 and, since phase 1, Homebrew's LLVM 23. Its output depends on the platform in two places only: it writes a GNU-format archive, and `main.cpp` picks the default CPU from the triple. Hidden visibility, the only symbol attribute it sets, means the same in Mach-O. AnyPS5's ELF reader, its other dependency, is part of AnyPS5's relinker, which already builds on Apple Silicon.
 - **The runtime** makes four Linux calls: `mmap` with `MAP_FIXED_NOREPLACE` for the guest images, `getauxval` for the CPU features it checks at start, `sched_getcpu` for `rdpid` and `getrandom` for `rdrand`. FPCR, `cntvct_el0` and the `dc` cache maintenance instructions are AArch64, not Linux; whether macOS lets user code run `dc civac` is unchecked, and `sys_dcache_flush` is its documented interface.
 - **Linking.** `build_runtime.py` and the fixture runners link with ELF `lld` options (`--undefined-glob`, `--export-dynamic-symbol`, `-rpath $ORIGIN`) so that AnyPS5's libraries, which are shared objects, bind to the runtime's `GuestCpu*_nid_no_patch` functions in the executable.
-- **The guest fixtures** are freestanding x86-64 Linux executables (`-nostdlib`, linked by `ld.lld`), so any clang with `lld` builds them on a Mac; Homebrew packages `lld` apart from `llvm`. They link at `0x20000000` without PIE. The relinker places a PS5 executable at `0x400000` unless `--linux-fixed-base` moves it.
+- **The guest fixtures** are freestanding x86-64 Linux executables (`-nostdlib`, linked by `ld.lld`), so any clang with `lld` builds eight of the eleven on a Mac; Homebrew packages `lld` apart from `llvm`. `threads` and `callbacks` link host libraries that use pthreads, and `modules` links libc, so those three need an x86-64 Linux sysroot. They link at `0x20000000` without PIE. The relinker places a PS5 executable at `0x400000` unless `--linux-fixed-base` moves it.
 - **AnyPS5** has had a full macOS build since upstream commit `8ca4c1009`, for x86-64 under Rosetta: 291 `__APPLE__` paths, most in libc, libkernel and libSceAgcDriver (Mach VM calls, dispatch semaphores, `@loader_path` rpaths, DWARF unwind tables instead of compact unwind), MoltenVK handling in libSceAgcDriver, and FFmpeg prebuilts for macOS that include arm64. Its CMake stops on any other macOS architecture. Its lifted mode (`ANYPS5_GUEST_LIFTED`, 49 sites) was written for Linux on aarch64. `GuestLongDouble` requires a host `long double` that holds every x87 value, and on macOS arm64 `long double` is `double`, so the lifted libc does not compile there. 13 of libc's files use `long double`, and its math functions use their own polynomial approximations rather than the host's `sinl` and the like.
 
 ## Decisions
@@ -49,7 +49,7 @@ Replace the host `long double` in the lifted libc with a class over SoftFloat's 
 
 ### Toolchain
 
-Build AnyPS5, the runtime, the bridges and the lifted program with Xcode's clang and the system libc++, as AnyPS5's macOS build does, so that only one C++ runtime is in the process. Link the lifted program with Xcode's linker, which signs it ad hoc and inserts branch islands when the text outgrows a branch's 128 MiB reach, which EVO Player's may. `ps5lift` links against Homebrew's LLVM; the guest fixtures build with Homebrew's clang and `lld`; the bridge generator uses Homebrew's libclang and its Python bindings, so its default `--libclang` path comes from the build rather than a Linux path.
+Build AnyPS5, the runtime, the bridges and the lifted program with Xcode's clang and the system libc++, as AnyPS5's macOS build does, so that only one C++ runtime is in the process. Link the lifted program with Xcode's linker, which signs it ad hoc and inserts branch islands when the text outgrows a branch's 128 MiB reach, which EVO Player's may. `ps5lift` links Homebrew's shared `libLLVM`; the guest fixtures build with the configured C compiler and Homebrew's `lld`, against an x86-64 Linux sysroot; the bridge generator uses Homebrew's libclang and its Python bindings, so its default `--libclang` path comes from the build rather than a Linux path.
 
 ## Work, in order
 
@@ -63,9 +63,9 @@ Each phase ends with something that runs, and Linux's ctest passes after every c
 - Whether `dc civac` and `dc cvac` run at EL0 on macOS, or `sys_dcache_flush` is needed.
 - Whether Metal uses the GPU carve-out in a process that has reserved the PS5 user range.
 
-### 1. ps5lift on the Mac
+### 1. ps5lift on the Mac (done)
 
-Build `ps5lift` with Homebrew's LLVM and lift the fixtures and EVO Player for `aarch64-unknown-linux-gnu`, producing what the GB10 produces. This needs no runtime work and already moves lifting off the GB10. Done when the Mac lifts every fixture and EVO Player without error.
+Done on 2026-10-29. `ps5lift` builds against Homebrew's LLVM 23, and ctest on the Mac lifts every fixture for aarch64 and x86-64 Linux without running it (24 tests, under a minute). EVO Player lifts for `aarch64-unknown-linux-gnu` in 7 minutes 14 seconds with a 13.4 GB peak memory footprint, where the GB10 takes 2 minutes 24 seconds, and reports the same functions, instructions, jump tables and unsupported instructions as the GB10's last lift. It took three LLVM API changes between 18 and 23, one of them `getTerminator()`, which no longer says whether a block has a terminator and made every lifted module invalid; linking the shared `libLLVM`, since LLVM's static libraries name the z3 installed on the day they were built, which a Homebrew upgrade removes; `+crc32` for x86-64 output; and the x86-64 Linux sysroot above.
 
 ### 2. Mach-O output and the runtime
 
