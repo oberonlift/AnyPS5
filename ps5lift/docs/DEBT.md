@@ -26,7 +26,7 @@ A review of the whole tree in October 2026 found these. Each gives a wrong resul
 
 ### Runtime
 
-- A fiber resumed on another thread keeps running on the first thread's `Ps5LiftState`: [GuestCpu](../runtime/src/GuestCpu.cpp) restores its registers into the current thread's state, but each lifted and bridge frame on the fiber's stack holds the state it was entered with.
+- A fiber resumed on another thread keeps running on the first thread's `Ps5LiftState`: [GuestCpu](../runtime/src/GuestCpu.cpp) restores its registers into the current thread's state, but each lifted and bridge frame on the fiber's stack holds the state it was entered with. A fiber's entry, a callback thunk, never returns, so the native thread that starts one counts a callback still running and keeps the guest's floating-point environment for its own code from then on. A state for each fiber, which the switch makes current, would fix both.
 - A guest function pointer inside a record, such as `sigaction`'s handler, reaches native code as a raw guest address, which native code then calls as host code.
 - [`cpuid`](../runtime/src/Cpuid.cpp) reports SSE4.2, whose string comparisons (`pcmpestri`, `pcmpestrm`, `pcmpistri` and `pcmpistrm`) the lifter does not lift, so code that picks a path by `cpuid` takes one that stops at run time where its fallback would run.
 
