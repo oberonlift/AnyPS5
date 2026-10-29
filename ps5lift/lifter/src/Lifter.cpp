@@ -1665,6 +1665,64 @@ private:
     // AES-NI and PCLMULQDQ have no target-independent form in LLVM, so they become the target's own instructions: on
     // aarch64 the crypto extension's AESE, AESD, AESMC, AESIMC and PMULL. AESE and AESD add the round key before
     // substituting bytes where x86 adds it after mixing columns, so they take a zero key and the round key follows.
+    ZydisRegister HiddenRegister(std::initializer_list<ZydisRegister> candidates) const {
+        for (std::uint8_t i = _instruction->Info.operand_count_visible; i < _instruction->Info.operand_count; ++i) {
+            const auto& operand = Operand(i);
+            if (operand.type == ZYDIS_OPERAND_TYPE_REGISTER && std::find(candidates.begin(), candidates.end(), operand.reg.value) != candidates.end()) return operand.reg.value;
+        }
+        throw std::logic_error(std::string(ZydisMnemonicGetString(_instruction->Info.mnemonic)) + " at 0x" + Hex(_instruction->Address) + " has no such hidden register operand");
+    }
+
+    // The runtime compares the strings; the index or mask and the flags come from its result.
+    bool EmitStringCompare(const ZydisMnemonic mnemonic) {
+        bool explicitLengths = false;
+        bool index = false;
+        switch (mnemonic) {
+        case ZYDIS_MNEMONIC_PCMPESTRI: case ZYDIS_MNEMONIC_VPCMPESTRI: explicitLengths = true; index = true; break;
+        case ZYDIS_MNEMONIC_PCMPESTRM: case ZYDIS_MNEMONIC_VPCMPESTRM: explicitLengths = true; break;
+        case ZYDIS_MNEMONIC_PCMPISTRI: case ZYDIS_MNEMONIC_VPCMPISTRI: index = true; break;
+        case ZYDIS_MNEMONIC_PCMPISTRM: case ZYDIS_MNEMONIC_VPCMPISTRM: break;
+        default: return false;
+        }
+        const auto control = static_cast<std::uint32_t>(Immediate(2)) & 0x7f;
+        const unsigned elements = (control & 1) ? 8 : 16;
+        auto* first = ReadAs(0, 128);
+        auto* second = ReadAs(1, 128);
+        const auto half = [&](llvm::Value* value, const unsigned part) { return _builder.CreateTrunc(_builder.CreateLShr(value, 64 * part), I64()); };
+        const auto length = [&](std::initializer_list<ZydisRegister> candidates) { return _builder.CreateSExt(ReadRegister(HiddenRegister(candidates)), I64()); };
+        auto* zero = _builder.getInt64(0);
+        auto* firstLength = explicitLengths ? length({ZYDIS_REGISTER_EAX, ZYDIS_REGISTER_RAX}) : zero;
+        auto* secondLength = explicitLengths ? length({ZYDIS_REGISTER_EDX, ZYDIS_REGISTER_RDX}) : zero;
+        auto* type = llvm::FunctionType::get(_builder.getInt32Ty(), {I64(), I64(), I64(), I64(), I64(), I64(), _builder.getInt32Ty()}, false);
+        auto* call = _builder.CreateCall(_module.Runtime("ps5lift_string_compare", type),
+                                         {half(first, 0), half(first, 1), half(second, 0), half(second, 1), firstLength, secondLength,
+                                          _builder.getInt32(control | (explicitLengths ? 0u : static_cast<std::uint32_t>(PS5LIFT_STRING_IMPLICIT)))});
+        call->setDoesNotAccessMemory();
+        call->setDoesNotThrow();
+        auto* matches = _builder.CreateAnd(call, 0xffff);
+        SetFlag(PS5LIFT_CF, _builder.CreateICmpNE(matches, _builder.getInt32(0)));
+        SetFlag(PS5LIFT_OF, _builder.CreateTrunc(matches, _builder.getInt1Ty()));
+        SetFlag(PS5LIFT_ZF, _builder.CreateICmpNE(_builder.CreateAnd(call, PS5LIFT_STRING_SHORT_SECOND), _builder.getInt32(0)));
+        SetFlag(PS5LIFT_SF, _builder.CreateICmpNE(_builder.CreateAnd(call, PS5LIFT_STRING_SHORT_FIRST), _builder.getInt32(0)));
+        SetFlag(PS5LIFT_AF, _builder.getFalse());
+        SetFlag(PS5LIFT_PF, _builder.getFalse());
+        if (index) {
+            const auto counter = HiddenRegister({ZYDIS_REGISTER_ECX, ZYDIS_REGISTER_RCX});
+            auto* position = (control & 0x40) ? _builder.CreateSub(_builder.getInt32(31), _builder.CreateBinaryIntrinsic(llvm::Intrinsic::ctlz, matches, _builder.getFalse()))
+                                              : _builder.CreateBinaryIntrinsic(llvm::Intrinsic::cttz, matches, _builder.getFalse());
+            position = _builder.CreateSelect(_builder.CreateICmpEQ(matches, _builder.getInt32(0)), _builder.getInt32(elements), position);
+            WriteRegister(counter, _builder.CreateZExt(position, Int(ZydisRegisterGetWidth(ZYDIS_MACHINE_MODE_LONG_64, counter))));
+            return true;
+        }
+        llvm::Value* mask = _builder.CreateZExt(matches, Int(128));
+        if (control & 0x40) {
+            auto* bits = _builder.CreateBitCast(_builder.CreateTrunc(matches, Int(elements)), llvm::FixedVectorType::get(_builder.getInt1Ty(), elements));
+            mask = _builder.CreateBitCast(_builder.CreateSExt(bits, llvm::FixedVectorType::get(Int(128 / elements), elements)), Int(128));
+        }
+        WriteRegister(ZYDIS_REGISTER_XMM0, mask);
+        return true;
+    }
+
     bool EmitCrypto(const ZydisMnemonic mnemonic) {
         switch (mnemonic) {
         case ZYDIS_MNEMONIC_AESENC: case ZYDIS_MNEMONIC_VAESENC: case ZYDIS_MNEMONIC_AESENCLAST: case ZYDIS_MNEMONIC_VAESENCLAST:
@@ -3378,6 +3436,7 @@ private:
             Trap();
             return;
         default:
+            if (EmitStringCompare(mnemonic)) return;
             if (EmitVector(mnemonic)) return;
             if (EmitCrypto(mnemonic)) return;
             if (EmitSha(mnemonic)) return;

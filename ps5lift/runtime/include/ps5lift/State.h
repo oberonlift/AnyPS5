@@ -110,6 +110,12 @@ enum Ps5LiftX87Format {
     PS5LIFT_X87_TO_REGISTER = 64
 };
 
+enum Ps5LiftStringCompare {
+    PS5LIFT_STRING_IMPLICIT = 1 << 8,
+    PS5LIFT_STRING_SHORT_SECOND = 1 << 16,
+    PS5LIFT_STRING_SHORT_FIRST = 1 << 17
+};
+
 typedef void (*Ps5LiftFunction)(Ps5LiftState*);
 
 typedef struct Ps5LiftFunctionEntry {
@@ -199,6 +205,7 @@ void ps5lift_unknown_resume(Ps5LiftState* state, uint64_t function, uint64_t res
 void ps5lift_trap(Ps5LiftState* state, uint64_t address);
 void ps5lift_divide_error(Ps5LiftState* state, uint64_t address);
 void ps5lift_string_op(Ps5LiftState* state, uint32_t operation, uint32_t width, uint32_t repeat, uint64_t source_base);
+uint32_t ps5lift_string_compare(uint64_t first_low, uint64_t first_high, uint64_t second_low, uint64_t second_high, int64_t first_length, int64_t second_length, uint32_t control);
 
 #ifdef __cplusplus
 }
