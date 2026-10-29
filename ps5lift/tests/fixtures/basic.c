@@ -416,6 +416,32 @@ __attribute__((noinline)) static void string_instructions(void) {
     line_hex("rep movsb from fs", word_at(buffer + 40));
 }
 
+static volatile u64 divide_inputs[4] = {3, 5, 7, 0x8000000000000000UL};
+
+__attribute__((noinline)) static void divisions(void) {
+    u64 quotient, remainder;
+    __asm__("divq %4" : "=a"(quotient), "=d"(remainder) : "a"(divide_inputs[1]), "d"(divide_inputs[0]), "r"(divide_inputs[2]) : "cc");
+    line_hex("div 128 by 64 quotient", quotient);
+    line_hex("div 128 by 64 remainder", remainder);
+    __asm__("idivq %4" : "=a"(quotient), "=d"(remainder) : "a"(-(i64)divide_inputs[2] * 14 - 2), "d"(-1L), "r"(divide_inputs[2]) : "cc");
+    line("idiv narrow quotient", (i64)quotient);
+    line("idiv narrow remainder", (i64)remainder);
+    __asm__("idivq %4" : "=a"(quotient), "=d"(remainder) : "a"(~divide_inputs[1]), "d"(~divide_inputs[0]), "r"(divide_inputs[2] + 4) : "cc");
+    line_hex("idiv wide quotient", quotient);
+    line_hex("idiv wide remainder", remainder);
+    __asm__("idivq %4" : "=a"(quotient), "=d"(remainder) : "a"(divide_inputs[3]), "d"(0UL), "r"(-1L) : "cc");
+    line_hex("idiv 2^63 by -1 quotient", quotient);
+    line_hex("idiv 2^63 by -1 remainder", remainder);
+    u16 ax = (u16)(divide_inputs[2] * 142 + 6);
+    __asm__("divb %1" : "+a"(ax) : "q"((u8)divide_inputs[2]) : "cc");
+    line("div 8 quotient", ax & 0xff);
+    line("div 8 remainder", ax >> 8);
+    u32 eax = (u32)(-(i32)divide_inputs[2]), edx = 0xffffffffu;
+    __asm__("idivl %2" : "+a"(eax), "+d"(edx) : "r"((u32)2) : "cc");
+    line("idiv 32 quotient", (i32)eax);
+    line("idiv 32 remainder", (i32)edx);
+}
+
 static volatile u64 locked_word;
 
 #define LOCKED(name, setup, instruction, start)                                                                        \
@@ -530,6 +556,7 @@ int main(void) {
     unaligned_accesses();
     locked_forms();
     string_instructions();
+    divisions();
 
     struct Record record = make_record(41);
     struct Record copy;
