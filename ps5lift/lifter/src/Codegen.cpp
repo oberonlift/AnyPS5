@@ -3,6 +3,7 @@
 #include "LlvmCompatibility.hpp"
 
 #include <llvm/IR/LegacyPassManager.h>
+#include <llvm/IR/Verifier.h>
 #include <llvm/MC/MCSubtargetInfo.h>
 #include <llvm/MC/TargetRegistry.h>
 #include <llvm/Passes/PassBuilder.h>
@@ -104,6 +105,9 @@ void Optimize(llvm::Module& module, const CodegenOptions& options) {
     builder.registerLoopAnalyses(loops);
     builder.crossRegisterProxies(loops, functions, cgscc, modules);
     builder.buildPerModuleDefaultPipeline(llvm::OptimizationLevel::O2).run(module, modules);
+    std::string problems;
+    llvm::raw_string_ostream stream(problems);
+    if (llvm::verifyModule(module, &stream)) throw std::runtime_error("LLVM's optimizer left a module that does not verify: " + problems);
 }
 
 llvm::SmallVector<char, 0> CompileObject(llvm::Module& module, const CodegenOptions& options) {
@@ -112,7 +116,7 @@ llvm::SmallVector<char, 0> CompileObject(llvm::Module& module, const CodegenOpti
     llvm::SmallVector<char, 0> object;
     llvm::raw_svector_ostream stream(object);
     llvm::legacy::PassManager passes;
-    if (machine->addPassesToEmitFile(passes, stream, nullptr, llvm::CodeGenFileType::ObjectFile)) throw std::runtime_error("The target cannot emit object files");
+    if (machine->addPassesToEmitFile(passes, stream, nullptr, llvm::CodeGenFileType::ObjectFile, false)) throw std::runtime_error("The target cannot emit object files");
     passes.run(module);
     return object;
 }
