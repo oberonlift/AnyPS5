@@ -124,6 +124,9 @@ foreach(fixture libc exceptions kernel fiber)
                     --fixture ${fixture})
 endforeach()
 
+add_test(NAME record_bridges
+        COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tools/check_record_bridges.py --clang ${CMAKE_C_COMPILER})
+
 add_test(NAME libc_upstream_${PS5LIFT_HOST_ARCH}
         COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tools/run_libc_tests.py
                 --anyps5-build ${PS5LIFT_ANYPS5_BUILD}

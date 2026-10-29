@@ -13,7 +13,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from anyps5_build import Build
 from run_fixture import FIXTURES, GUEST_BASE, GUEST_FLAGS, ROOT, compare, host_triple, lifter_target, run, runner_for, runtime_link_arguments
 
-IMPORTS = ["printf", "snprintf", "vsnprintf", "sscanf", "puts", "strtold", "strtod", "modfl", "fabsl", "fprintf", "_Stdout"]
+IMPORTS = ["printf", "snprintf", "vsnprintf", "sscanf", "puts", "strtold", "strtod", "modfl", "fabsl", "fprintf", "_Stdout", "div", "ldiv", "lldiv", "imaxdiv"]
 KERNEL_IMPORTS = ["printf", "exit", "scePthreadCreate", "scePthreadJoin", "scePthreadMutexInit", "scePthreadMutexLock", "scePthreadMutexUnlock",
                   "scePthreadMutexDestroy", "sceKernelUsleep", "sceKernelGetProcessTime", "sceKernelReadTsc", "sceKernelGetTscFrequency", "signal", "raise",
                   "sigprocmask", "sigsetjmp", "siglongjmp", "scePthreadExit",

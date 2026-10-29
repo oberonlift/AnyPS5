@@ -61,6 +61,108 @@ class Unsupported(Exception):
     pass
 
 
+Record = collections.namedtuple("Record", "name definitions eightbytes size")
+
+
+def scalar(canonical):
+    if canonical.kind in INTEGER_KINDS or canonical.kind in (K.INT128, K.UINT128):
+        return canonical.spelling.replace("const ", "").replace("volatile ", ""), "integer"
+    if canonical.kind in FLOAT_KINDS:
+        return canonical.spelling.replace("const ", "").replace("volatile ", ""), "sse"
+    if canonical.kind == K.ENUM:
+        return canonical.get_declaration().enum_type.get_canonical().spelling, "integer"
+    if canonical.kind in POINTER_KINDS:
+        if canonical.get_pointee().get_canonical().kind in FUNCTION_KINDS:
+            raise Unsupported("a record holding a function pointer")
+        return "void*", "integer"
+    raise Unsupported(f"a record holding a {canonical.kind.spelling} field")
+
+
+def fields(canonical):
+    for field in canonical.get_fields():
+        if field.is_bitfield():
+            raise Unsupported("a record with bit-fields")
+        yield field, field.type.get_canonical(), field.get_field_offsetof() // 8
+
+
+def leaves(canonical, offset):
+    if canonical.kind == K.RECORD:
+        for _, field_type, field_offset in fields(canonical):
+            yield from leaves(field_type, offset + field_offset)
+    elif canonical.kind == K.CONSTANTARRAY:
+        element = canonical.element_type.get_canonical()
+        for index in range(canonical.element_count):
+            yield from leaves(element, offset + index * element.get_size())
+    else:
+        yield offset, canonical.get_size(), canonical.get_align(), scalar(canonical)[1]
+
+
+def eightbytes(canonical):
+    size = canonical.get_size()
+    if size > 16:
+        return "memory"
+    classes = [None] * ((size + 7) // 8)
+    for offset, length, alignment, kind in leaves(canonical, 0):
+        if offset % alignment:
+            return "memory"
+        for eightbyte in range(offset // 8, (offset + length - 1) // 8 + 1):
+            if classes[eightbyte] != "integer":
+                classes[eightbyte] = kind
+    if None in classes:
+        raise Unsupported("a record with an eightbyte of padding only")
+    return tuple(classes)
+
+
+def declarator(canonical, definitions):
+    if canonical.kind == K.RECORD:
+        nested = record(canonical)
+        definitions.extend(definition for definition in nested.definitions if definition not in definitions)
+        return nested.name, ""
+    if canonical.kind == K.CONSTANTARRAY:
+        if canonical.element_count == 0:
+            raise Unsupported("a record with a zero-length array")
+        spelling, extent = declarator(canonical.element_type.get_canonical(), definitions)
+        return spelling, f"[{canonical.element_count}]{extent}"
+    return scalar(canonical)[0], ""
+
+
+def record(type_):
+    canonical = type_.get_canonical()
+    declaration = canonical.get_declaration()
+    size, alignment = canonical.get_size(), canonical.get_align()
+    if size < 0 or alignment < 0:
+        raise Unsupported("a record of unknown layout")
+    if not canonical.is_pod():
+        raise Unsupported("a record that is not plain old data")
+    if any(child.kind == cindex.CursorKind.CXX_BASE_SPECIFIER for child in declaration.get_children()):
+        raise Unsupported("a record with a base class")
+    union = declaration.kind == cindex.CursorKind.UNION_DECL
+    definitions = []
+    members = []
+    offsets = []
+    position = 0
+    for index, (_, field_type, offset) in enumerate(fields(canonical)):
+        spelling, extent = declarator(field_type, definitions)
+        field_alignment = field_type.get_align()
+        if field_alignment > alignment or offset % field_alignment or (not union and offset < position):
+            raise Unsupported("a packed record")
+        if not union and offset != (position + field_alignment - 1) // field_alignment * field_alignment:
+            members.append(f"unsigned char padding{index}[{offset - position}];")
+        members.append(f"{spelling} field{index}{extent};")
+        offsets.append((f"field{index}", offset))
+        position = max(position, offset + field_type.get_size())
+    if not members:
+        raise Unsupported("an empty record")
+    if (position + alignment - 1) // alignment * alignment != size:
+        members.append(f"unsigned char padding[{size if union else size - position}];")
+    keyword = "union" if union else "struct"
+    body = " ".join(members)
+    name = "Ps5LiftRecord" + hashlib.sha1(f"{keyword} {alignment} {body}".encode()).hexdigest()[:12]
+    checks = [f"sizeof({name}) == {size}", f"alignof({name}) == {alignment}"] + [f"offsetof({name}, {field}) == {offset}" for field, offset in offsets]
+    definitions.append("\n".join([f"{keyword} alignas({alignment}) {name} {{ {body} }};"] + [f"static_assert({check});" for check in checks]))
+    return Record(name, tuple(definitions), eightbytes(canonical), size)
+
+
 def classify(type_, role):
     canonical = type_.get_canonical()
     kind = canonical.kind
@@ -87,8 +189,10 @@ def classify(type_, role):
     if kind in (K.INCOMPLETEARRAY, K.CONSTANTARRAY) and role == "parameter":
         return ("pointer", "void*")
     if kind == K.RECORD:
-        size = canonical.get_size()
-        raise Unsupported(f"{role} passed by value as a {size}-byte record" if size >= 0 else f"{role} passed by value as a record of unknown layout")
+        try:
+            return ("record", record(canonical))
+        except Unsupported as reason:
+            raise Unsupported(f"{role} passed by value as {reason}")
     if kind in (K.INT128, K.UINT128):
         return ("integer128", "unsigned __int128" if kind == K.UINT128 else "__int128")
     raise Unsupported(f"{role} of kind {kind.spelling}")
@@ -112,13 +216,34 @@ def callback_signature(function):
 def describe(cursor, symbol):
     variadic = cursor.type.kind == K.FUNCTIONPROTO and cursor.type.is_function_variadic()
     return_class = classify(cursor.result_type, "return")
+    records = list(return_class[1].definitions) if return_class[0] == "record" else []
     parameters = []
-    integers = 0
+    integers = 1 if return_class[0] == "record" and return_class[1].eightbytes == "memory" else 0
     floats = 0
     stack = 0
     for argument in cursor.get_arguments():
         parameter_class, spelling = classify(argument.type, "parameter")
-        if parameter_class == "extended":
+        if parameter_class == "record":
+            argument_record = spelling
+            spelling = argument_record.name
+            records.extend(definition for definition in argument_record.definitions if definition not in records)
+            classes = argument_record.eightbytes
+            in_registers = classes != "memory" and integers + classes.count("integer") <= 6 and floats + classes.count("sse") <= 8
+            if in_registers:
+                sources = []
+                for kind in classes:
+                    if kind == "integer":
+                        sources.append(f"Integer<std::uint64_t>(state, {integers})")
+                        integers += 1
+                    else:
+                        sources.append(f"Floating<std::uint64_t>(state, {floats})")
+                        floats += 1
+                access = f"Record<{spelling}>({', '.join(sources)})"
+            else:
+                stack += stack % 2 if argument.type.get_canonical().get_align() > 8 else 0
+                access = f"StackRecord<{spelling}>(state, {stack})"
+                stack += (argument_record.size + 7) // 8
+        elif parameter_class == "extended":
             stack += stack % 2
             access = f"Extended(state, {stack})"
             stack += 2
@@ -151,7 +276,9 @@ def describe(cursor, symbol):
             else:
                 stack += 1
         parameters.append((spelling, access))
-    return {"symbol": symbol, "return": return_class, "parameters": parameters, "variadic": (integers, floats, stack) if variadic else None}
+    if return_class[0] == "record":
+        return_class = ("record", (return_class[1].name, return_class[1].eightbytes))
+    return {"symbol": symbol, "return": return_class, "parameters": parameters, "records": records, "variadic": (integers, floats, stack) if variadic else None}
 
 
 DISAMBIGUATION = re.compile(r"_nid_disambig\d+$")
@@ -279,6 +406,10 @@ def data_symbol(nid):
 
 def emit(exports, data, library_name):
     lines = [f"#include <ps5lift/Bridge.hpp>", "", "#include <cstddef>", "#include <cstdint>", "#include <type_traits>", "", "using namespace Ps5Lift::Bridge;", ""]
+    records = []
+    for nid in sorted(exports):
+        records.extend(definition for definition in exports[nid]["records"] if definition not in records)
+    lines.extend(records + ([""] if records else []))
     for nid in sorted(exports):
         export = exports[nid]
         if export["variadic"] and not export.get("forward"):
@@ -286,6 +417,8 @@ def emit(exports, data, library_name):
         return_class, return_spelling = export["return"]
         if return_class == "function":
             return_spelling = f"std::add_pointer_t<{return_spelling}>"
+        elif return_class == "record":
+            return_spelling = return_spelling[0]
         declaration = ", ".join([spelling for spelling, _ in export["parameters"]] + (["..."] if export.get("forward") else []))
         lines.append(f'extern "C" {return_spelling} {export["symbol"]}({declaration});')
     for nid in sorted(data):
@@ -314,6 +447,12 @@ def emit(exports, data, library_name):
             lines.append(f"        ReturnExtended(state, {call});")
         elif return_class == "function":
             lines.append(f"        Return(state, GuestFunction<{return_spelling}>({call}));")
+        elif return_class == "record" and return_spelling[1] == "memory":
+            lines.append("        const auto result = Integer<std::uint64_t>(state, 0);")
+            lines.append(f"        ReturnIndirect(state, result, {call});")
+        elif return_class == "record":
+            classes = ", ".join("Eightbyte::Integer" if kind == "integer" else "Eightbyte::Sse" for kind in return_spelling[1])
+            lines.append(f"        ReturnRecord<{classes}>(state, {call});")
         else:
             lines.append(f"        Return(state, {call});")
         lines.append("    } catch (const GuestUnwind&) {")
