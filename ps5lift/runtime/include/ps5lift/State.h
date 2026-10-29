@@ -188,7 +188,7 @@ uint64_t ps5lift_xgetbv(uint64_t address, uint32_t index);
 __attribute__((noreturn, format(printf, 1, 2))) void ps5lift_fail(const char* format, ...);
 void ps5lift_unsupported(Ps5LiftState* state, uint64_t address, const char* mnemonic);
 void ps5lift_trap(Ps5LiftState* state, uint64_t address);
-void ps5lift_string_op(Ps5LiftState* state, uint32_t operation, uint32_t width, uint32_t repeat);
+void ps5lift_string_op(Ps5LiftState* state, uint32_t operation, uint32_t width, uint32_t repeat, uint64_t source_base);
 
 #ifdef __cplusplus
 }
