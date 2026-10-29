@@ -65,6 +65,7 @@ public:
     std::uint64_t LoadBias() const;
     const GuestArray& ProgramHeaders() const;
     std::optional<std::uint64_t> Export(const std::string& name) const;
+    const std::map<std::string, std::uint64_t>& Exports() const;
     const std::set<std::uint64_t>& FunctionExports() const;
     std::uint64_t Init() const;
     const GuestArray& InitArray() const;

@@ -1,10 +1,13 @@
 #include <ps5lift/Bridge.hpp>
 #include <ps5lift/State.h>
 
+#include <algorithm>
+#include <cinttypes>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <string_view>
 
 extern "C" std::uint32_t GuestCpuMxcsr_nid_no_patch(void) {
     return ps5lift_read_mxcsr(ps5lift_current_state());
@@ -113,6 +116,42 @@ extern "C" [[noreturn]] void GuestCpuUnwindResume_nid_no_patch(const std::uint64
 
 extern "C" std::uint64_t GuestCpuReadTsc_nid_no_patch(void) {
     return ps5lift_read_tsc();
+}
+
+namespace {
+
+// The lifter writes each image's exports sorted by name.
+std::uint64_t ImageSymbol(const Ps5LiftImage& image, const char* name) {
+    const auto* begin = image.Exports;
+    const auto* end = begin + image.ExportCount;
+    const auto* found = std::lower_bound(begin, end, name, [](const Ps5LiftExport& entry, const char* wanted) { return std::strcmp(entry.Name, wanted) < 0; });
+    return found != end && std::strcmp(found->Name, name) == 0 ? found->Address : 0;
+}
+
+}
+
+// Images are numbered from 1 in the order the lifter loaded them, the executable first; 0 names none, or for a symbol
+// every image in that order.
+extern "C" std::uint64_t GuestCpuFindImage_nid_no_patch(const char* fileName) {
+    const std::string_view wanted(fileName);
+    for (std::uint64_t index = 1; index < ps5lift_program.ImageCount; ++index) {
+        const std::string_view name(ps5lift_program.Images[index].Name);
+        if (name == wanted || (name.size() > wanted.size() && name.ends_with(wanted) && name[name.size() - wanted.size() - 1] == '/')) return index + 1;
+    }
+    return 0;
+}
+
+extern "C" std::uint64_t GuestCpuImageSymbol_nid_no_patch(const std::uint64_t image, const char* name) {
+    if (image > ps5lift_program.ImageCount) ps5lift_fail("GuestCpuImageSymbol: there is no image %" PRIu64, image);
+    if (image != 0) return ImageSymbol(ps5lift_program.Images[image - 1], name);
+    for (std::uint64_t index = 0; index < ps5lift_program.ImageCount; ++index) {
+        if (const auto address = ImageSymbol(ps5lift_program.Images[index], name)) return address;
+    }
+    return 0;
+}
+
+extern "C" std::uint64_t GuestCpuCall_nid_no_patch(const std::uint64_t target, const std::uint64_t first, const std::uint64_t second, const std::uint64_t third) {
+    return Ps5Lift::Bridge::CallGuest<std::uint64_t>(target, first, second, third);
 }
 
 extern "C" void GuestCpuUseStack_nid_no_patch(const std::uint64_t stackTop) {
