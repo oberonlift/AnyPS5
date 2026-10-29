@@ -97,6 +97,10 @@ static long round_up_on_thread(long argument) {
     return argument;
 }
 
+static long stack_guarded_on_thread(long argument) {
+    return host_stack_guarded() + argument;
+}
+
 static long exit_calls;
 
 static long at_exit(long argument) {
@@ -130,6 +134,8 @@ int main(void) {
     line("callback rounds up on a native thread", rounded_up > rounded_nearest);
     line("callback at native thread exit", host_call_at_thread_exit(at_exit, 9));
     line("exit callbacks", exit_calls);
+    line("main thread stack guarded", host_stack_guarded());
+    line("native thread stack guarded", host_on_thread(stack_guarded_on_thread, 0));
     return 0;
 }
 

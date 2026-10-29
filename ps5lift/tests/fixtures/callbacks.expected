@@ -9,3 +9,5 @@ native thread keeps its floating-point environment = 1
 callback rounds up on a native thread = 1
 callback at native thread exit = 19
 exit callbacks = 2
+main thread stack guarded = 1
+native thread stack guarded = 1

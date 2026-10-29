@@ -74,6 +74,10 @@ long host_call_at_thread_exit(long (*function)(long), long argument) {
     return exit.call.result;
 }
 
+long host_stack_guarded(void) {
+    return 1;
+}
+
 long host_call_eight(long (*function)(long, long, long, long, long, long, long, long)) {
     return function(1, 2, 3, 4, 5, 6, 7, 8) + function(10, 20, 30, 40, 50, 60, 70, 80);
 }
