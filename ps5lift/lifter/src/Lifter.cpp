@@ -2789,6 +2789,45 @@ private:
         Write(0, AsInteger(result));
     }
 
+    // dpps and dppd, in each 128-bit lane: the products of the elements the control's high bits select, the others
+    // +0.0 without being multiplied, summed and written to the elements its low bits select. Each element gets its own
+    // sum, pairing the products as the SDM does but adding them in the order that decides which NaN a sum of several
+    // returns: for dpps (p1 + p0) + (p3 + p2) in elements 0 and 1 and (p3 + p2) + (p1 + p0) in 2 and 3, for dppd its
+    // own product first. That is the order an Intel Goldmont Plus gives; Zen 2's is not measured.
+    void DotProduct(const unsigned element) {
+        const int base = Base(3);
+        const auto width = Bits(0);
+        const auto control = Immediate(base + 2);
+        const unsigned count = width / element;
+        const unsigned perLane = 128 / element;
+        auto* a = AsFloats(ReadAs(base, width), element);
+        auto* b = AsFloats(ReadAs(base + 1, width), element);
+        auto* type = a->getType();
+        auto* zero = llvm::Constant::getNullValue(type);
+        std::vector<llvm::Constant*> selected(count);
+        for (unsigned i = 0; i < count; ++i) selected[i] = _builder.getInt1(((control >> (4 + i % perLane)) & 1) != 0);
+        auto* chosen = llvm::ConstantVector::get(selected);
+        auto* products = Arithmetic(FloatKind::Mul, _builder.CreateSelect(chosen, a, zero), _builder.CreateSelect(chosen, b, zero));
+        llvm::Value* result = zero;
+        for (unsigned lane = 0; lane < count; lane += perLane) {
+            const auto product = [&](const unsigned i) { return _builder.CreateExtractElement(products, _builder.getInt64(lane + i)); };
+            const auto add = [&](llvm::Value* a, llvm::Value* b) { return Arithmetic(FloatKind::Add, a, b); };
+            for (unsigned i = 0; i < perLane; ++i) {
+                if (!((control >> i) & 1)) continue;
+                llvm::Value* sum = nullptr;
+                if (perLane == 2) {
+                    sum = add(product(i), product(1 - i));
+                } else {
+                    auto* low = add(product(1), product(0));
+                    auto* high = add(product(3), product(2));
+                    sum = i < 2 ? add(low, high) : add(high, low);
+                }
+                result = _builder.CreateInsertElement(result, sum, _builder.getInt64(lane + i));
+            }
+        }
+        Write(0, FloatBits(result));
+    }
+
     bool EmitFloat(const ZydisMnemonic mnemonic) {
         if (auto spec = FloatSpecOf(mnemonic)) {
             if (mnemonic == ZYDIS_MNEMONIC_CMPSD && Operand(0).type != ZYDIS_OPERAND_TYPE_REGISTER) return false;
@@ -2797,6 +2836,12 @@ private:
         }
         if (EmitFloatConversion(mnemonic)) return true;
         switch (mnemonic) {
+        case ZYDIS_MNEMONIC_DPPS: case ZYDIS_MNEMONIC_VDPPS:
+            DotProduct(32);
+            return true;
+        case ZYDIS_MNEMONIC_DPPD: case ZYDIS_MNEMONIC_VDPPD:
+            DotProduct(64);
+            return true;
         case ZYDIS_MNEMONIC_COMISS: case ZYDIS_MNEMONIC_VCOMISS: case ZYDIS_MNEMONIC_UCOMISS: case ZYDIS_MNEMONIC_VUCOMISS:
             CompareScalar(32);
             return true;
