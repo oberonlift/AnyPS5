@@ -2647,7 +2647,7 @@ private:
 
     llvm::Value* ReadRegisterOrMemory(const int index, const unsigned bits) {
         const auto& operand = Operand(index);
-        if (operand.type == ZYDIS_OPERAND_TYPE_MEMORY) return Load(Address(operand), bits, false);
+        if (operand.type == ZYDIS_OPERAND_TYPE_MEMORY) return Load(Address(operand), bits, NeedsOrdering(operand, bits));
         return _builder.CreateZExtOrTrunc(ReadRegister(operand.reg.value), Int(bits));
     }
 
@@ -2671,7 +2671,7 @@ private:
         }
         const int base = vex ? 1 : 0;
         auto* keep = AsVector(_builder.CreateTrunc(ReadRegister(Operand(base).reg.value), Int(128)), 64);
-        auto* other = Operand(base + 1).type == ZYDIS_OPERAND_TYPE_MEMORY ? Load(Address(Operand(base + 1)), 64, false) : nullptr;
+        auto* other = Operand(base + 1).type == ZYDIS_OPERAND_TYPE_MEMORY ? Load(Address(Operand(base + 1)), 64, NeedsOrdering(Operand(base + 1), 64)) : nullptr;
         auto* otherVector = other == nullptr ? AsVector(_builder.CreateTrunc(ReadRegister(Operand(base + 1).reg.value), Int(128)), 64) : nullptr;
         llvm::Value* result = nullptr;
         switch (mnemonic) {
@@ -2768,7 +2768,7 @@ private:
             auto* destination = AsVector(ReadVector(base, 128), 32);
             const auto control = Immediate(base + 2);
             llvm::Value* element = nullptr;
-            if (Operand(base + 1).type == ZYDIS_OPERAND_TYPE_MEMORY) element = Load(Address(Operand(base + 1)), 32, false);
+            if (Operand(base + 1).type == ZYDIS_OPERAND_TYPE_MEMORY) element = Load(Address(Operand(base + 1)), 32, NeedsOrdering(Operand(base + 1), 32));
             else element = _builder.CreateExtractElement(AsVector(_builder.CreateTrunc(ReadRegister(Operand(base + 1).reg.value), Int(128)), 32), _builder.getInt64((control >> 6) & 3));
             llvm::Value* result = _builder.CreateInsertElement(destination, element, _builder.getInt64((control >> 4) & 3));
             for (unsigned i = 0; i < 4; ++i) {
@@ -2785,9 +2785,15 @@ private:
         }
     }
 
+    // The runtime reads and writes an x87 memory operand with memcpy, so under TSO the call is fenced on both sides.
     llvm::Value* CallX87(const std::uint32_t operation, const std::uint32_t format, llvm::Value* address, const std::uint32_t index) {
+        const auto* memory = address ? X87Memory() : nullptr;
+        const bool ordered = memory != nullptr && _module.Options().Memory == MemoryModel::Tso && memory->mem.base != ZYDIS_REGISTER_RSP;
+        if (ordered) _builder.CreateFence(llvm::AtomicOrdering::SequentiallyConsistent);
         auto callee = _module.Runtime("ps5lift_x87", llvm::FunctionType::get(_builder.getInt32Ty(), {_module.Pointer(), _builder.getInt32Ty(), _builder.getInt32Ty(), I64(), _builder.getInt32Ty()}, false));
-        return _builder.CreateCall(callee, {_state, _builder.getInt32(operation), _builder.getInt32(format), address ? address : _builder.getInt64(0), _builder.getInt32(index)});
+        auto* result = _builder.CreateCall(callee, {_state, _builder.getInt32(operation), _builder.getInt32(format), address ? address : _builder.getInt64(0), _builder.getInt32(index)});
+        if (ordered) _builder.CreateFence(llvm::AtomicOrdering::SequentiallyConsistent);
+        return result;
     }
 
     static bool IsStackRegister(const ZydisDecodedOperand& operand) {
