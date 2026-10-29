@@ -82,8 +82,6 @@ Ps5LiftFunction Lookup(const std::uint64_t target) {
     return found->Host;
 }
 
-thread_local Ps5LiftState* CurrentState = nullptr;
-
 struct GuestThread {
     std::uint64_t Entry = 0;
     std::uint64_t Argument = 0;
@@ -94,6 +92,52 @@ struct GuestThread {
     std::uint8_t* Tls = nullptr;
     pthread_t Handle{};
 };
+
+struct HostFloatingPoint {
+#if defined(__aarch64__)
+    std::uint64_t Fpcr = 0;
+    std::uint64_t Fpsr = 0;
+#elif defined(__x86_64__)
+    std::uint32_t Mxcsr = 0;
+#endif
+};
+
+HostFloatingPoint SaveHostFloatingPoint() {
+    HostFloatingPoint saved;
+#if defined(__aarch64__)
+    __asm__ volatile("mrs %0, fpcr" : "=r"(saved.Fpcr));
+    __asm__ volatile("mrs %0, fpsr" : "=r"(saved.Fpsr));
+#elif defined(__x86_64__)
+    saved.Mxcsr = _mm_getcsr();
+#endif
+    return saved;
+}
+
+void RestoreHostFloatingPoint(const HostFloatingPoint& saved) {
+#if defined(__aarch64__)
+    __asm__ volatile("msr fpcr, %0" : : "r"(saved.Fpcr));
+    __asm__ volatile("msr fpsr, %0" : : "r"(saved.Fpsr));
+#elif defined(__x86_64__)
+    _mm_setcsr(saved.Mxcsr);
+#endif
+}
+
+// A native thread that runs guest code. Its own code keeps the host's floating-point environment, and the host FPU
+// holds the guest's only while a callback runs. A thread that jumps out of its callbacks, as scePthreadExit does to
+// leave the guest's frames, stays in the guest's environment until it exits.
+struct ForeignThread {
+    GuestThread Thread;
+    Ps5LiftState State{};
+    std::uint64_t Entered = 0;
+    HostFloatingPoint Host;
+};
+
+thread_local Ps5LiftState* CurrentState = nullptr;
+thread_local ForeignThread* Foreign = nullptr;
+
+bool GuestEnvironmentLive() {
+    return Foreign == nullptr || Foreign->Entered != 0;
+}
 
 std::uint64_t PrepareThread(GuestThread& thread, Ps5LiftState& state) {
     thread.Stack = static_cast<std::uint8_t*>(MapAnonymous(GuestStackSize));
@@ -109,7 +153,6 @@ std::uint64_t PrepareThread(GuestThread& thread, Ps5LiftState& state) {
     state.FsBase = threadPointer;
     state.Mxcsr = thread.Mxcsr & ~0x3fu;
     state.X87Control = ConsoleX87Control;
-    ps5lift_apply_mxcsr(&state);
     return reinterpret_cast<std::uint64_t>(thread.Stack + GuestStackSize);
 }
 
@@ -130,6 +173,7 @@ void* RunThread(void* argument) {
     Ps5LiftState state{};
     const auto top = PrepareThread(thread, state);
     CurrentState = &state;
+    ps5lift_apply_mxcsr(&state);
     const auto function = Lookup(thread.Entry);
     if (function == nullptr) ps5lift_fail("the thread entry 0x%" PRIx64 " was not lifted", thread.Entry);
 
@@ -156,6 +200,7 @@ void* RunThread(void* argument) {
     function(&state);
     if (state.Unwinding) ps5lift_fail("nothing on a guest thread's stack resumes at 0x%" PRIx64, state.ResumeRip);
     thread.Result = state.Gpr[PS5LIFT_RAX];
+    CurrentState = nullptr;
     return nullptr;
 }
 
@@ -211,6 +256,7 @@ void SetHostExceptions(const std::uint32_t flags) {
 }
 
 extern "C" void ps5lift_apply_mxcsr(Ps5LiftState* state) {
+    if (!GuestEnvironmentLive()) return;
     const auto mxcsr = state->Mxcsr;
 #if defined(__aarch64__)
     constexpr std::uint32_t MxcsrDenormalsAreZero = 1u << 6;
@@ -281,6 +327,7 @@ extern "C" std::uint32_t ps5lift_processor_id(void) {
 }
 
 extern "C" std::uint32_t ps5lift_read_mxcsr(Ps5LiftState* state) {
+    if (!GuestEnvironmentLive()) return state->Mxcsr;
     return (state->Mxcsr & ~MxcsrExceptions) | HostExceptions();
 }
 
@@ -363,21 +410,57 @@ extern "C" std::uint64_t ps5lift_thread_create(Ps5LiftState* parent, const std::
     return reinterpret_cast<std::uint64_t>(thread);
 }
 
+namespace {
+
+void ReleaseForeignThread(void* pointer) {
+    auto* foreign = static_cast<ForeignThread*>(pointer);
+    Foreign = nullptr;
+    CurrentState = nullptr;
+    munmap(foreign->Thread.Stack, GuestStackSize);
+    munmap(foreign->Thread.Tls, TlsSize);
+    delete foreign;
+}
+
+// A key's destructor runs after the thread's thread_local destructors, so a callback from one of those still finds
+// its state, and runs again if a later destructor's callback makes a new one.
+pthread_key_t ForeignThreadKey() {
+    static const pthread_key_t key = [] {
+        pthread_key_t created;
+        if (const int error = pthread_key_create(&created, ReleaseForeignThread); error != 0) ps5lift_fail("cannot create the key that releases native threads' guest state: %s", std::strerror(error));
+        return created;
+    }();
+    return key;
+}
+
+}
+
 extern "C" Ps5LiftState* ps5lift_current_state(void) {
     if (CurrentState != nullptr) return CurrentState;
-    struct ForeignThread {
-        GuestThread Thread;
-        Ps5LiftState State{};
-        ~ForeignThread() {
-            munmap(Thread.Stack, GuestStackSize);
-            munmap(Thread.Tls, TlsSize);
-        }
-    };
-    thread_local ForeignThread foreign;
-    const auto top = PrepareThread(foreign.Thread, foreign.State);
-    foreign.State.Gpr[PS5LIFT_RSP] = top & ~std::uint64_t{15};
-    CurrentState = &foreign.State;
+    auto* foreign = new ForeignThread;
+    if (const int error = pthread_setspecific(ForeignThreadKey(), foreign); error != 0) ps5lift_fail("cannot keep a native thread's guest state: %s", std::strerror(error));
+    const auto top = PrepareThread(foreign->Thread, foreign->State);
+    foreign->State.Gpr[PS5LIFT_RSP] = top & ~std::uint64_t{15};
+    Foreign = foreign;
+    CurrentState = &foreign->State;
     return CurrentState;
+}
+
+extern "C" Ps5LiftState* ps5lift_enter_guest(void) {
+    auto* state = ps5lift_current_state();
+    if (Foreign != nullptr && Foreign->Entered++ == 0) {
+        Foreign->Host = SaveHostFloatingPoint();
+        ps5lift_apply_mxcsr(state);
+    }
+    return state;
+}
+
+extern "C" void ps5lift_leave_guest(void) {
+    if (Foreign == nullptr) return;
+    if (Foreign->Entered == 1) {
+        Foreign->State.Mxcsr = ps5lift_read_mxcsr(&Foreign->State);
+        RestoreHostFloatingPoint(Foreign->Host);
+    }
+    --Foreign->Entered;
 }
 
 extern "C" std::uint64_t ps5lift_thread_join(const std::uint64_t handle) {

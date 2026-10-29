@@ -4,6 +4,7 @@ int guest_printf(const char* format, ...) __asm__(NID_printf);
 void guest_exit(int code) __asm__(NID_exit) __attribute__((noreturn));
 int guest_pthread_create(void** thread, const void* attr, void* (*entry)(void*), void* argument, const char* name) __asm__(NID_scePthreadCreate);
 int guest_pthread_join(void* thread, void** result) __asm__(NID_scePthreadJoin);
+void guest_pthread_exit(void* result) __asm__(NID_scePthreadExit) __attribute__((noreturn));
 int guest_mutex_init(void** mutex, const void* attr, const char* name) __asm__(NID_scePthreadMutexInit);
 int guest_mutex_lock(void** mutex) __asm__(NID_scePthreadMutexLock);
 int guest_mutex_unlock(void** mutex) __asm__(NID_scePthreadMutexUnlock);
@@ -34,6 +35,10 @@ static void* worker(void* argument) {
         guest_mutex_unlock(&mutex);
     }
     return (void*)((long)argument * 3);
+}
+
+static void* exiting_worker(void* argument) {
+    guest_pthread_exit((void*)((long)argument + 70));
 }
 
 enum { SigBlock = 1, SigSetmask = 3, Sigusr1 = 30 };
@@ -75,6 +80,11 @@ int main(void) {
     }
     guest_printf("counter %ld results %ld\n", counter, sum);
     guest_printf("mutex destroy %d\n", guest_mutex_destroy(&mutex));
+
+    void* exiting = 0;
+    void* exited = 0;
+    guest_pthread_create(&exiting, 0, exiting_worker, (void*)7, "exiting");
+    guest_printf("scePthreadExit join %d result %ld\n", guest_pthread_join(exiting, &exited), (long)exited);
 
     const unsigned long before = guest_process_time();
     guest_usleep(20000);
