@@ -1,5 +1,7 @@
 #include <lifter/Lifter.hpp>
 
+#include "LlvmCompatibility.hpp"
+
 #include <ps5lift/State.h>
 
 #include <llvm/IR/Constants.h>
@@ -136,7 +138,7 @@ public:
                  LiftReport& report)
         : _context(context), _image(image), _functions(functions), _options(options), _target(target), _report(report), _module(std::make_unique<llvm::Module>("ps5lift", context)) {
         if (!_target.isAArch64() && _target.getArch() != llvm::Triple::x86_64) throw std::runtime_error("ps5lift cannot lift for " + _target.str());
-        _module->setTargetTriple(_target.str());
+        _module->setTargetTriple(TripleArgument(_target));
         llvm::MDBuilder metadata(_context);
         auto* root = metadata.createTBAARoot("ps5lift");
         auto* stateType = metadata.createTBAAScalarTypeNode("state", root);
@@ -287,10 +289,10 @@ private:
         }
         std::vector<llvm::Constant*> imports;
         for (const auto& [address, name] : image.Imports()) {
-            auto* text = llvm::IRBuilder<>(_context).CreateGlobalStringPtr(ImportName(_options, name), "import_name", 0, _module.get());
+            auto* text = llvm::IRBuilder<>(_context).CreateGlobalString(ImportName(_options, name), "import_name", 0, _module.get());
             imports.push_back(llvm::ConstantStruct::get(_importType, {Int(address), text}));
         }
-        auto* name = llvm::IRBuilder<>(_context).CreateGlobalStringPtr(_program.LoaderName(index), "image_name", 0, _module.get());
+        auto* name = llvm::IRBuilder<>(_context).CreateGlobalString(_program.LoaderName(index), "image_name", 0, _module.get());
         const auto& tls = image.Tls();
         return llvm::ConstantStruct::get(_imageType, {name, Int(image.LoadBias()), Int(image.ProgramHeaders().Address), Int(image.ProgramHeaders().Count), Table(_segmentType, segments, "ps5lift_segments"), Int(segments.size()),
             Int(tls.Module), Int(tls.Address), Int(tls.FileSize), Int(tls.MemorySize), Int(tls.Alignment), Int(tls.Offset), Table(_dataImportType, dataImports, "ps5lift_data_imports"), Int(dataImports.size()),
@@ -838,7 +840,7 @@ private:
         ++_module.Report().Unsupported[mnemonic + (what.empty() ? "" : " (" + what + ")")];
         Flush();
         auto callee = _module.Runtime("ps5lift_unsupported", llvm::FunctionType::get(_builder.getVoidTy(), {_module.Pointer(), I64(), _module.Pointer()}, false));
-        auto* call = _builder.CreateCall(callee, {_state, _builder.getInt64(_instruction->Address), _builder.CreateGlobalStringPtr(mnemonic)});
+        auto* call = _builder.CreateCall(callee, {_state, _builder.getInt64(_instruction->Address), _builder.CreateGlobalString(mnemonic)});
         call->setDoesNotReturn();
         _builder.CreateUnreachable();
     }

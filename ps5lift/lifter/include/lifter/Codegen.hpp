@@ -3,13 +3,14 @@
 
 #include <llvm/ADT/SmallVector.h>
 #include <llvm/IR/Module.h>
+#include <llvm/TargetParser/Triple.h>
 
 #include <string>
 
 namespace Ps5Lift {
 
 struct CodegenOptions {
-    std::string Triple;
+    llvm::Triple Triple;
     std::string Cpu;
     std::string Features;
     bool Optimize = true;
