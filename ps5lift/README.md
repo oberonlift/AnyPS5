@@ -45,9 +45,9 @@ The lifted program runs offline: AnyPS5 gives it a console without a network con
 | Option | Default | Effect |
 |---|---|---|
 | `--jobs` | the host's threads | Threads that lift and compile parts of the program at once. |
-| `--triple` | `aarch64-unknown-linux-gnu` | Target for the generated code. |
-| `--cpu` | `neoverse-v2` on aarch64 | Target CPU; `native` uses the host CPU and features. |
-| `--features` | none | LLVM target features, such as `-rcpc-immo`. |
+| `--triple` | `aarch64-unknown-linux-gnu` | Target for the generated code, aarch64 or x86-64. |
+| `--cpu` | `neoverse-v2` on aarch64 | Target CPU; `native` uses the host CPU and features, and needs a triple of the host's architecture. |
+| `--features` | none | LLVM target features, such as `-rcpc-immo`; they override the host's under `--cpu native`. An unknown CPU or feature stops `ps5lift` before it reads the input. |
 | `--memory tso\|relaxed` | `tso` | `tso` keeps x86 ordering with acquire loads and release stores; `relaxed` uses plain accesses and is only correct for single-threaded guests. |
 | `--float exact\|fast` | `exact` | `exact` reproduces x86 NaN, min/max, DAZ and conversion results bit for bit; `fast` leaves NaN payloads to the host. |
 | `--preserve-flags` | off | Keeps the status flags across calls and returns, for hand-written assembly that relies on them. |

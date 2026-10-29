@@ -3,6 +3,7 @@
 #include "LlvmCompatibility.hpp"
 
 #include <llvm/IR/LegacyPassManager.h>
+#include <llvm/MC/MCSubtargetInfo.h>
 #include <llvm/MC/TargetRegistry.h>
 #include <llvm/Passes/PassBuilder.h>
 #include <llvm/Support/FileSystem.h>
@@ -15,8 +16,10 @@
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <set>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 
 namespace Ps5Lift {
 
@@ -44,15 +47,19 @@ std::string Features(const CodegenOptions& options) {
     return options.Features.empty() ? required : options.Features + "," + required;
 }
 
-std::unique_ptr<llvm::TargetMachine> CreateTargetMachine(const CodegenOptions& options) {
+std::unique_ptr<llvm::TargetMachine> CreateTargetMachine(const llvm::Triple& triple, const std::string& cpu, const std::string& features, const bool optimize) {
     InitializeTargets();
     std::string error;
-    const auto* target = llvm::TargetRegistry::lookupTarget(TripleArgument(options.Triple), error);
-    if (target == nullptr) throw std::runtime_error("Unknown target " + options.Triple.str() + ": " + error);
+    const auto* target = llvm::TargetRegistry::lookupTarget(TripleArgument(triple), error);
+    if (target == nullptr) throw std::runtime_error("Unknown target " + triple.str() + ": " + error);
     llvm::TargetOptions targetOptions;
-    auto* machine = target->createTargetMachine(TripleArgument(options.Triple), options.Cpu, Features(options), targetOptions, llvm::Reloc::PIC_, std::nullopt, options.Optimize ? llvm::CodeGenOptLevel::Aggressive : llvm::CodeGenOptLevel::None);
-    if (machine == nullptr) throw std::runtime_error("Cannot create a target machine for " + options.Triple.str());
+    auto* machine = target->createTargetMachine(TripleArgument(triple), cpu, features, targetOptions, llvm::Reloc::PIC_, std::nullopt, optimize ? llvm::CodeGenOptLevel::Aggressive : llvm::CodeGenOptLevel::None);
+    if (machine == nullptr) throw std::runtime_error("Cannot create a target machine for " + triple.str());
     return std::unique_ptr<llvm::TargetMachine>(machine);
+}
+
+std::unique_ptr<llvm::TargetMachine> CreateTargetMachine(const CodegenOptions& options) {
+    return CreateTargetMachine(options.Triple, options.Cpu, Features(options), options.Optimize);
 }
 
 void Configure(llvm::Module& module, llvm::TargetMachine& machine, const CodegenOptions& options) {
@@ -60,6 +67,25 @@ void Configure(llvm::Module& module, llvm::TargetMachine& machine, const Codegen
     module.setDataLayout(machine.createDataLayout());
 }
 
+}
+
+void ValidateTarget(const CodegenOptions& options) {
+    if (!options.Triple.isAArch64() && options.Triple.getArch() != llvm::Triple::x86_64) throw std::runtime_error("ps5lift lifts for aarch64 and x86-64, not " + options.Triple.str());
+    const auto generic = CreateTargetMachine(options.Triple, "", "", false);
+    const auto* subtarget = generic->getMCSubtargetInfo();
+    if (!subtarget->isCPUStringValid(options.Cpu)) throw std::runtime_error(options.Cpu + " is not a CPU of " + options.Triple.str());
+    std::set<std::string_view> known;
+    for (const auto& feature : subtarget->getAllProcessorFeatures()) known.insert(feature.Key);
+    if (options.Features.empty()) return;
+    std::string_view rest = options.Features;
+    while (true) {
+        const auto comma = rest.find(',');
+        const auto feature = rest.substr(0, comma);
+        if (feature.size() < 2 || (feature[0] != '+' && feature[0] != '-')) throw std::runtime_error("features are +name or -name separated by commas, not '" + std::string(feature) + "'");
+        if (!known.contains(feature.substr(1))) throw std::runtime_error(std::string(feature.substr(1)) + " is not a feature of " + options.Triple.str());
+        if (comma == std::string_view::npos) return;
+        rest.remove_prefix(comma + 1);
+    }
 }
 
 void Optimize(llvm::Module& module, const CodegenOptions& options) {

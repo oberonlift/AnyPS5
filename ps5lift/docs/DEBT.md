@@ -30,10 +30,6 @@ A review of the whole tree in October 2026 found these. Each gives a wrong resul
 - A guest function pointer inside a record, such as `sigaction`'s handler, reaches native code as a raw guest address, which native code then calls as host code.
 - [`cpuid`](../runtime/src/Cpuid.cpp) reports SSE4.2, whose string comparisons (`pcmpestri`, `pcmpestrm`, `pcmpistri` and `pcmpistrm`) the lifter does not lift, so code that picks a path by `cpuid` takes one that stops at run time where its fallback would run.
 
-### Tools and build
-
-- `--cpu native` appends the host's features after `--features`, so the host's win. `--triple`, `--cpu` and `--features` are not validated: an unknown CPU or feature warns and gives generic code, and a triple the host CPU cannot target aborts in a codegen thread after discovery.
-
 ## Gaps
 
 - [Discovery](../lifter/src/Discovery.cpp) seeds functions from the entry point, `DT_INIT`, the exports, the `.symtab` function symbols, `.eh_frame`, relocation targets in executable segments and the addresses code takes with a RIP-relative `lea` (see the bugs above), then follows direct calls. It reads the init and fini arrays only through their relocations. A function only reached through a pointer that none of these finds stops at run time in `ps5lift_dispatch`.
