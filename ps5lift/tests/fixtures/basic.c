@@ -107,6 +107,7 @@ __attribute__((noinline)) static const char* classify(int value) {
 i64 table_index_copied_after_compare(i64 value);
 i64 table_index_copied_before_compare(i64 value);
 i64 table_base_before_loop(i64 value);
+i64 overlapping_exchange(volatile u64* word, u64 expected, u64 desired, i64 skip_lock);
 i64 jump_falls_into_next(i64 value);
 i64 next_after_jump(i64 value);
 void store_address_taken_by_lea(i64 (**slot)(void));
@@ -206,6 +207,21 @@ __asm__(".text\n"
         "9:  .long 3b-9b, 4b-9b, 5b-9b, 6b-9b\n"
         ".popsection\n"
         ".text\n");
+
+/* A jump over the lock prefix lands inside the locked cmpxchg, as code that skips the lock when single-threaded does. */
+__asm__(".text\n"
+        ".globl overlapping_exchange\n"
+        ".type overlapping_exchange, @function\n"
+        "overlapping_exchange:\n"
+        "    mov %rsi, %rax\n"
+        "    test %rcx, %rcx\n"
+        "    jnz 0f\n"
+        "    .byte 0xf0\n"
+        "0:  cmpxchg %rdx, (%rdi)\n"
+        "    setz %al\n"
+        "    movzbl %al, %eax\n"
+        "    ret\n"
+        ".size overlapping_exchange, .-overlapping_exchange\n");
 
 /* A conditional jump whose path not taken runs into the next function. */
 __asm__(".text\n"
@@ -447,6 +463,12 @@ int main(void) {
     for (i64 i = 0; i < 4; ++i) line("table after compare", table_index_copied_after_compare(i));
     for (i64 i = 0; i < 4; ++i) line("table before compare", table_index_copied_before_compare(i));
     for (i64 i = 0; i < 5; ++i) line("table base before loop", table_base_before_loop(i));
+    static volatile u64 exchanged_word;
+    for (i64 skip = 0; skip < 2; ++skip) {
+        exchanged_word = 5;
+        line(skip ? "exchange past the lock prefix" : "exchange with the lock prefix", overlapping_exchange(&exchanged_word, 5, 9, skip));
+        line("exchanged word", (i64)exchanged_word);
+    }
     line("jump taken before the next function", jump_falls_into_next(0));
     line("jump falling into the next function", jump_falls_into_next(5));
     line("the next function itself", next_after_jump(2));
