@@ -66,20 +66,22 @@ foreach(triple IN LISTS PS5LIFT_TEST_TRIPLES)
     endforeach()
 endforeach()
 
-execute_process(COMMAND ${Python3_EXECUTABLE} -c "import clang.cindex" RESULT_VARIABLE PS5LIFT_HAVE_LIBCLANG_PYTHON OUTPUT_QUIET ERROR_QUIET)
-if(PS5LIFT_HAVE_LIBCLANG_PYTHON EQUAL 0)
-    foreach(fixture libc exceptions kernel fiber)
-        add_test(NAME ${fixture}_${PS5LIFT_HOST_ARCH}
-                COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tools/run_libc_fixture.py
-                        --ps5lift $<TARGET_FILE:ps5lift>
-                        --anyps5-build ${PS5LIFT_ANYPS5_BUILD}
-                        --clang ${CMAKE_C_COMPILER}
-                        --clangxx ${CMAKE_CXX_COMPILER}
-                        --fixture ${fixture})
-    endforeach()
-else()
-    message(STATUS "The libclang Python bindings were not found; the libc bridge tests are skipped")
+execute_process(COMMAND ${Python3_EXECUTABLE} -c "import clang.cindex; clang.cindex.Index.create()"
+        RESULT_VARIABLE PS5LIFT_LIBCLANG_PYTHON ERROR_VARIABLE PS5LIFT_LIBCLANG_PYTHON_ERROR OUTPUT_QUIET)
+if(NOT PS5LIFT_LIBCLANG_PYTHON EQUAL 0)
+    message(FATAL_ERROR "The libc, exceptions, kernel and fiber tests generate bridges with the libclang Python bindings, "
+            "which ${Python3_EXECUTABLE} cannot load:\n${PS5LIFT_LIBCLANG_PYTHON_ERROR}"
+            "Install them (python3-clang-18 on Ubuntu) or configure with -DBUILD_TESTING=OFF.")
 endif()
+foreach(fixture libc exceptions kernel fiber)
+    add_test(NAME ${fixture}_${PS5LIFT_HOST_ARCH}
+            COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tools/run_libc_fixture.py
+                    --ps5lift $<TARGET_FILE:ps5lift>
+                    --anyps5-build ${PS5LIFT_ANYPS5_BUILD}
+                    --clang ${CMAKE_C_COMPILER}
+                    --clangxx ${CMAKE_CXX_COMPILER}
+                    --fixture ${fixture})
+endforeach()
 
 add_test(NAME libc_upstream_${PS5LIFT_HOST_ARCH}
         COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tools/run_libc_tests.py
