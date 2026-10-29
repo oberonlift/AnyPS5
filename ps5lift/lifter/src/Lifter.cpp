@@ -3101,6 +3101,17 @@ private:
         }
     }
 
+    // loop counts down rcx, or ecx under an address-size prefix, without changing the flags; loope and loopne also stop on ZF.
+    llvm::Value* Loop(const ZydisMnemonic mnemonic) {
+        const auto counter = _instruction->Info.address_width == 64 ? ZYDIS_REGISTER_RCX : ZYDIS_REGISTER_ECX;
+        auto* count = _builder.CreateSub(ReadRegister(counter), llvm::ConstantInt::get(Int(_instruction->Info.address_width), 1));
+        WriteRegister(counter, count);
+        auto* running = _builder.CreateICmpNE(count, llvm::ConstantInt::get(count->getType(), 0));
+        if (mnemonic == ZYDIS_MNEMONIC_LOOPE) return _builder.CreateAnd(running, Flag(PS5LIFT_ZF));
+        if (mnemonic == ZYDIS_MNEMONIC_LOOPNE) return _builder.CreateAnd(running, _builder.CreateNot(Flag(PS5LIFT_ZF)));
+        return running;
+    }
+
     void EmitSemantics(const ZydisMnemonic mnemonic) {
         if (Locked() && !(Lockable(mnemonic) && Operand(0).type == ZYDIS_OPERAND_TYPE_MEMORY)) throw UnsupportedInstruction("lock prefix");
         if (_instruction->Info.meta.branch_type == ZYDIS_BRANCH_TYPE_FAR) throw UnsupportedInstruction("far branch");
@@ -3110,6 +3121,7 @@ private:
             llvm::Value* condition = nullptr;
             if (mnemonic == ZYDIS_MNEMONIC_JRCXZ) condition = _builder.CreateICmpEQ(Gpr(PS5LIFT_RCX), _builder.getInt64(0));
             else if (mnemonic == ZYDIS_MNEMONIC_JECXZ) condition = _builder.CreateICmpEQ(_builder.CreateTrunc(Gpr(PS5LIFT_RCX), _builder.getInt32Ty()), _builder.getInt32(0));
+            else if (mnemonic == ZYDIS_MNEMONIC_LOOP || mnemonic == ZYDIS_MNEMONIC_LOOPE || mnemonic == ZYDIS_MNEMONIC_LOOPNE) condition = Loop(mnemonic);
             else condition = Test(ConditionOf(mnemonic));
             _builder.CreateCondBr(condition, Target(target), Target(_instruction->Next()));
             return;

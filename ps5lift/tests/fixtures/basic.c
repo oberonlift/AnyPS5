@@ -635,6 +635,28 @@ __asm__(".text\n"
         ".Lshared_table: .long .Lshared_case0-.Lshared_table, .Lshared_case1-.Lshared_table, .Lshared_case2-.Lshared_table\n"
         ".text\n");
 
+static u64 loop_sum(u64 count) {
+    u64 sum;
+    __asm__("xor %%eax, %%eax\n1:\n\tadd %%rcx, %%rax\n\tloop 1b" : "=&a"(sum), "+c"(count) : : "cc");
+    return sum;
+}
+
+static u64 loopne_remaining(const char* text, u64 count) {
+    __asm__("1:\n\tcmpb $0, (%[p])\n\tleaq 1(%[p]), %[p]\n\tloopne 1b" : [p] "+r"(text), "+c"(count) : : "cc", "memory");
+    return count;
+}
+
+static u64 loope_remaining(const char* text, u64 count) {
+    __asm__("1:\n\tcmpb $'a', (%[p])\n\tleaq 1(%[p]), %[p]\n\tloope 1b" : [p] "+r"(text), "+c"(count) : : "cc", "memory");
+    return count;
+}
+
+static u64 loop_ecx(void) {
+    u64 count = 0x100000003ul, iterations = 0;
+    __asm__("1:\n\tinc %[k]\n\taddr32 loop 1b" : [k] "+r"(iterations), "+c"(count) : : "cc");
+    return iterations << 40 | count;
+}
+
 static u64 push_pop_16(void) {
     u64 result;
     __asm__ volatile("sub $128, %%rsp\n\t"
@@ -742,6 +764,10 @@ int main(void) {
     long shared_sum = 0;
     for (long i = 0; i < 4; ++i) shared_sum += shared_tail_entry(i);
     line("jump table in a shared tail", shared_sum);
+    line("loop sum", (i64)loop_sum(10));
+    line("loopne remaining", (i64)loopne_remaining("abc\0de", 6));
+    line("loope remaining", (i64)loope_remaining("aaabaa", 6));
+    line_hex("addr32 loop", loop_ecx());
 
     print("done\n");
     return 0;
