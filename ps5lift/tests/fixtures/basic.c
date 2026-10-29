@@ -793,6 +793,25 @@ __asm__(".text\n"
         ".Lshared_table: .long .Lshared_case0-.Lshared_table, .Lshared_case1-.Lshared_table, .Lshared_case2-.Lshared_table\n"
         ".text\n");
 
+// A function that no symbol, relocation, unwind entry or taken address names, as the builtins an interpreter calls
+// through offsets it adds at run time: only the int3 padding before it and its alignment mark where it starts.
+long padded_anchor(void);
+extern const volatile long padded_distance;
+__asm__(".text\n"
+        ".p2align 4, 0xcc\n"
+        ".type padded_anchor, @function\n"
+        "padded_anchor:\n"
+        "    movl $11, %eax\n"
+        "    ret\n"
+        ".p2align 4, 0xcc\n"
+        ".Lpadded_hidden:\n"
+        "    movl $29, %eax\n"
+        "    ret\n"
+        ".section .rodata\n"
+        ".p2align 3\n"
+        "padded_distance: .quad .Lpadded_hidden - padded_anchor\n"
+        ".text\n");
+
 static u64 loop_sum(u64 count) {
     u64 sum;
     __asm__("xor %%eax, %%eax\n1:\n\tadd %%rcx, %%rax\n\tloop 1b" : "=&a"(sum), "+c"(count) : : "cc");
@@ -935,6 +954,8 @@ int main(void) {
     long shared_sum = 0;
     for (long i = 0; i < 4; ++i) shared_sum += shared_tail_entry(i);
     line("jump table in a shared tail", shared_sum);
+    long (*const padded_hidden)(void) = (long (*)(void))((const char*)padded_anchor + padded_distance);
+    line("function found by its padding", padded_hidden() + padded_anchor() * 100);
     line("loop sum", (i64)loop_sum(10));
     line("loopne remaining", (i64)loopne_remaining("abc\0de", 6));
     line("loope remaining", (i64)loope_remaining("aaabaa", 6));

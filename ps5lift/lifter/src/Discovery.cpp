@@ -465,6 +465,48 @@ GuestFunction DiscoverFunction(const GuestImage& image, const Decoder& decoder, 
     return function;
 }
 
+constexpr std::uint8_t Int3 = 0xcc;
+constexpr std::uint64_t FunctionAlignment = 16;
+
+// The address ranges the discovered functions' instructions occupy, merged and in order.
+std::vector<std::pair<std::uint64_t, std::uint64_t>> CoveredCode(const std::map<std::uint64_t, GuestFunction>& functions) {
+    std::vector<std::pair<std::uint64_t, std::uint64_t>> ranges;
+    for (const auto& [entry, function] : functions) {
+        for (const auto& [address, instruction] : function.Instructions) {
+            if (!ranges.empty() && ranges.back().second == address) ranges.back().second = instruction.Next();
+            else ranges.emplace_back(address, instruction.Next());
+        }
+    }
+    std::sort(ranges.begin(), ranges.end());
+    std::vector<std::pair<std::uint64_t, std::uint64_t>> merged;
+    for (const auto& range : ranges) {
+        if (!merged.empty() && range.first <= merged.back().second) merged.back().second = std::max(merged.back().second, range.second);
+        else merged.push_back(range);
+    }
+    return merged;
+}
+
+// Code that nothing discovery follows names, such as the builtins an interpreter calls through offsets it adds at run
+// time, still starts where the compiler aligned it after the int3 padding that ends the code before it. Each such
+// address that no discovered function's code covers starts another function.
+std::set<std::uint64_t> PaddedStarts(const GuestImage& image, const std::map<std::uint64_t, GuestFunction>& functions) {
+    const auto covered = CoveredCode(functions);
+    const auto isCovered = [&](const std::uint64_t address) {
+        const auto after = std::upper_bound(covered.begin(), covered.end(), address, [](const std::uint64_t value, const auto& range) { return value < range.first; });
+        return after != covered.begin() && address < std::prev(after)->second;
+    };
+    std::set<std::uint64_t> starts;
+    for (const auto& segment : image.Segments()) {
+        if (!segment.IsExecutable()) continue;
+        const auto first = (segment.Address / FunctionAlignment + 1) * FunctionAlignment;
+        for (auto address = first; address < segment.Address + segment.Bytes.size(); address += FunctionAlignment) {
+            const auto offset = address - segment.Address;
+            if (segment.Bytes[offset - 1] == Int3 && segment.Bytes[offset] != Int3 && !isCovered(address)) starts.insert(address);
+        }
+    }
+    return starts;
+}
+
 }
 
 std::uint64_t Instruction::Next() const {
@@ -610,7 +652,10 @@ std::map<std::uint64_t, GuestFunction> DiscoverFunctions(const GuestImage& image
         for (const auto entry : starts) functions.emplace(entry, DiscoverFunction(image, decoder, references, entry, starts, reachedStarts));
         const auto before = starts.size();
         starts.insert(reachedStarts.begin(), reachedStarts.end());
-        if (starts.size() == before) return functions;
+        if (starts.size() > before) continue;
+        const auto padded = PaddedStarts(image, functions);
+        if (padded.empty()) return functions;
+        starts.insert(padded.begin(), padded.end());
     }
 }
 
