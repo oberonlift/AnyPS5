@@ -610,6 +610,31 @@ __asm__(".text\n"
         ".Lgcc_table: .long .Lgcc_case0-.Lgcc_table, .Lgcc_case1-.Lgcc_table, .Lgcc_case2-.Lgcc_table, .Lgcc_case3-.Lgcc_table\n"
         ".text\n");
 
+// A function that jumps into another's body, and through the jump table there, as functions sharing a tail do.
+long shared_tail_entry(long index);
+__asm__(".text\n"
+        ".type shared_tail_entry, @function\n"
+        "shared_tail_entry:\n"
+        "    jmp .Lshared_dispatch\n"
+        ".type shared_tail_owner, @function\n"
+        "shared_tail_owner:\n"
+        "    xor %edi, %edi\n"
+        ".Lshared_dispatch:\n"
+        "    cmpq $3, %rdi\n"
+        "    jae .Lshared_default\n"
+        "    leaq .Lshared_table(%rip), %rcx\n"
+        "    movslq (%rcx,%rdi,4), %rax\n"
+        "    addq %rcx, %rax\n"
+        "    jmpq *%rax\n"
+        ".Lshared_case0: movl $100, %eax\n ret\n"
+        ".Lshared_case1: movl $200, %eax\n ret\n"
+        ".Lshared_case2: movl $300, %eax\n ret\n"
+        ".Lshared_default: movq $-1, %rax\n ret\n"
+        ".section .rodata\n"
+        ".p2align 2\n"
+        ".Lshared_table: .long .Lshared_case0-.Lshared_table, .Lshared_case1-.Lshared_table, .Lshared_case2-.Lshared_table\n"
+        ".text\n");
+
 static u64 push_pop_16(void) {
     u64 result;
     __asm__ volatile("sub $128, %%rsp\n\t"
@@ -714,6 +739,9 @@ int main(void) {
     long gcc_sum = 0;
     for (long i = 0; i < 5; ++i) gcc_sum += gcc_style_switch(i);
     line("gcc-style jump table", gcc_sum);
+    long shared_sum = 0;
+    for (long i = 0; i < 4; ++i) shared_sum += shared_tail_entry(i);
+    line("jump table in a shared tail", shared_sum);
 
     print("done\n");
     return 0;
