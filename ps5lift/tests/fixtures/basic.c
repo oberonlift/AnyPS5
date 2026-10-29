@@ -556,6 +556,26 @@ __attribute__((noinline)) static int copied_base_switch(u64 value) {
     return result;
 }
 
+// SSE4a works on a bit field of the low quadword and leaves the upper one undefined, so only the low one is checked.
+// AT&T syntax puts the field's index before its length.
+#define EXTRQ(length, index)                                                                                          \
+    __attribute__((noinline)) static u64 extrq_##length##_##index(u64 value) {                                      \
+        __asm__("movq %[v], %%xmm0\n\textrq $" #index ", $" #length ", %%xmm0\n\tmovq %%xmm0, %[v]" : [v] "+r"(value) : : "xmm0"); \
+        return value;                                                                                                 \
+    }
+#define INSERTQ(length, index)                                                                                        \
+    __attribute__((noinline)) static u64 insertq_##length##_##index(u64 value, u64 source) {                         \
+        __asm__("movq %[v], %%xmm0\n\tmovq %[s], %%xmm1\n\tinsertq $" #index ", $" #length ", %%xmm1, %%xmm0\n\tmovq %%xmm0, %[v]" \
+                : [v] "+r"(value) : [s] "r"(source) : "xmm0", "xmm1");                                                \
+        return value;                                                                                                 \
+    }
+EXTRQ(16, 16)
+EXTRQ(0, 0)
+EXTRQ(4, 60)
+INSERTQ(8, 8)
+INSERTQ(16, 40)
+INSERTQ(0, 0)
+
 __attribute__((noinline)) static void advertised_instructions(void) {
     static const char digits[9] = {'1', '2', '3', '4', '5', '6', '7', '8', '9'};
     u64 crc = 0xffffffff, eight;
@@ -856,6 +876,13 @@ int main(void) {
     line("byte-guarded jump table default", byte_guarded_switch(14) + byte_guarded_switch(9));
     line("jump table through a copied base", copied_base_switch(1) + copied_base_switch(2) * 100 + copied_base_switch(3) * 10000 + copied_base_switch(4) * 1000000);
     line("jump table through a copied base default", copied_base_switch(5) + copied_base_switch(0));
+    const u64 field_value = 0x1122334455667788ull, field_source = 0xaabbccddeeff0099ull;
+    line_hex("extrq 16 bits at 16", extrq_16_16(field_value));
+    line_hex("extrq 64 bits at 0", extrq_0_0(field_value));
+    line_hex("extrq 4 bits at 60", extrq_4_60(field_value));
+    line_hex("insertq 8 bits at 8", insertq_8_8(field_value, field_source));
+    line_hex("insertq 16 bits at 40", insertq_16_40(field_value, field_source));
+    line_hex("insertq 64 bits at 0", insertq_0_0(field_value, field_source));
     divisions();
     advertised_instructions();
 
