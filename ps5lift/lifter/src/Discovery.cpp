@@ -21,6 +21,12 @@ std::string Hex(const std::uint64_t value) {
     return stream.str();
 }
 
+// Control flow that reaches bytes which are not an instruction, or leaves the executable segments.
+class UndecodableCode : public std::runtime_error {
+public:
+    using std::runtime_error::runtime_error;
+};
+
 bool EndsFlow(const Instruction& instruction) {
     switch (instruction.Info.mnemonic) {
     case ZYDIS_MNEMONIC_RET:
@@ -366,9 +372,9 @@ std::optional<std::uint64_t> TakenFunctionAddress(const GuestImage& image, const
 Instruction DecodeReached(const GuestImage& image, const Decoder& decoder, const std::uint64_t entry, const std::uint64_t address, const std::uint64_t start, const std::uint64_t from) {
     try {
         return decoder.Decode(image, address);
-    } catch (const std::runtime_error& error) {
-        if (start == entry) throw std::runtime_error(std::string(error.what()) + ", in code from the start of the function at 0x" + Hex(entry));
-        throw std::runtime_error(std::string(error.what()) + ", in code from 0x" + Hex(start) + ", where 0x" + Hex(from) + " in the function at 0x" + Hex(entry) + " leads");
+    } catch (const UndecodableCode& error) {
+        if (start == entry) throw UndecodableCode(std::string(error.what()) + ", in code from the start of the function at 0x" + Hex(entry));
+        throw UndecodableCode(std::string(error.what()) + ", in code from 0x" + Hex(start) + ", where 0x" + Hex(from) + " in the function at 0x" + Hex(entry) + " leads");
     }
 }
 
@@ -488,12 +494,23 @@ std::vector<std::pair<std::uint64_t, std::uint64_t>> CoveredCode(const std::map<
 
 // Code that nothing discovery follows names, such as the builtins an interpreter calls through offsets it adds at run
 // time, still starts where the compiler aligned it after the int3 padding that ends the code before it. Each such
-// address that no discovered function's code covers starts another function.
-std::set<std::uint64_t> PaddedStarts(const GuestImage& image, const std::map<std::uint64_t, GuestFunction>& functions) {
+// address that no discovered function's code covers starts another function, unless its code does not decode: data
+// can follow padding too, as the version strings FreeBSD's assembly sources put among their code do.
+std::set<std::uint64_t> PaddedStarts(const GuestImage& image, const Decoder& decoder, const std::set<std::uint64_t>& references, const std::set<std::uint64_t>& known,
+                                     const std::map<std::uint64_t, GuestFunction>& functions) {
     const auto covered = CoveredCode(functions);
     const auto isCovered = [&](const std::uint64_t address) {
         const auto after = std::upper_bound(covered.begin(), covered.end(), address, [](const std::uint64_t value, const auto& range) { return value < range.first; });
         return after != covered.begin() && address < std::prev(after)->second;
+    };
+    const auto decodes = [&](const std::uint64_t address) {
+        std::set<std::uint64_t> reached;
+        try {
+            DiscoverFunction(image, decoder, references, address, known, reached);
+            return true;
+        } catch (const UndecodableCode&) {
+            return false;
+        }
     };
     std::set<std::uint64_t> starts;
     for (const auto& segment : image.Segments()) {
@@ -501,7 +518,7 @@ std::set<std::uint64_t> PaddedStarts(const GuestImage& image, const std::map<std
         const auto first = (segment.Address / FunctionAlignment + 1) * FunctionAlignment;
         for (auto address = first; address < segment.Address + segment.Bytes.size(); address += FunctionAlignment) {
             const auto offset = address - segment.Address;
-            if (segment.Bytes[offset - 1] == Int3 && segment.Bytes[offset] != Int3 && !isCovered(address)) starts.insert(address);
+            if (segment.Bytes[offset - 1] == Int3 && segment.Bytes[offset] != Int3 && !isCovered(address) && decodes(address)) starts.insert(address);
         }
     }
     return starts;
@@ -519,9 +536,9 @@ Decoder::Decoder() {
 
 Instruction Decoder::Decode(const GuestImage& image, const std::uint64_t address) const {
     const auto code = image.CodeAt(address);
-    if (code.empty()) throw std::runtime_error("Control flow reaches 0x" + Hex(address) + ", outside executable segments");
+    if (code.empty()) throw UndecodableCode("Control flow reaches 0x" + Hex(address) + ", outside executable segments");
     const auto instruction = TryDecode(code, address);
-    if (!instruction) throw std::runtime_error("Cannot decode the instruction at 0x" + Hex(address));
+    if (!instruction) throw UndecodableCode("Cannot decode the instruction at 0x" + Hex(address));
     return *instruction;
 }
 
@@ -653,7 +670,7 @@ std::map<std::uint64_t, GuestFunction> DiscoverFunctions(const GuestImage& image
         const auto before = starts.size();
         starts.insert(reachedStarts.begin(), reachedStarts.end());
         if (starts.size() > before) continue;
-        const auto padded = PaddedStarts(image, functions);
+        const auto padded = PaddedStarts(image, decoder, references, starts, functions);
         if (padded.empty()) return functions;
         starts.insert(padded.begin(), padded.end());
     }

@@ -794,7 +794,8 @@ __asm__(".text\n"
         ".text\n");
 
 // A function that no symbol, relocation, unwind entry or taken address names, as the builtins an interpreter calls
-// through offsets it adds at run time: only the int3 padding before it and its alignment mark where it starts.
+// through offsets it adds at run time: only the int3 padding before it and its alignment mark where it starts. The
+// string after it is padded the same way, as FreeBSD's assembly sources put their version strings among their code.
 long padded_anchor(void);
 extern const volatile long padded_distance;
 __asm__(".text\n"
@@ -807,6 +808,8 @@ __asm__(".text\n"
         ".Lpadded_hidden:\n"
         "    movl $29, %eax\n"
         "    ret\n"
+        ".p2align 4, 0xcc\n"
+        ".asciz \"from: FreeBSD: src/lib/msun/i387/e_remainder.S,v 1.8 2005/02/04 14:08:32 das Exp\"\n"
         ".section .rodata\n"
         ".p2align 3\n"
         "padded_distance: .quad .Lpadded_hidden - padded_anchor\n"
