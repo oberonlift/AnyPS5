@@ -532,6 +532,30 @@ __attribute__((noinline)) static int byte_guarded_switch(u64 value) {
     return result;
 }
 
+// This table's entry is loaded through the register its address was put in and added to a copy of that register.
+__attribute__((noinline)) static int copied_base_switch(u64 value) {
+    int result;
+    __asm__ volatile("lea -1(%[value]), %%esi\n\t"
+                     "cmp $3, %%esi\n\t"
+                     "ja 5f\n\t"
+                     "lea 6f(%%rip), %%rdx\n\t"
+                     "mov %%rdx, %%rdi\n\t"
+                     "movslq (%%rdx,%%rsi,4), %%rdx\n\t"
+                     "add %%rdi, %%rdx\n\t"
+                     "jmp *%%rdx\n"
+                     "1:\n\tmov $21, %[result]\n\tjmp 7f\n"
+                     "2:\n\tmov $22, %[result]\n\tjmp 7f\n"
+                     "3:\n\tmov $23, %[result]\n\tjmp 7f\n"
+                     "4:\n\tmov $24, %[result]\n\tjmp 7f\n"
+                     "5:\n\tmov $-1, %[result]\n\tjmp 7f\n"
+                     ".pushsection .rodata\n\t.p2align 2\n"
+                     "6:\n\t.long 1b-6b, 2b-6b, 3b-6b, 4b-6b\n\t"
+                     ".popsection\n"
+                     "7:"
+                     : [result] "=r"(result) : [value] "r"(value) : "rdx", "rsi", "rdi", "cc");
+    return result;
+}
+
 __attribute__((noinline)) static void advertised_instructions(void) {
     static const char digits[9] = {'1', '2', '3', '4', '5', '6', '7', '8', '9'};
     u64 crc = 0xffffffff, eight;
@@ -830,6 +854,8 @@ int main(void) {
     string_reads();
     line("byte-guarded jump table", byte_guarded_switch(10) + byte_guarded_switch(11) * 100 + byte_guarded_switch(12) * 10000 + byte_guarded_switch(13) * 1000000);
     line("byte-guarded jump table default", byte_guarded_switch(14) + byte_guarded_switch(9));
+    line("jump table through a copied base", copied_base_switch(1) + copied_base_switch(2) * 100 + copied_base_switch(3) * 10000 + copied_base_switch(4) * 1000000);
+    line("jump table through a copied base default", copied_base_switch(5) + copied_base_switch(0));
     divisions();
     advertised_instructions();
 

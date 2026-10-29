@@ -237,8 +237,9 @@ std::optional<TableShape> MatchTable(const GuestFunction& function, const Predec
         const auto* load = SingleDefinition(function, predecessors, previous->Address, loaded);
         if (load == nullptr || load->Info.mnemonic != ZYDIS_MNEMONIC_MOVSXD) continue;
         const auto& entry = load->Operands[1];
-        if (entry.type != ZYDIS_OPERAND_TYPE_MEMORY || entry.mem.base != base || entry.mem.scale != 4 || entry.mem.disp.value != 0) continue;
-        const auto table = RipRelativeValue(function, predecessors, load->Address, base);
+        if (entry.type != ZYDIS_OPERAND_TYPE_MEMORY || entry.mem.base == ZYDIS_REGISTER_NONE || entry.mem.scale != 4 || entry.mem.disp.value != 0) continue;
+        // The entry may be loaded through one register and added to a copy of it, so both are traced to the table.
+        const auto table = RipRelativeValue(function, predecessors, load->Address, entry.mem.base);
         if (table && RipRelativeValue(function, predecessors, previous->Address, base) == table) return TableShape{*table, entry.mem.index, load->Address};
     }
     return std::nullopt;
