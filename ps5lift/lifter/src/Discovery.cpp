@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <array>
 #include <deque>
+#include <initializer_list>
 #include <sstream>
 #include <stdexcept>
 #include <utility>
@@ -559,16 +560,31 @@ std::string Nid(const std::string_view name) {
     return encoded.substr(0, 11);
 }
 
+namespace {
+
+std::set<std::string> NamesAndNids(const std::initializer_list<const char*> names) {
+    std::set<std::string> result;
+    for (const std::string name : names) {
+        result.insert(name);
+        result.insert(Nid(name));
+    }
+    return result;
+}
+
+}
+
+std::optional<std::string> JumpBufferFunction(const std::string& import) {
+    static const auto Names = NamesAndNids({"setjmp", "_setjmp", "sigsetjmp", "__sigsetjmp", "longjmp", "_longjmp", "siglongjmp"});
+    constexpr std::string_view GuestExport = "#guest";
+    const auto name = import.ends_with(GuestExport) ? import.substr(0, import.size() - GuestExport.size()) : import;
+    if (!Names.contains(name)) return std::nullopt;
+    return name;
+}
+
 bool ReturnsTwice(const std::string& import) {
-    static const std::set<std::string> Names = [] {
-        std::set<std::string> names;
-        for (const std::string name : {"setjmp", "_setjmp", "sigsetjmp", "__sigsetjmp"}) {
-            names.insert(name);
-            names.insert(Nid(name));
-        }
-        return names;
-    }();
-    return Names.contains(import);
+    static const auto Names = NamesAndNids({"setjmp", "_setjmp", "sigsetjmp", "__sigsetjmp"});
+    const auto function = JumpBufferFunction(import);
+    return function && Names.contains(*function);
 }
 
 std::map<std::uint64_t, GuestFunction> DiscoverFunctions(const GuestImage& image) {

@@ -9,6 +9,8 @@ long module_tls(void);
 long* module_local_address(void);
 long module_table_call(int index, long x);
 long module_absolute_address(void);
+int module_setjmp(long* buffer) __asm__("gNQ1V2vfXDE#guest") __attribute__((returns_twice));
+_Noreturn void module_longjmp(long* buffer, int value) __asm__("lKEN2IebgJ0#guest");
 
 struct program_header {
     unsigned int type;
@@ -124,6 +126,14 @@ int main(void) {
     line("module absolute symbol", module_absolute_address());
     line("module tls", module_tls());
     line("module tls again", module_tls());
+    static long jump_buffer[16];
+    static volatile int jumps;
+    const int jumped = module_setjmp(jump_buffer);
+    if (jumped < 3) {
+        ++jumps;
+        module_longjmp(jump_buffer, jumped + 1);
+    }
+    line("setjmp and longjmp a module exports", jumped * 10 + jumps);
     executable_local += module_tls();
     line("executable tls", executable_local);
     line("iteration result", dl_iterate_phdr(visit_image, &search));

@@ -1,5 +1,7 @@
 #include <lifter/Program.hpp>
 
+#include <lifter/Discovery.hpp>
+
 #include <filesystem>
 #include <functional>
 #include <map>
@@ -42,6 +44,7 @@ GuestProgram GuestProgram::Load(const std::string& executable) {
     }
 
     const auto resolve = [&](const std::string& name) -> std::optional<std::uint64_t> {
+        if (JumpBufferFunction(name)) return std::nullopt;
         for (const auto& image : program.Images) {
             if (const auto address = image.Export(name)) return address;
         }

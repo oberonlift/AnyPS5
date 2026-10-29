@@ -59,3 +59,38 @@ extern char module_absolute[];
 long module_absolute_address(void) {
     return (long)module_absolute;
 }
+
+// A module's own setjmp and longjmp under the names the relinker gives a PS5 module's exports: the NID followed by
+// #guest. Lifted code cannot run them, since longjmp switches stacks, so the lift must send calls to the runtime's.
+__asm__(".text\n"
+        ".globl \"gNQ1V2vfXDE#guest\"\n"
+        ".type \"gNQ1V2vfXDE#guest\", @function\n"
+        "\"gNQ1V2vfXDE#guest\":\n"
+        "    mov (%rsp), %rdx\n"
+        "    mov %rdx, 0(%rdi)\n"
+        "    mov %rbx, 8(%rdi)\n"
+        "    lea 8(%rsp), %rdx\n"
+        "    mov %rdx, 16(%rdi)\n"
+        "    mov %rbp, 24(%rdi)\n"
+        "    mov %r12, 32(%rdi)\n"
+        "    mov %r13, 40(%rdi)\n"
+        "    mov %r14, 48(%rdi)\n"
+        "    mov %r15, 56(%rdi)\n"
+        "    xor %eax, %eax\n"
+        "    ret\n"
+        ".globl \"lKEN2IebgJ0#guest\"\n"
+        ".type \"lKEN2IebgJ0#guest\", @function\n"
+        "\"lKEN2IebgJ0#guest\":\n"
+        "    mov %esi, %eax\n"
+        "    test %eax, %eax\n"
+        "    jnz 1f\n"
+        "    inc %eax\n"
+        "1:  mov 8(%rdi), %rbx\n"
+        "    mov 16(%rdi), %rsp\n"
+        "    mov 24(%rdi), %rbp\n"
+        "    mov 32(%rdi), %r12\n"
+        "    mov 40(%rdi), %r13\n"
+        "    mov 48(%rdi), %r14\n"
+        "    mov 56(%rdi), %r15\n"
+        "    jmp *0(%rdi)\n");
+
