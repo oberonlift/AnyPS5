@@ -371,6 +371,7 @@ GuestFunction DiscoverFunction(const GuestImage& image, const Decoder& decoder, 
     }
     const auto next = starts.upper_bound(entry);
     const auto limit = next == starts.end() ? ~std::uint64_t{0} : *next;
+    const auto ownCode = [&](const std::uint64_t address) { return address == entry || !starts.contains(address); };
     std::vector<std::uint64_t> indirectJumps;
     while (true) {
         while (!pending.empty()) {
@@ -385,20 +386,21 @@ GuestFunction DiscoverFunction(const GuestImage& image, const Decoder& decoder, 
                 if (mnemonic == ZYDIS_MNEMONIC_CALL && target) reachedStarts.insert(*target);
                 if (mnemonic == ZYDIS_MNEMONIC_CALL) {
                     if (const auto import = CalledImport(image, decoder, instruction); import && ReturnsTwice(*import)) {
+                        if (!ownCode(instruction.Next())) throw std::runtime_error("The call to " + *import + " at 0x" + Hex(address) + " returns into another function's start at 0x" + Hex(instruction.Next()));
                         function.ResumePoints.insert(instruction.Next());
                         function.Leaders.insert(instruction.Next());
                     }
                 }
                 if (mnemonic == ZYDIS_MNEMONIC_JMP && !target && ImportTarget(image, instruction)) break;
-                if ((mnemonic == ZYDIS_MNEMONIC_JMP || IsConditionalJump(mnemonic)) && target && !(starts.contains(*target) && *target != entry)) {
+                if ((mnemonic == ZYDIS_MNEMONIC_JMP || IsConditionalJump(mnemonic)) && target && ownCode(*target)) {
                     function.Leaders.insert(*target);
                     pending.emplace_back(*target, address);
                 }
-                if (IsConditionalJump(mnemonic)) function.Leaders.insert(instruction.Next());
+                if (IsConditionalJump(mnemonic) && ownCode(instruction.Next())) function.Leaders.insert(instruction.Next());
                 if (mnemonic == ZYDIS_MNEMONIC_JMP && !target) indirectJumps.push_back(address);
                 if (EndsFlow(instruction)) break;
                 address = instruction.Next();
-                if (starts.contains(address) && address != entry) break;
+                if (!ownCode(address)) break;
             }
         }
         // A table's base or guard can lie on a path that only another table leads to, so tables are recovered once the
@@ -412,7 +414,7 @@ GuestFunction DiscoverFunction(const GuestImage& image, const Decoder& decoder, 
                 continue;
             }
             for (const auto destination : table.Targets) {
-                if (starts.contains(destination) && destination != entry) continue;
+                if (!ownCode(destination)) continue;
                 function.Leaders.insert(destination);
                 pending.emplace_back(destination, jump);
             }

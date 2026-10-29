@@ -319,7 +319,10 @@ public:
         }
         Reload();
         _entryRsp = Gpr(PS5LIFT_RSP);
-        for (const auto leader : _function.Leaders) _blocks[leader] = llvm::BasicBlock::Create(Context(), "b_" + Hex(leader), _host);
+        for (const auto leader : _function.Leaders) {
+            if (!_function.Instructions.contains(leader)) throw std::logic_error("The block at 0x" + Hex(leader) + " in the function at 0x" + Hex(_function.Entry) + " has no instruction");
+            _blocks[leader] = llvm::BasicBlock::Create(Context(), "b_" + Hex(leader), _host);
+        }
         _builder.CreateBr(_blocks.at(_function.Entry));
 
         std::optional<std::uint64_t> expected;
