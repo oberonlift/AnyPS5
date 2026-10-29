@@ -303,19 +303,32 @@ extern "C" void ps5lift_trap(Ps5LiftState*, const std::uint64_t address) {
     ps5lift_fail("guest trap at 0x%" PRIx64, address);
 }
 
-extern "C" void ps5lift_string_op(Ps5LiftState* state, const std::uint32_t operation, const std::uint32_t width, const std::uint32_t repeat) {
+// movs copies element by element, so a forward copy is a memmove unless the destination starts inside the source,
+// where each element repeats one written before it; stos of bytes is a memset.
+extern "C" void ps5lift_string_op(Ps5LiftState* state, const std::uint32_t operation, const std::uint32_t width, const std::uint32_t repeat, const std::uint64_t sourceBase) {
+    constexpr std::uint32_t Movs = 0;
     auto& rcx = state->Gpr[PS5LIFT_RCX];
     auto& rsi = state->Gpr[PS5LIFT_RSI];
     auto& rdi = state->Gpr[PS5LIFT_RDI];
-    const std::int64_t step = state->Flags[PS5LIFT_DF] ? -static_cast<std::int64_t>(width) : static_cast<std::int64_t>(width);
-    auto count = repeat ? rcx : 1;
-    while (count != 0) {
-        if (operation == 0) std::memmove(reinterpret_cast<void*>(rdi), reinterpret_cast<const void*>(rsi), width);
-        else std::memcpy(reinterpret_cast<void*>(rdi), &state->Gpr[PS5LIFT_RAX], width);
-        rdi += static_cast<std::uint64_t>(step);
-        if (operation == 0) rsi += static_cast<std::uint64_t>(step);
-        --count;
+    const bool forward = state->Flags[PS5LIFT_DF] == 0;
+    const std::int64_t step = forward ? static_cast<std::int64_t>(width) : -static_cast<std::int64_t>(width);
+    const std::uint64_t count = repeat ? rcx : 1;
+    const std::uint64_t bytes = count * width;
+    auto* destination = reinterpret_cast<std::uint8_t*>(rdi);
+    if (operation == Movs) {
+        const auto* source = reinterpret_cast<const std::uint8_t*>(rsi + sourceBase);
+        if (forward && (destination <= source || destination >= source + bytes)) {
+            std::memmove(destination, source, bytes);
+        } else {
+            for (std::uint64_t i = 0; i < count; ++i) std::memmove(destination + static_cast<std::int64_t>(i) * step, source + static_cast<std::int64_t>(i) * step, width);
+        }
+        rsi += static_cast<std::uint64_t>(static_cast<std::int64_t>(count) * step);
+    } else if (forward && width == 1) {
+        std::memset(destination, static_cast<int>(state->Gpr[PS5LIFT_RAX] & 0xff), bytes);
+    } else {
+        for (std::uint64_t i = 0; i < count; ++i) std::memcpy(destination + static_cast<std::int64_t>(i) * step, &state->Gpr[PS5LIFT_RAX], width);
     }
+    rdi += static_cast<std::uint64_t>(static_cast<std::int64_t>(count) * step);
     if (repeat) rcx = 0;
 }
 

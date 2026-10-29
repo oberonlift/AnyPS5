@@ -366,6 +366,56 @@ __attribute__((noinline)) static void unaligned_accesses(void) {
     }
 }
 
+static __thread u64 thread_word = 0x0807060504030201UL;
+
+static u64 word_at(const u8* bytes) {
+    u64 word = 0;
+    for (int i = 7; i >= 0; --i) word = word << 8 | bytes[i];
+    return word;
+}
+
+__attribute__((noinline)) static void string_instructions(void) {
+    static u8 buffer[64];
+    static const u8 letters[8] = {'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'};
+    u8 carry, zero;
+    void* to = buffer;
+    const void* from = letters;
+    u64 count = 8;
+    const u64 one = 1, two = 2;
+    __asm__ volatile("cmp %[two], %[one]\n\trep movsb\n\tsetc %[carry]\n\tsetz %[zero]"
+                     : [carry] "=&q"(carry), [zero] "=&q"(zero), "+D"(to), "+S"(from), "+c"(count) : [one] "r"(one), [two] "r"(two) : "memory", "cc");
+    line_hex("rep movsb copy", word_at(buffer));
+    line("flags after rep movsb", carry * 2 + zero);
+    to = buffer + 8;
+    count = 8;
+    __asm__ volatile("cmp %[one], %[one]\n\tmov $0x5a, %%al\n\trep stosb\n\tsetc %[carry]\n\tsetz %[zero]"
+                     : [carry] "=&q"(carry), [zero] "=&q"(zero), "+D"(to), "+c"(count) : [one] "r"(one) : "rax", "memory", "cc");
+    line_hex("rep stosb fill", word_at(buffer + 8));
+    line("flags after rep stosb", carry * 2 + zero);
+    for (int i = 0; i < 8; ++i) buffer[16 + i] = letters[i];
+    to = buffer + 17;
+    from = buffer + 16;
+    count = 5;
+    __asm__ volatile("rep movsb" : "+D"(to), "+S"(from), "+c"(count) : : "memory");
+    line_hex("rep movsb one byte ahead", word_at(buffer + 16));
+    to = buffer + 31;
+    from = letters + 7;
+    count = 8;
+    __asm__ volatile("std\n\trep movsb\n\tcld" : "+D"(to), "+S"(from), "+c"(count) : : "memory", "cc");
+    line_hex("backward rep movsb", word_at(buffer + 24));
+    to = buffer + 32;
+    count = 2;
+    __asm__ volatile("mov $0x11223344, %%eax\n\trep stosl" : "+D"(to), "+c"(count) : : "rax", "memory");
+    line_hex("rep stosl fill", word_at(buffer + 32));
+    u64 thread_pointer;
+    __asm__("mov %%fs:0, %0" : "=r"(thread_pointer));
+    to = buffer + 40;
+    from = (const void*)((u64)&thread_word - thread_pointer);
+    count = 8;
+    __asm__ volatile("rep movsb %%fs:(%%rsi), %%es:(%%rdi)" : "+D"(to), "+S"(from), "+c"(count) : : "memory");
+    line_hex("rep movsb from fs", word_at(buffer + 40));
+}
+
 static volatile u64 locked_word;
 
 #define LOCKED(name, setup, instruction, start)                                                                        \
@@ -479,6 +529,7 @@ int main(void) {
     zen2_integer();
     unaligned_accesses();
     locked_forms();
+    string_instructions();
 
     struct Record record = make_record(41);
     struct Record copy;

@@ -849,12 +849,27 @@ private:
         _builder.CreateUnreachable();
     }
 
+    // A string instruction leaves the status flags alone, so only the registers the runtime moves are reloaded. Under TSO
+    // the string is ordered with the code around it, though not its elements with each other, as x86's fast strings are.
     void StringOp(const StringOperation operation, const unsigned width) {
+        if (_instruction->Info.address_width != 64) throw UnsupportedInstruction("32-bit string addresses");
+        llvm::Value* sourceBase = _builder.getInt64(0);
+        if (operation == StringOperation::Movs) {
+            const auto& source = Operand(1);
+            if (source.type != ZYDIS_OPERAND_TYPE_MEMORY || source.mem.base != ZYDIS_REGISTER_RSI) throw std::logic_error("movs without its rsi source");
+            if (source.mem.segment == ZYDIS_REGISTER_FS) sourceBase = StateLoad(I64(), offsetof(Ps5LiftState, FsBase));
+            if (source.mem.segment == ZYDIS_REGISTER_GS) sourceBase = StateLoad(I64(), offsetof(Ps5LiftState, GsBase));
+        }
+        const bool ordered = _module.Options().Memory == MemoryModel::Tso;
         Flush();
-        auto callee = _module.Runtime("ps5lift_string_op", llvm::FunctionType::get(_builder.getVoidTy(), {_module.Pointer(), _builder.getInt32Ty(), _builder.getInt32Ty(), _builder.getInt32Ty()}, false));
+        if (ordered) _builder.CreateFence(llvm::AtomicOrdering::SequentiallyConsistent);
+        auto callee = _module.Runtime("ps5lift_string_op", llvm::FunctionType::get(_builder.getVoidTy(), {_module.Pointer(), _builder.getInt32Ty(), _builder.getInt32Ty(), _builder.getInt32Ty(), I64()}, false));
         const bool repeat = (_instruction->Info.attributes & ZYDIS_ATTRIB_HAS_REP) != 0;
-        _builder.CreateCall(callee, {_state, _builder.getInt32(static_cast<std::uint32_t>(operation)), _builder.getInt32(width), _builder.getInt32(repeat ? 1 : 0)});
-        Reload();
+        _builder.CreateCall(callee, {_state, _builder.getInt32(static_cast<std::uint32_t>(operation)), _builder.getInt32(width), _builder.getInt32(repeat ? 1 : 0), sourceBase});
+        if (ordered) _builder.CreateFence(llvm::AtomicOrdering::SequentiallyConsistent);
+        for (const int index : {PS5LIFT_RCX, PS5LIFT_RSI, PS5LIFT_RDI}) {
+            if (_gpr[index]) _builder.CreateStore(StateLoad(I64(), offsetof(Ps5LiftState, Gpr) + 8 * static_cast<std::size_t>(index)), _gpr[index]);
+        }
     }
 
     bool Locked() const {
