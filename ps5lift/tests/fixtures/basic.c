@@ -583,6 +583,11 @@ static volatile i64 opaque_signed = -1234567890123l;
 static volatile u32 opaque_count = 13;
 static volatile i32 opaque_small = -77;
 
+__asm__(".text\n"
+        "never_called_absolute_read:\n"
+        "    movl -1, %eax\n"
+        "    ret\n");
+
 static u64 push_pop_16(void) {
     u64 result;
     __asm__ volatile("sub $128, %%rsp\n\t"
