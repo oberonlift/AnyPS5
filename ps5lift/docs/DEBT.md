@@ -30,7 +30,6 @@ A review of the whole tree in October 2026 found these. Each gives a wrong resul
 - A guest function pointer inside a record, such as `sigaction`'s handler, reaches native code as a raw guest address, which native code then calls as host code.
 - [`cpuid`](../runtime/src/Cpuid.cpp) reports SSE4.2, whose string comparisons (`pcmpestri`, `pcmpestrm`, `pcmpistri` and `pcmpistrm`) the lifter does not lift, so code that picks a path by `cpuid` takes one that stops at run time where its fallback would run.
 - `Ps5LiftState::Rip` is never written, so a `sceKernelRaiseException` handler sees `rip` as 0. The handler runs 64 KiB below the stack pointer of the target thread's last call, which overwrites a frame that has grown past that since.
-- A full callback pool, a `longjmp` across native code and a resume at an address the frame cannot continue from are all reported as "reached unsupported instruction".
 
 ### Tools and build
 
@@ -71,7 +70,7 @@ A review of the whole tree in October 2026 found these. Each gives a wrong resul
 
 - Every fixture is built for `znver2`, so the compiler encodes SSE with VEX, and the only legacy SSE forms tested are AES, `pclmulqdq`, SHA, MMX and a set of scalar arithmetic, comparison, rounding and conversion forms, which come from assembly. `vector.c` and `float.c` use AVX throughout, so covering the packed legacy forms needs SSE-only builds of their tests.
 - No test runs `--float fast`, `--preserve-flags` or `--emit-ir`, and no fixture splits an image into more than one part, so calls between the parts of one image are tested only by EVO Player.
-- Untested paths: division traps, jump tables sized by layout, fibers resumed on another thread, `sceKernelRaiseException`, `fscale` by large scales, and the generator's forwarded variadics and 128-bit stack arguments.
+- Untested paths: division traps, jump tables sized by layout, fibers resumed on another thread, `sceKernelRaiseException`, `fscale` by large scales, the generator's forwarded variadics and 128-bit stack arguments, and the runtime's reports of a full callback pool, a `longjmp` through native code and a resume a frame has no point for.
 - The TSO check in `threads.c` can only fail when the lifted code runs on aarch64 hardware.
 
 ## Cleanup
