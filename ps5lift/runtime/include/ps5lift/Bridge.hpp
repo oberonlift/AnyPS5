@@ -68,6 +68,52 @@ T Stack128(const Ps5LiftState* state, const int slot) {
     return static_cast<T>(value);
 }
 
+// The SysV classes of the eightbytes of a record of at most 16 bytes that the ABI passes in registers.
+enum class Eightbyte { Integer, Sse };
+
+template <typename T, typename... Eightbytes>
+T Record(const Eightbytes... eightbytes) {
+    static_assert(std::is_trivially_copyable_v<T> && sizeof(T) <= 8 * sizeof...(Eightbytes) && sizeof(T) > 8 * (sizeof...(Eightbytes) - 1));
+    const std::uint64_t bits[] = {eightbytes...};
+    T value;
+    std::memcpy(&value, bits, sizeof(T));
+    return value;
+}
+
+template <typename T>
+T StackRecord(const Ps5LiftState* state, const int slot) {
+    static_assert(std::is_trivially_copyable_v<T>);
+    T value;
+    std::memcpy(&value, reinterpret_cast<const void*>(state->Gpr[PS5LIFT_RSP] + 8 + 8 * static_cast<std::uint64_t>(slot)), sizeof(T));
+    return value;
+}
+
+template <Eightbyte... Classes, typename T>
+void ReturnRecord(Ps5LiftState* state, const T& value) {
+    static_assert(std::is_trivially_copyable_v<T> && sizeof(T) <= 8 * sizeof...(Classes) && sizeof(T) > 8 * (sizeof...(Classes) - 1));
+    constexpr Eightbyte classes[] = {Classes...};
+    std::uint64_t bits[sizeof...(Classes)] = {};
+    std::memcpy(bits, &value, sizeof(T));
+    constexpr int IntegerResults[] = {PS5LIFT_RAX, PS5LIFT_RDX};
+    int integers = 0;
+    int vectors = 0;
+    for (std::size_t index = 0; index < sizeof...(Classes); ++index) {
+        if (classes[index] == Eightbyte::Integer) {
+            state->Gpr[IntegerResults[integers++]] = bits[index];
+        } else {
+            std::memset(state->Vector[vectors], 0, 16);
+            std::memcpy(state->Vector[vectors++], &bits[index], 8);
+        }
+    }
+}
+
+template <typename T>
+void ReturnIndirect(Ps5LiftState* state, const std::uint64_t address, const T& value) {
+    static_assert(std::is_trivially_copyable_v<T>);
+    std::memcpy(reinterpret_cast<void*>(address), &value, sizeof(T));
+    state->Gpr[PS5LIFT_RAX] = address;
+}
+
 class ExtendedScope {
 public:
     explicit ExtendedScope(const Ps5LiftState* state) : _saved(std::fegetround()) {

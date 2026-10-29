@@ -1,3 +1,4 @@
+#include <inttypes.h>
 #include <math.h>
 #include <stdarg.h>
 #include <stdio.h>
@@ -66,4 +67,24 @@ char nid_stdout[8] __asm__(NID__Stdout);
 void host_exit(int code) {
     fflush(stdout);
     _Exit(code);
+}
+
+div_t nid_div(int numerator, int denominator) __asm__(NID_div);
+div_t nid_div(int numerator, int denominator) {
+    return div(numerator, denominator);
+}
+
+ldiv_t nid_ldiv(long numerator, long denominator) __asm__(NID_ldiv);
+ldiv_t nid_ldiv(long numerator, long denominator) {
+    return ldiv(numerator, denominator);
+}
+
+lldiv_t nid_lldiv(long long numerator, long long denominator) __asm__(NID_lldiv);
+lldiv_t nid_lldiv(long long numerator, long long denominator) {
+    return lldiv(numerator, denominator);
+}
+
+imaxdiv_t nid_imaxdiv(intmax_t numerator, intmax_t denominator) __asm__(NID_imaxdiv);
+imaxdiv_t nid_imaxdiv(intmax_t numerator, intmax_t denominator) {
+    return imaxdiv(numerator, denominator);
 }

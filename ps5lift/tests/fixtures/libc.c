@@ -15,6 +15,19 @@ long double guest_fabsl(long double value) __asm__(NID_fabsl);
 int guest_fprintf(void* stream, const char* format, ...) __asm__(NID_fprintf);
 extern char guest_stdout[] __asm__(NID__Stdout);
 
+typedef struct {
+    int quot;
+    int rem;
+} guest_div_t;
+typedef struct {
+    long quot;
+    long rem;
+} guest_ldiv_t;
+guest_div_t guest_div(int numerator, int denominator) __asm__(NID_div);
+guest_ldiv_t guest_ldiv(long numerator, long denominator) __asm__(NID_ldiv);
+guest_ldiv_t guest_lldiv(long long numerator, long long denominator) __asm__(NID_lldiv);
+guest_ldiv_t guest_imaxdiv(long numerator, long denominator) __asm__(NID_imaxdiv);
+
 static int format_list(char* buffer, unsigned long size, const char* format, ...) {
     va_list arguments;
     va_start(arguments, format);
@@ -58,6 +71,12 @@ int main(void) {
     guest_printf("modfl %Lf %Lf\n", fraction, whole);
     guest_printf("fabsl %.19Le\n", guest_fabsl(-third));
     guest_fprintf(guest_stdout, "fprintf %s %d\n", "_Stdout", 5);
+    const guest_div_t small = guest_div(-17, 5);
+    const guest_ldiv_t wide = guest_ldiv(-9000000000000l, 7);
+    const guest_ldiv_t longer = guest_lldiv(9000000000001ll, -4);
+    const guest_ldiv_t widest = guest_imaxdiv(123456789012345l, 1000);
+    guest_printf("div %d %d ldiv %ld %ld lldiv %ld %ld imaxdiv %ld %ld\n", small.quot, small.rem, wide.quot, wide.rem, longer.quot, longer.rem, widest.quot,
+                 widest.rem);
     return 0;
 }
 
