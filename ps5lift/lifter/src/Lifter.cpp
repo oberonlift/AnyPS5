@@ -651,6 +651,14 @@ private:
         }
     }
 
+    // A register operand's whole register: Zydis sizes the register operands of legacy scalar instructions as their scalar,
+    // and the lanes above it are the result's.
+    llvm::Value* ReadVector(const int index, const unsigned bits) {
+        const auto& operand = Operand(index);
+        if (operand.type != ZYDIS_OPERAND_TYPE_REGISTER) return ReadAs(index, bits);
+        return _builder.CreateZExtOrTrunc(ReadRegister(operand.reg.value), Int(bits));
+    }
+
     llvm::Value* ReadAs(const int index, const unsigned bits) {
         auto* value = Read(index);
         const auto width = value->getType()->getIntegerBitWidth();
@@ -1150,8 +1158,7 @@ private:
         const auto mnemonic = _instruction->Info.mnemonic;
         const bool scalarMerge = (mnemonic == ZYDIS_MNEMONIC_MOVSS || mnemonic == ZYDIS_MNEMONIC_MOVSD) && Operand(1).type == ZYDIS_OPERAND_TYPE_REGISTER;
         if (source < target && scalarMerge) {
-            auto* old = ReadRegister(destination.reg.value);
-            if (old->getType()->getIntegerBitWidth() > 128) old = _builder.CreateTrunc(old, Int(128));
+            auto* old = ReadVector(0, 128);
             auto* mask = llvm::ConstantInt::get(Context(), llvm::APInt::getHighBitsSet(128, 128 - source));
             value = _builder.CreateOr(_builder.CreateAnd(old, mask), _builder.CreateZExt(value, Int(128)));
         } else if (source < target) {
@@ -2254,9 +2261,9 @@ private:
             int first = 0;
             int second = 1;
             if (kind == FloatKind::Fma) {
-                auto* destination = AsFloats(ReadAs(0, 128), element);
+                auto* destination = AsFloats(ReadVector(0, 128), element);
                 auto* x1 = _builder.CreateExtractElement(destination, _builder.getInt64(0));
-                auto* x2 = _builder.CreateExtractElement(AsFloats(ReadAs(1, 128), element), _builder.getInt64(0));
+                auto* x2 = _builder.CreateExtractElement(AsFloats(ReadVector(1, 128), element), _builder.getInt64(0));
                 auto* x3 = LoadScalarFloat(2, element);
                 Write(0, FloatBits(_builder.CreateInsertElement(destination, FusedMultiplyAdd(spec, x1, x2, x3), _builder.getInt64(0))));
                 return;
@@ -2264,7 +2271,7 @@ private:
             const bool withImmediate = kind == FloatKind::Round || kind == FloatKind::Compare;
             first = Base(withImmediate ? 3 : 2);
             second = first + 1;
-            auto* source = AsFloats(ReadAs(first, 128), element);
+            auto* source = AsFloats(ReadVector(first, 128), element);
             auto* a = _builder.CreateExtractElement(source, _builder.getInt64(0));
             auto* b = LoadScalarFloat(second, element);
             llvm::Value* value = nullptr;
@@ -2424,7 +2431,7 @@ private:
         if (scalarSource) {
             const int first = Base(2);
             const auto target = mnemonic == ZYDIS_MNEMONIC_CVTSI2SS || mnemonic == ZYDIS_MNEMONIC_VCVTSI2SS || mnemonic == ZYDIS_MNEMONIC_CVTSD2SS || mnemonic == ZYDIS_MNEMONIC_VCVTSD2SS ? 32u : 64u;
-            auto* destination = AsFloats(ReadAs(first, 128), target);
+            auto* destination = AsFloats(ReadVector(first, 128), target);
             llvm::Value* value = nullptr;
             if (mnemonic == ZYDIS_MNEMONIC_CVTSI2SS || mnemonic == ZYDIS_MNEMONIC_VCVTSI2SS || mnemonic == ZYDIS_MNEMONIC_CVTSI2SD || mnemonic == ZYDIS_MNEMONIC_VCVTSI2SD) {
                 value = _builder.CreateSIToFP(Read(first + 1), FloatType(target));
@@ -2620,7 +2627,7 @@ private:
         }
         case ZYDIS_MNEMONIC_INSERTPS: case ZYDIS_MNEMONIC_VINSERTPS: {
             const int base = Base(3);
-            auto* destination = AsVector(ReadAs(base, 128), 32);
+            auto* destination = AsVector(ReadVector(base, 128), 32);
             const auto control = Immediate(base + 2);
             llvm::Value* element = nullptr;
             if (Operand(base + 1).type == ZYDIS_OPERAND_TYPE_MEMORY) element = Load(Address(Operand(base + 1)), 32, false);
@@ -3050,8 +3057,8 @@ private:
         case ZYDIS_MNEMONIC_MOVNTDQA: case ZYDIS_MNEMONIC_VMOVNTDQA: case ZYDIS_MNEMONIC_LDDQU: case ZYDIS_MNEMONIC_VLDDQU:
             if (_instruction->Info.operand_count_visible == 3 && (mnemonic == ZYDIS_MNEMONIC_VMOVSS || mnemonic == ZYDIS_MNEMONIC_VMOVSD)) {
                 const auto element = mnemonic == ZYDIS_MNEMONIC_VMOVSS ? 32u : 64u;
-                auto* upper = AsVector(ReadAs(1, 128), element);
-                auto* low = _builder.CreateExtractElement(AsVector(ReadAs(2, 128), element), _builder.getInt64(0));
+                auto* upper = AsVector(ReadVector(1, 128), element);
+                auto* low = _builder.CreateExtractElement(AsVector(ReadVector(2, 128), element), _builder.getInt64(0));
                 Write(0, AsInteger(_builder.CreateInsertElement(upper, low, _builder.getInt64(0))));
                 return;
             }
