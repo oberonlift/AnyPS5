@@ -50,9 +50,10 @@ void InitializeTargets() {
 
 // The Zen 2 instructions without a target-independent form need the target's own: AES-NI and PCLMULQDQ become the
 // aarch64 crypto extension, which LLVM's aes feature enables with PMULL, and crc32 its CRC32C instructions; on x86-64
-// they stay what they are.
+// they stay what they are. LLVM's x86 backend selects crc32 only with its own feature, which clang's -msse4.2 adds
+// but LLVM's sse4.2 does not imply.
 std::string Features(const CodegenOptions& options) {
-    const auto required = options.Triple.isAArch64() ? "+aes,+crc" : "+aes,+pclmul,+sse4.2";
+    const auto required = options.Triple.isAArch64() ? "+aes,+crc" : "+aes,+pclmul,+sse4.2,+crc32";
     return options.Features.empty() ? required : options.Features + "," + required;
 }
 
