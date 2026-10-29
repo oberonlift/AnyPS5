@@ -12,3 +12,10 @@ vpermilpd 128 b3504e58c1b2675f
 vpermilpd 256 7c091bb3f44ba9f4
 phminposuw 69e8e3d9c7400a4d
 vphminposuw 69e8e3d9c7400a4d
+vbroadcastss register 128 aedfc6a28123521d
+vbroadcastss register 256 8ecdec74224f4815
+vbroadcastsd register 256 5265365e2b07393d
+vpbroadcastb register 128 cb7561c7cb9067c5
+vpbroadcastw register 256 f1e661b1e7ed9385
+vpbroadcastd register 128 aedfc6a28123521d
+vpbroadcastq register 256 5265365e2b07393d
