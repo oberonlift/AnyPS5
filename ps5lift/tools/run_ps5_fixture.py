@@ -7,7 +7,7 @@ import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from run_fixture import runtime_link_arguments, FIXTURES, ROOT, host_triple, lifter_target, run, runner_for, PROGRAM_TIMEOUT
+from run_fixture import runtime_link_arguments, FIXTURES, GUEST_BASE, ROOT, host_triple, lifter_target, run, runner_for, PROGRAM_TIMEOUT
 
 GENERATORS = ROOT / "3rdparty" / "anyps5" / "core" / "relinker" / "relinker" / "tests" / "macos"
 EXPECTED = {
@@ -34,7 +34,7 @@ def main():
         source = work / f"{args.fixture}.elf"
         run([sys.executable, "-I", GENERATORS / f"{args.fixture}_fixture.py", source])
         relinked = work / f"{args.fixture}.out"
-        run([args.relinker, "--skip-sce-module", source, relinked])
+        run([args.relinker, "--skip-sce-module", "--linux-fixed-base", f"{GUEST_BASE:#x}", source, relinked])
         for memory in ("tso", "relaxed"):
             lifted = work / f"{args.fixture}-{memory}.a"
             report = run([args.ps5lift, relinked, "-o", lifted, "--triple", args.triple, "--memory", memory, *lifter_target(args.triple, runner)]).stderr.strip()
