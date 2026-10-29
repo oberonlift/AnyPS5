@@ -755,15 +755,15 @@ private:
     }
 
     void Push(llvm::Value* value) {
-        auto* rsp = _builder.CreateSub(Gpr(PS5LIFT_RSP), _builder.getInt64(8));
+        auto* rsp = _builder.CreateSub(Gpr(PS5LIFT_RSP), _builder.getInt64(value->getType()->getIntegerBitWidth() / 8));
         Store(rsp, value, false);
         SetGpr(PS5LIFT_RSP, rsp);
     }
 
-    llvm::Value* Pop() {
+    llvm::Value* Pop(const unsigned bits = 64) {
         auto* rsp = Gpr(PS5LIFT_RSP);
-        auto* value = Load(rsp, 64, false);
-        SetGpr(PS5LIFT_RSP, _builder.CreateAdd(rsp, _builder.getInt64(8)));
+        auto* value = Load(rsp, bits, false);
+        SetGpr(PS5LIFT_RSP, _builder.CreateAdd(rsp, _builder.getInt64(bits / 8)));
         return value;
     }
 
@@ -2957,8 +2957,11 @@ private:
         case ZYDIS_MNEMONIC_FNSTSW: Write(0, _builder.CreateTrunc(CallX87(PS5LIFT_X87_STORE_STATUS, 0, nullptr, 0), _builder.getInt16Ty())); return true;
         case ZYDIS_MNEMONIC_FNSTCW: CallX87(PS5LIFT_X87_STORE_CONTROL, 0, X87Address(), 0); return true;
         case ZYDIS_MNEMONIC_FLDCW: CallX87(PS5LIFT_X87_LOAD_CONTROL, 0, X87Address(), 0); return true;
-        case ZYDIS_MNEMONIC_FNSTENV: CallX87(PS5LIFT_X87_STORE_ENVIRONMENT, 0, X87Address(), 0); return true;
-        case ZYDIS_MNEMONIC_FLDENV: CallX87(PS5LIFT_X87_LOAD_ENVIRONMENT, 0, X87Address(), 0); return true;
+        case ZYDIS_MNEMONIC_FNSTENV:
+        case ZYDIS_MNEMONIC_FLDENV:
+            if (Operand(0).size != 224) throw UnsupportedInstruction("16-bit environment");
+            CallX87(mnemonic == ZYDIS_MNEMONIC_FNSTENV ? PS5LIFT_X87_STORE_ENVIRONMENT : PS5LIFT_X87_LOAD_ENVIRONMENT, 0, X87Address(), 0);
+            return true;
         case ZYDIS_MNEMONIC_FLD1: CallX87(PS5LIFT_X87_LOAD_CONSTANT, 0, nullptr, 0); return true;
         case ZYDIS_MNEMONIC_FLDL2T: CallX87(PS5LIFT_X87_LOAD_CONSTANT, 0, nullptr, 1); return true;
         case ZYDIS_MNEMONIC_FLDL2E: CallX87(PS5LIFT_X87_LOAD_CONSTANT, 0, nullptr, 2); return true;
@@ -2998,12 +3001,12 @@ private:
             EmitSemantics(instruction.Info.mnemonic);
         } catch (const UnsupportedInstruction& error) {
             Unsupported(error.what());
-            StartDeadBlock();
         }
     }
 
     void EmitSemantics(const ZydisMnemonic mnemonic) {
         if (Locked() && !(Lockable(mnemonic) && Operand(0).type == ZYDIS_OPERAND_TYPE_MEMORY)) throw UnsupportedInstruction("lock prefix");
+        if (_instruction->Info.meta.branch_type == ZYDIS_BRANCH_TYPE_FAR) throw UnsupportedInstruction("far branch");
         if (UsesMmx()) EnterMmx();
         if (IsConditionalJump(mnemonic)) {
             const auto target = *DirectTarget(*_instruction);
@@ -3251,12 +3254,13 @@ private:
             CompareExchange();
             return;
         case ZYDIS_MNEMONIC_PUSH:
-            Push(_builder.CreateSExt(Read(0), I64()));
+            Push(_builder.CreateSExtOrTrunc(Read(0), _builder.getIntNTy(_instruction->Info.operand_width)));
             return;
         case ZYDIS_MNEMONIC_POP:
-            Write(0, Pop());
+            Write(0, Pop(_instruction->Info.operand_width));
             return;
         case ZYDIS_MNEMONIC_LEAVE:
+            if (_instruction->Info.operand_width != 64) throw UnsupportedInstruction("16-bit");
             SetGpr(PS5LIFT_RSP, Gpr(PS5LIFT_RBP));
             SetGpr(PS5LIFT_RBP, Pop());
             return;

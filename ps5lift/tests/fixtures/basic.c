@@ -583,6 +583,30 @@ static volatile i64 opaque_signed = -1234567890123l;
 static volatile u32 opaque_count = 13;
 static volatile i32 opaque_small = -77;
 
+static u64 push_pop_16(void) {
+    u64 result;
+    __asm__ volatile("sub $128, %%rsp\n\t"
+                     "mov %%rsp, %%rcx\n\t"
+                     "pushw $0x1234\n\t"
+                     "pushw $0x5678\n\t"
+                     "mov %%rcx, %%r8\n\t"
+                     "sub %%rsp, %%r8\n\t"
+                     "popw %%ax\n\t"
+                     "popw %%dx\n\t"
+                     "sub %%rsp, %%rcx\n\t"
+                     "add $128, %%rsp\n\t"
+                     "movzwl %%ax, %%eax\n\t"
+                     "movzwl %%dx, %%edx\n\t"
+                     "shl $16, %%rdx\n\t"
+                     "or %%rdx, %%rax\n\t"
+                     "shl $32, %%r8\n\t"
+                     "or %%r8, %%rax\n\t"
+                     "shl $40, %%rcx\n\t"
+                     "or %%rcx, %%rax"
+                     : "=a"(result) : : "rcx", "rdx", "r8", "memory");
+    return result;
+}
+
 int main(void) {
     print("ps5lift basic fixture\n");
     line("fibonacci(20)", (i64)fibonacci(20));
@@ -659,6 +683,7 @@ int main(void) {
     int exchanged = __atomic_compare_exchange_n(&counter, &expected, 1000, 0, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST);
     line("atomic counter", (i64)counter);
     line("atomic exchanged", exchanged);
+    line_hex("16-bit push and pop", push_pop_16());
 
     print("done\n");
     return 0;
