@@ -15,7 +15,8 @@ from run_fixture import FIXTURES, GUEST_FLAGS, ROOT, compare, host_triple, lifte
 
 IMPORTS = ["printf", "snprintf", "vsnprintf", "sscanf", "puts", "strtold", "strtod", "modfl", "fabsl", "fprintf", "_Stdout"]
 KERNEL_IMPORTS = ["printf", "exit", "scePthreadCreate", "scePthreadJoin", "scePthreadMutexInit", "scePthreadMutexLock", "scePthreadMutexUnlock",
-                  "scePthreadMutexDestroy", "sceKernelUsleep", "sceKernelGetProcessTime", "sceKernelReadTsc", "sceKernelGetTscFrequency", "signal", "raise"]
+                  "scePthreadMutexDestroy", "sceKernelUsleep", "sceKernelGetProcessTime", "sceKernelReadTsc", "sceKernelGetTscFrequency", "signal", "raise",
+                  "sigprocmask", "sigsetjmp", "siglongjmp"]
 FIBER_IMPORTS = ["printf", "exit", "_sceFiberInitializeImpl", "sceFiberFinalize", "sceFiberRun", "sceFiberSwitch", "sceFiberReturnToThread", "sceFiberGetSelf"]
 LOG_LINE = re.compile(r"^\[[^\]\s]+:\d+ [^\]]+\] .*\n", re.MULTILINE)
 GUEST_LINK = ["-no-pie", "-Wl,--image-base=0x20000000", "-Wl,--dynamic-linker=/lib64/ld-linux-x86-64.so.2"]
