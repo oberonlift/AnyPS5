@@ -329,26 +329,26 @@ public:
 
         std::optional<std::uint64_t> expected;
         for (const auto& [address, instruction] : _function.Instructions) {
-            if (expected && *expected != address && !_builder.GetInsertBlock()->getTerminator()) {
+            if (expected && *expected != address && !Terminated()) {
                 if (!_blocks.contains(*expected)) throw std::logic_error("The instruction before 0x" + Hex(address) + " continues at 0x" + Hex(*expected) + ", which has no block");
                 _builder.CreateBr(_blocks.at(*expected));
             }
             if (_blocks.contains(address)) {
-                if (!_builder.GetInsertBlock()->getTerminator()) _builder.CreateBr(_blocks.at(address));
+                if (!Terminated()) _builder.CreateBr(_blocks.at(address));
                 _builder.SetInsertPoint(_blocks.at(address));
-            } else if (!expected || *expected != address || _builder.GetInsertBlock()->getTerminator()) {
+            } else if (!expected || *expected != address || Terminated()) {
                 StartDeadBlock();
             }
             _instruction = &instruction;
             EmitInstruction(instruction);
             ++_module.Report().Instructions;
             expected = instruction.Next();
-            if (!_builder.GetInsertBlock()->getTerminator() && !_function.Instructions.contains(instruction.Next())) {
+            if (!Terminated() && !_function.Instructions.contains(instruction.Next())) {
                 TailCall(instruction.Next());
             }
         }
         for (auto& block : *_host) {
-            if (!block.getTerminator()) {
+            if (!HasTerminator(block)) {
                 _builder.SetInsertPoint(&block);
                 _builder.CreateUnreachable();
             }
@@ -449,6 +449,10 @@ private:
         for (int i = 0; i < VectorCount; ++i) {
             if (_vectors[i]) _builder.CreateStore(StateLoad(Int(256), VectorOffset(i)), _vectors[i]);
         }
+    }
+
+    bool Terminated() const {
+        return HasTerminator(*_builder.GetInsertBlock());
     }
 
     void StartDeadBlock() {

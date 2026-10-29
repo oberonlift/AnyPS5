@@ -81,10 +81,10 @@ void Configure(llvm::Module& module, llvm::TargetMachine& machine, const Codegen
 void ValidateTarget(const CodegenOptions& options) {
     if (!options.Triple.isAArch64() && options.Triple.getArch() != llvm::Triple::x86_64) throw std::runtime_error("ps5lift lifts for aarch64 and x86-64, not " + options.Triple.str());
     const auto generic = CreateTargetMachine(options.Triple, "", "", false);
-    const auto* subtarget = generic->getMCSubtargetInfo();
-    if (!subtarget->isCPUStringValid(options.Cpu)) throw std::runtime_error(options.Cpu + " is not a CPU of " + options.Triple.str());
+    const auto& subtarget = SubtargetInfo(*generic);
+    if (!subtarget.isCPUStringValid(options.Cpu)) throw std::runtime_error(options.Cpu + " is not a CPU of " + options.Triple.str());
     std::set<std::string_view> known;
-    for (const auto& feature : subtarget->getAllProcessorFeatures()) known.insert(feature.Key);
+    for (const auto& feature : subtarget.getAllProcessorFeatures()) known.insert(FeatureName(feature));
     if (options.Features.empty()) return;
     std::string_view rest = options.Features;
     while (true) {
