@@ -7,7 +7,7 @@ import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from run_fixture import runtime_link_arguments, FIXTURES, ROOT, host_triple, lifter_target, run, runner_for
+from run_fixture import runtime_link_arguments, FIXTURES, ROOT, host_triple, lifter_target, run, runner_for, PROGRAM_TIMEOUT
 
 GENERATORS = ROOT / "3rdparty" / "anyps5" / "core" / "relinker" / "relinker" / "tests" / "macos"
 EXPECTED = {
@@ -40,7 +40,7 @@ def main():
             report = run([args.ps5lift, relinked, "-o", lifted, "--triple", args.triple, "--memory", memory, *lifter_target(args.triple, runner)]).stderr.strip()
             program = work / f"{args.fixture}-{memory}"
             run([args.clangxx, f"--target={args.triple}", "-std=c++20", "-O2", f"-I{ROOT / 'runtime' / 'include'}", FIXTURES / "ps5_bridge.cpp", lifted, *runtime_link_arguments(args.ps5lift, args.triple, args.clang, args.clangxx), "-fuse-ld=lld", "-pthread", "-o", program])
-            result = subprocess.run([*runner, program], capture_output=True, text=True)
+            result = subprocess.run([*runner, program], capture_output=True, text=True, timeout=PROGRAM_TIMEOUT)
             ok = result.stdout == expected_output and result.returncode == expected_code
             if not ok:
                 sys.stderr.write(f"{memory}: exit code {result.returncode} (expected {expected_code}), output {result.stdout!r} (expected {expected_output!r})\n{result.stderr}")
