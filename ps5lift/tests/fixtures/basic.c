@@ -433,6 +433,79 @@ __attribute__((noinline)) static void string_instructions(void) {
     line_hex("rep movsb from fs", word_at(buffer + 40));
 }
 
+__attribute__((noinline)) static void string_reads(void) {
+    static const u8 left[16] = {'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', '1', '2', '3', '4', '5', '6', '7', '8'};
+    static const u8 right[16] = {'a', 'b', 'c', 'd', 'e', 'x', 'g', 'h', '1', '2', '3', '4', '5', '6', '7', '8'};
+    u8 carry, zero, sign, overflow;
+    const void* first = left;
+    const void* second = right;
+    u64 count = 8;
+    __asm__ volatile("repe cmpsb\n\tsetc %[carry]\n\tsetz %[zero]\n\tsets %[sign]"
+                     : [carry] "=&q"(carry), [zero] "=&q"(zero), [sign] "=&q"(sign), "+S"(first), "+D"(second), "+c"(count) : : "memory", "cc");
+    line("repe cmpsb count left after the mismatch", (i64)count);
+    line("repe cmpsb advance", (const u8*)first - left);
+    line("flags after repe cmpsb", carry * 4 + zero * 2 + sign);
+    first = left;
+    second = left;
+    count = 2;
+    __asm__ volatile("repe cmpsq\n\tsetc %[carry]\n\tsetz %[zero]\n\tsets %[sign]"
+                     : [carry] "=&q"(carry), [zero] "=&q"(zero), [sign] "=&q"(sign), "+S"(first), "+D"(second), "+c"(count) : : "memory", "cc");
+    line("repe cmpsq over equal words, count left", (i64)count);
+    line("flags after equal repe cmpsq", carry * 4 + zero * 2 + sign);
+    first = left;
+    second = right;
+    count = 0;
+    __asm__ volatile("stc\n\trepe cmpsb\n\tsetc %[carry]" : [carry] "=&q"(carry), "+S"(first), "+D"(second), "+c"(count) : : "memory", "cc");
+    line("repe cmpsb without a count keeps CF and its pointers", carry * 100 + ((const u8*)first - left) + ((const u8*)second - right));
+    first = left;
+    second = right;
+    count = 4;
+    __asm__ volatile("repne cmpsw\n\tsetz %[zero]" : [zero] "=&q"(zero), "+S"(first), "+D"(second), "+c"(count) : : "memory", "cc");
+    line("repne cmpsw stops at the first equal word, count left", (i64)count * 10 + zero);
+    static const u32 words[2] = {0x80000000u, 1u};
+    first = &words[0];
+    second = &words[1];
+    __asm__ volatile("cmpsl\n\tseto %[overflow]\n\tsets %[sign]\n\tsetc %[carry]"
+                     : [overflow] "=&q"(overflow), [sign] "=&q"(sign), [carry] "=&q"(carry), "+S"(first), "+D"(second) : : "memory", "cc");
+    line("cmpsl flags", overflow * 4 + sign * 2 + carry);
+    line("cmpsl advance", (const u8*)first - (const u8*)words);
+    static const char text[] = "lifted";
+    const void* scan = text;
+    count = ~0ull;
+    __asm__ volatile("xor %%eax, %%eax\n\trepne scasb" : "+D"(scan), "+c"(count) : : "rax", "memory", "cc");
+    line("repne scasb length", (i64)(~count - 1));
+    scan = left + 7;
+    count = 8;
+    __asm__ volatile("mov $0x63, %%eax\n\tstd\n\trepne scasb\n\tcld" : "+D"(scan), "+c"(count) : : "rax", "memory", "cc");
+    line("backward repne scasb stops past the match at", (const u8*)scan - left);
+    line("backward repne scasb count left", (i64)count);
+    static const u64 above = 0x1122334455667789ull;
+    scan = &above;
+    __asm__ volatile("mov $0x1122334455667788, %%rax\n\tscasq\n\tsetc %[carry]\n\tsetz %[zero]\n\tsets %[sign]"
+                     : [carry] "=&q"(carry), [zero] "=&q"(zero), [sign] "=&q"(sign), "+D"(scan) : : "rax", "memory", "cc");
+    line("scasq flags", carry * 4 + zero * 2 + sign);
+    u64 loaded = ~0ull;
+    first = left + 8;
+    count = 3;
+    __asm__ volatile("rep lodsb" : "+S"(first), "+c"(count), "+a"(loaded) : : "memory");
+    line_hex("rep lodsb keeps the last byte", loaded);
+    line("rep lodsb advance", (const u8*)first - (left + 8));
+    first = left;
+    __asm__ volatile("lodsq" : "+S"(first), "=a"(loaded) : : "memory");
+    line_hex("lodsq", loaded);
+    loaded = ~0ull;
+    __asm__ volatile("lodsl" : "+S"(first), "+a"(loaded) : : "memory");
+    line_hex("lodsl zero-extends", loaded);
+    u64 thread_pointer;
+    __asm__("mov %%fs:0, %0" : "=r"(thread_pointer));
+    static const u8 thread_bytes[8] = {1, 2, 3, 4, 5, 6, 7, 8};
+    first = (const void*)((u64)&thread_word - thread_pointer);
+    second = thread_bytes;
+    count = 8;
+    __asm__ volatile("repe cmpsb %%es:(%%rdi), %%fs:(%%rsi)\n\tsetz %[zero]" : [zero] "=&q"(zero), "+S"(first), "+D"(second), "+c"(count) : : "memory", "cc");
+    line("repe cmpsb from fs, equal and count left", zero * 10 + (i64)count);
+}
+
 __attribute__((noinline)) static void advertised_instructions(void) {
     static const char digits[9] = {'1', '2', '3', '4', '5', '6', '7', '8', '9'};
     u64 crc = 0xffffffff, eight;
@@ -728,6 +801,7 @@ int main(void) {
     unaligned_accesses();
     locked_forms();
     string_instructions();
+    string_reads();
     divisions();
     advertised_instructions();
 

@@ -33,6 +33,8 @@ enum class StringOperation : std::uint32_t {
     Stos = 1
 };
 
+enum class StringRead { Compare, Scan, Load };
+
 struct UnsupportedInstruction : std::runtime_error {
     using std::runtime_error::runtime_error;
 };
@@ -886,6 +888,49 @@ private:
         for (const int index : {PS5LIFT_RCX, PS5LIFT_RSI, PS5LIFT_RDI}) {
             if (_gpr[index]) _builder.CreateStore(StateLoad(I64(), offsetof(Ps5LiftState, Gpr) + 8 * static_cast<std::size_t>(index)), _gpr[index]);
         }
+    }
+
+    // The string instructions that read: cmps compares [rsi] with [rdi] and scas the accumulator with [rdi], setting the
+    // flags as cmp does, and lods loads [rsi] into the accumulator. Each steps its pointers by its width, down when DF is
+    // set. A repeated form runs while rcx is not zero, decrementing it, and leaves everything alone when rcx starts at
+    // zero; repe cmps and scas also stop when ZF is clear, and repne when it is set.
+    void ReadString(const StringRead kind, const unsigned width) {
+        if (_instruction->Info.address_width != 64) throw UnsupportedInstruction("32-bit string addresses");
+        const bool load = kind == StringRead::Load;
+        const bool scan = kind == StringRead::Scan;
+        const auto string = [&](const ZydisDecodedOperand& operand, const ZydisRegister base) {
+            return operand.type == ZYDIS_OPERAND_TYPE_MEMORY && operand.mem.base == base && operand.size == width * 8;
+        };
+        const bool accumulator = Operand(0).type == ZYDIS_OPERAND_TYPE_REGISTER && Operand(0).size == width * 8;
+        if (!(kind == StringRead::Compare ? string(Operand(0), ZYDIS_REGISTER_RSI) && string(Operand(1), ZYDIS_REGISTER_RDI)
+                                          : accumulator && string(Operand(1), scan ? ZYDIS_REGISTER_RDI : ZYDIS_REGISTER_RSI)))
+            throw std::logic_error("string instruction without its implicit operands");
+        const auto attributes = _instruction->Info.attributes;
+        const bool repeat = (attributes & (ZYDIS_ATTRIB_HAS_REP | ZYDIS_ATTRIB_HAS_REPE | ZYDIS_ATTRIB_HAS_REPNE)) != 0;
+        const auto step = [&] { return _builder.CreateSelect(Flag(PS5LIFT_DF), _builder.getInt64(-static_cast<std::int64_t>(width)), _builder.getInt64(width)); };
+        const auto element = [&] {
+            if (load) {
+                Write(0, Read(1));
+                SetGpr(PS5LIFT_RSI, _builder.CreateAdd(Gpr(PS5LIFT_RSI), step()));
+                return;
+            }
+            Sub(Read(0), Read(1), _builder.getFalse());
+            if (!scan) SetGpr(PS5LIFT_RSI, _builder.CreateAdd(Gpr(PS5LIFT_RSI), step()));
+            SetGpr(PS5LIFT_RDI, _builder.CreateAdd(Gpr(PS5LIFT_RDI), step()));
+        };
+        if (!repeat) return element();
+        auto* body = llvm::BasicBlock::Create(Context(), "string", _host);
+        auto* done = llvm::BasicBlock::Create(Context(), "string_done", _host);
+        _builder.CreateCondBr(_builder.CreateICmpEQ(Gpr(PS5LIFT_RCX), _builder.getInt64(0)), done, body);
+        _builder.SetInsertPoint(body);
+        element();
+        auto* remaining = _builder.CreateSub(Gpr(PS5LIFT_RCX), _builder.getInt64(1));
+        SetGpr(PS5LIFT_RCX, remaining);
+        llvm::Value* again = _builder.CreateICmpNE(remaining, _builder.getInt64(0));
+        if (!load && (attributes & ZYDIS_ATTRIB_HAS_REPNE)) again = _builder.CreateAnd(again, _builder.CreateNot(Flag(PS5LIFT_ZF)));
+        else if (!load) again = _builder.CreateAnd(again, Flag(PS5LIFT_ZF));
+        _builder.CreateCondBr(again, body, done);
+        _builder.SetInsertPoint(done);
     }
 
     bool Locked() const {
@@ -2881,7 +2926,6 @@ private:
 
     bool EmitFloat(const ZydisMnemonic mnemonic) {
         if (auto spec = FloatSpecOf(mnemonic)) {
-            if (mnemonic == ZYDIS_MNEMONIC_CMPSD && Operand(0).type != ZYDIS_OPERAND_TYPE_REGISTER) return false;
             EmitFloatArithmetic(*spec);
             return true;
         }
@@ -3463,6 +3507,21 @@ private:
             if (_instruction->Info.operand_count_visible == 0) return StringOp(StringOperation::Movs, 4);
             VectorMove();
             return;
+        case ZYDIS_MNEMONIC_CMPSB: ReadString(StringRead::Compare, 1); return;
+        case ZYDIS_MNEMONIC_CMPSW: ReadString(StringRead::Compare, 2); return;
+        case ZYDIS_MNEMONIC_CMPSQ: ReadString(StringRead::Compare, 8); return;
+        case ZYDIS_MNEMONIC_SCASB: ReadString(StringRead::Scan, 1); return;
+        case ZYDIS_MNEMONIC_SCASW: ReadString(StringRead::Scan, 2); return;
+        case ZYDIS_MNEMONIC_SCASD: ReadString(StringRead::Scan, 4); return;
+        case ZYDIS_MNEMONIC_SCASQ: ReadString(StringRead::Scan, 8); return;
+        case ZYDIS_MNEMONIC_LODSB: ReadString(StringRead::Load, 1); return;
+        case ZYDIS_MNEMONIC_LODSW: ReadString(StringRead::Load, 2); return;
+        case ZYDIS_MNEMONIC_LODSD: ReadString(StringRead::Load, 4); return;
+        case ZYDIS_MNEMONIC_LODSQ: ReadString(StringRead::Load, 8); return;
+        case ZYDIS_MNEMONIC_CMPSD:
+            if (_instruction->Info.operand_count_visible == 0) return ReadString(StringRead::Compare, 4);
+            if (EmitFloat(mnemonic)) return;
+            throw std::logic_error("cmpsd that is neither a string nor a scalar compare");
         case ZYDIS_MNEMONIC_MOVAPS: case ZYDIS_MNEMONIC_MOVUPS: case ZYDIS_MNEMONIC_MOVAPD: case ZYDIS_MNEMONIC_MOVUPD:
         case ZYDIS_MNEMONIC_MOVDQA: case ZYDIS_MNEMONIC_MOVDQU: case ZYDIS_MNEMONIC_MOVQ: case ZYDIS_MNEMONIC_MOVD:
         case ZYDIS_MNEMONIC_MOVSS: case ZYDIS_MNEMONIC_VMOVSS: case ZYDIS_MNEMONIC_VMOVSD:
