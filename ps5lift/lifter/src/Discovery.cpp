@@ -97,6 +97,16 @@ bool CopiesRegister(const Instruction& instruction, const ZydisRegister to, cons
            Enclosing(left.reg.value) == Enclosing(to) && Enclosing(right.reg.value) == Enclosing(from);
 }
 
+// The byte or word register an instruction zero-extends into all of a register.
+std::optional<ZydisDecodedOperand> ZeroExtendedFrom(const Instruction& instruction, const ZydisRegister to) {
+    const auto& left = instruction.Operands[0];
+    const auto& right = instruction.Operands[1];
+    if (instruction.Info.mnemonic != ZYDIS_MNEMONIC_MOVZX || left.type != ZYDIS_OPERAND_TYPE_REGISTER || left.size < 32 || Enclosing(left.reg.value) != Enclosing(to) ||
+        right.type != ZYDIS_OPERAND_TYPE_REGISTER)
+        return std::nullopt;
+    return right;
+}
+
 // The instructions that set a register on the paths to an address, if one does on every path. A path from the entry,
 // from code without a known predecessor, or through a call that need not preserve the register has none.
 std::optional<std::vector<const Instruction*>> ReachingDefinitions(const GuestFunction& function, const Predecessors& predecessors, const std::uint64_t address,
@@ -175,6 +185,8 @@ std::optional<std::uint64_t> TableBound(const GuestFunction& function, const Pre
         std::uint64_t Bound;
     };
     std::optional<Compared> compared;
+    // After a zero extension the index is the narrow register it came from, so a guard has to compare at least that much.
+    std::uint16_t narrowest = 0;
     const auto* instruction = UniquePredecessor(function, predecessors, jump);
     for (int depth = 0; instruction != nullptr && depth < 12; ++depth, instruction = UniquePredecessor(function, predecessors, instruction->Address)) {
         const auto mnemonic = instruction->Info.mnemonic;
@@ -183,7 +195,7 @@ std::optional<std::uint64_t> TableBound(const GuestFunction& function, const Pre
             if (left.type != ZYDIS_OPERAND_TYPE_REGISTER || instruction->Operands[1].type != ZYDIS_OPERAND_TYPE_IMMEDIATE) return std::nullopt;
             const auto bound = BranchBound(function, *instruction);
             if (!bound) return std::nullopt;
-            if (Enclosing(left.reg.value) == Enclosing(index)) return bound;
+            if (Enclosing(left.reg.value) == Enclosing(index)) return left.size >= narrowest ? bound : std::nullopt;
             if (mnemonic == ZYDIS_MNEMONIC_SUB || compared) return std::nullopt;
             compared = Compared{left.reg.value, *bound};
             continue;
@@ -191,6 +203,11 @@ std::optional<std::uint64_t> TableBound(const GuestFunction& function, const Pre
         if (compared && WritesRegister(*instruction, compared->Register)) return CopiesRegister(*instruction, compared->Register, index) ? std::optional(compared->Bound) : std::nullopt;
         if (!WritesRegister(*instruction, index)) continue;
         if (compared && CopiesRegister(*instruction, index, compared->Register)) return compared->Bound;
+        if (const auto source = ZeroExtendedFrom(*instruction, index); source && !compared) {
+            index = source->reg.value;
+            narrowest = source->size;
+            continue;
+        }
         if (instruction->Operands[1].type != ZYDIS_OPERAND_TYPE_REGISTER || !CopiesRegister(*instruction, index, instruction->Operands[1].reg.value)) return std::nullopt;
         index = instruction->Operands[1].reg.value;
     }
