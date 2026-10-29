@@ -3541,6 +3541,13 @@ private:
         case ZYDIS_MNEMONIC_HLT:
             Trap();
             return;
+        case ZYDIS_MNEMONIC_INT: {
+            Flush();
+            auto callee = _module.Runtime("ps5lift_interrupt", llvm::FunctionType::get(_builder.getVoidTy(), {_module.Pointer(), I64(), _builder.getInt32Ty()}, false));
+            _builder.CreateCall(callee, {_state, _builder.getInt64(_instruction->Address), _builder.getInt32(static_cast<std::uint32_t>(Immediate(0)))})->setDoesNotReturn();
+            _builder.CreateUnreachable();
+            return;
+        }
         default:
             if (EmitStringCompare(mnemonic)) return;
             if (EmitPermute(mnemonic)) return;
