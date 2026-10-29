@@ -2410,13 +2410,14 @@ private:
     llvm::Value* SingleToHalf(llvm::Value* source, const unsigned mode) {
         auto* type = llvm::cast<llvm::FixedVectorType>(source->getType());
         auto* i32 = llvm::FixedVectorType::get(Int(32), type->getNumElements());
-        auto* x = _builder.CreateBitCast(source, i32);
+        auto* x = _builder.CreateBitCast(DenormalsAreZero(source), i32);
         const auto constant = [&](const std::uint32_t value) { return llvm::ConstantInt::get(i32, value); };
         auto* sign = _builder.CreateAnd(_builder.CreateLShr(x, 16), constant(0x8000));
         auto* negative = _builder.CreateICmpNE(sign, constant(0));
         auto* magnitude = _builder.CreateAnd(x, constant(0x7fffffff));
         auto* exponent = _builder.CreateLShr(magnitude, 23);
-        auto* mantissa = _builder.CreateOr(_builder.CreateAnd(magnitude, constant(0x7fffff)), constant(0x800000));
+        auto* implicit = _builder.CreateSelect(_builder.CreateICmpEQ(exponent, constant(0)), constant(0), constant(0x800000));
+        auto* mantissa = _builder.CreateOr(_builder.CreateAnd(magnitude, constant(0x7fffff)), implicit);
         auto* subnormal = _builder.CreateICmpULT(magnitude, constant(0x38800000));
         auto* rawShift = _builder.CreateSub(constant(126), exponent);
         auto* shift = _builder.CreateSelect(subnormal, _builder.CreateBinaryIntrinsic(llvm::Intrinsic::umin, rawShift, constant(25)), constant(13));
