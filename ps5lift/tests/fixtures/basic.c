@@ -107,6 +107,8 @@ __attribute__((noinline)) static const char* classify(int value) {
 i64 table_index_copied_after_compare(i64 value);
 i64 table_index_copied_before_compare(i64 value);
 i64 table_base_before_loop(i64 value);
+i64 jump_falls_into_next(i64 value);
+i64 next_after_jump(i64 value);
 void store_address_taken_by_lea(i64 (**slot)(void));
 i64 pass_address_taken_by_lea(void);
 
@@ -204,6 +206,23 @@ __asm__(".text\n"
         "9:  .long 3b-9b, 4b-9b, 5b-9b, 6b-9b\n"
         ".popsection\n"
         ".text\n");
+
+/* A conditional jump whose path not taken runs into the next function. */
+__asm__(".text\n"
+        "1:  mov $100, %rax\n"
+        "    ret\n"
+        ".globl jump_falls_into_next\n"
+        ".type jump_falls_into_next, @function\n"
+        "jump_falls_into_next:\n"
+        "    test %rdi, %rdi\n"
+        "    jz 1b\n"
+        ".size jump_falls_into_next, .-jump_falls_into_next\n"
+        ".globl next_after_jump\n"
+        ".type next_after_jump, @function\n"
+        "next_after_jump:\n"
+        "    lea 7(%rdi), %rax\n"
+        "    ret\n"
+        ".size next_after_jump, .-next_after_jump\n");
 
 /* Functions with no symbol type and no unwind entry, whose addresses only a RIP-relative lea takes: one stored to
    memory and one passed to a call. */
@@ -428,6 +447,9 @@ int main(void) {
     for (i64 i = 0; i < 4; ++i) line("table after compare", table_index_copied_after_compare(i));
     for (i64 i = 0; i < 4; ++i) line("table before compare", table_index_copied_before_compare(i));
     for (i64 i = 0; i < 5; ++i) line("table base before loop", table_base_before_loop(i));
+    line("jump taken before the next function", jump_falls_into_next(0));
+    line("jump falling into the next function", jump_falls_into_next(5));
+    line("the next function itself", next_after_jump(2));
     i64 (*stored)(void);
     store_address_taken_by_lea(&stored);
     line("function stored through lea", call_function_pointer(stored));
