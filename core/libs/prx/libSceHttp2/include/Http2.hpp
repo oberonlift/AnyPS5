@@ -39,7 +39,7 @@ int APS5_VABI sceHttp2GetResponseContentLength(int reqId, int* result, uint64_t*
 int APS5_VABI sceHttp2GetStatusCode(int reqId, int* statusCode);
 int APS5_VABI sceHttp2Init(int libnetMemId, int libsslCtxId, size_t poolSize, int maxConcurrentRequest);
 int APS5_VABI sceHttp2ReadData(int reqId, void* data, size_t size);
-int APS5_VABI sceHttp2ReadDataAsync(int reqId, void* data, size_t size, void* kqueueOption, void* option);
+int APS5_VABI sceHttp2ReadDataAsync(int reqId, void* data, size_t size, Http2AsyncOption* kqueueOption, void* option);
 int APS5_VABI sceHttp2SendRequest(int reqId, const void* postData, size_t size);
 int APS5_VABI sceHttp2SendRequestAsync(int reqId, const void* postData, size_t size, Http2AsyncOption* kqueueOption, void* option);
 int APS5_VABI sceHttp2SetAuthEnabled(int id, int isEnable);

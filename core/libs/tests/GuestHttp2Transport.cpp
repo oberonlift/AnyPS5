@@ -662,10 +662,50 @@ void Retries(int ssl) {
         client.Create("https://127.0.0.1:1/");
         lookups = 0;
         failedLookups = 100;
-        Require(Throws([&] { sceHttp2SendRequest(client.request, nullptr, 0); }), "every lookup failing fails the request");
+        Require(sceHttp2SendRequest(client.request, nullptr, 0) == static_cast<int>(0x804101e1), "every lookup failing fails the request with the resolver's error");
         Require(lookups == retry + 1, "a request makes its retry count plus one lookups before failing");
     }
     Http2SetLookupHook_nid_no_patch(nullptr);
+}
+
+int AwaitCompletion(KernelEqueue eq, int request, Http2AsyncResult& result) {
+    KernelEvent event{};
+    int count = 0;
+    const KernelUseconds patience = 10000000;
+    Require(sceKernelWaitEqueue(eq, &event, 1, &count, &patience) == 0 && count == 1 && event.ident == static_cast<std::uintptr_t>(request), "completion user event");
+    std::uint32_t timeout = 0;
+    Require(sceHttp2WaitAsync(request, &result, &timeout, nullptr) == 0 && result.req_id == request, "collect the completion");
+    return result.result;
+}
+
+void Asynchronous(int ssl) {
+    std::fprintf(stderr, "HTTP2 asynchronous scenario\n");
+    Server server(Mode::Normal);
+    Client client(ssl);
+    client.Create(server.Url());
+    KernelEqueue eq = 0;
+    Require(sceKernelCreateEqueue(&eq, "http2-async") == 0, "completion queue");
+    Require(sceKernelAddUserEventEdge(eq, client.request) == 0, "completion user event registration");
+    Http2AsyncOption option{};
+    option.equeue = eq;
+    option.user_event_id = client.request;
+    Http2AsyncResult result{};
+    Require(sceHttp2SendRequestAsync(client.request, nullptr, 0, &option, nullptr) == 0, "asynchronous send");
+    Require(AwaitCompletion(eq, client.request, result) == 0 && result.event_type == 0, "send completion");
+    int status = 0;
+    Require(sceHttp2GetStatusCode(client.request, &status) == 0 && status == 200, "status after the send completes");
+    std::array<char, 5> buffer;
+    std::string body;
+    for (;;) {
+        Require(sceHttp2ReadDataAsync(client.request, buffer.data(), buffer.size(), &option, nullptr) == 0, "asynchronous read");
+        const int count = AwaitCompletion(eq, client.request, result);
+        Require(result.event_type == 1 && count >= 0, "read completion");
+        if (count == 0) break;
+        body.append(buffer.data(), static_cast<std::size_t>(count));
+    }
+    Require(body == "response body", "body read asynchronously");
+    Require(sceKernelDeleteEqueue(eq) == 0, "completion queue deletion");
+    server.Join();
 }
 
 void Capacity(int ssl) {
@@ -751,6 +791,7 @@ int main(int argc, char** argv) {
         Refused(ssl);
         Capacity(ssl);
         Retries(ssl);
+        Asynchronous(ssl);
         const int untrusted = sceSslInit_nid_postfix(8 * 1024 * 1024);
         Require(untrusted > 0, "untrusted SSL context");
         Failure(untrusted, Mode::Normal);

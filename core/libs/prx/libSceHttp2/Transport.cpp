@@ -119,6 +119,7 @@ struct Lookup {
     std::condition_variable changed;
     bool complete = false;
     std::vector<Address> addresses;
+    int error = 0;
     std::exception_ptr failure;
 };
 
@@ -167,11 +168,10 @@ private:
                 hints.ai_family = AF_UNSPEC;
                 addrinfo* raw = nullptr;
                 const auto service = std::to_string(job->port);
-                if (const auto hook = LookupHookSlot().load(std::memory_order_acquire)) Require(hook(job->host.c_str()) == 0, "sceHttp2: DNS failed; console error mapping is unknown");
-                const int result = HostNetwork::GetAddrInfo(job->host.c_str(), service.c_str(), &hints, &raw);
+                const auto hook = LookupHookSlot().load(std::memory_order_acquire);
+                const int result = hook && hook(job->host.c_str()) != 0 ? EAI_FAIL : HostNetwork::GetAddrInfo(job->host.c_str(), service.c_str(), &hints, &raw);
                 std::unique_ptr<addrinfo, decltype(&freeaddrinfo)> addresses(raw, freeaddrinfo);
-                Require(result == 0, "sceHttp2: DNS failed; console error mapping is unknown");
-                for (auto* entry = raw; entry; entry = entry->ai_next) {
+                for (auto* entry = result == 0 ? raw : nullptr; entry; entry = entry->ai_next) {
                     Address address;
                     if (entry->ai_family == AF_INET) {
                         address.size = 16;
@@ -191,7 +191,7 @@ private:
                     address.bytes[0] = static_cast<std::uint8_t>(address.size);
                     job->addresses.push_back(address);
                 }
-                Require(!job->addresses.empty(), "sceHttp2: DNS returned no supported address");
+                if (job->addresses.empty()) job->error = NET_ERROR_RESOLVER_ENODNS;
             } catch (...) {
                 job->failure = std::current_exception();
             }
@@ -394,8 +394,9 @@ struct Request::State {
                 job->changed.wait_for(lock, std::chrono::milliseconds(5));
             }
             Check(deadline);
-            if (!job->failure) break;
-            if (attempt >= settings.resolveRetry) std::rethrow_exception(job->failure);
+            if (job->failure) std::rethrow_exception(job->failure);
+            if (!job->error) break;
+            if (attempt >= settings.resolveRetry) return job->error;
         }
         const auto connectDeadline = Deadline(settings.connectTimeout);
         int result = 0;
