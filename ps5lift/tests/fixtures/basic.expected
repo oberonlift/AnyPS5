@@ -182,6 +182,7 @@ atomic exchanged = 1
 gcc-style jump table = 99
 jump table in a shared tail = 599
 function found by its padding = 1129
+function holding an int3 byte in an immediate = 30
 loop sum = 55
 loopne remaining = 2
 loope remaining = 2
