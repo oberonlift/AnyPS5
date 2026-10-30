@@ -35,6 +35,8 @@ int main() {
     Require(sceHttp2SetResolveRetry(tmpl, 0) == 0);
     Require(sceHttp2SetResolveRetry(tmpl, 3) == 0);
     Require(Throws([&] { sceHttp2SetResolveRetry(tmpl, -1); }));
+    int redirectMarker = 0;
+    Require(sceHttp2SetRedirectCallback(tmpl, &redirectMarker, &redirectMarker) == 0);
     Require(sceHttp2SetRequestNoContentLength(request) == 0);
     Require(Throws([&] { sceHttp2AddRequestHeader(request, "bad:name", "value", 0); }));
     Require(Throws([&] { sceHttp2AddRequestHeader(request, "x-header", "value\r\ninjected: yes", 0); }));
