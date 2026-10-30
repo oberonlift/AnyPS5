@@ -30,16 +30,14 @@ ctest --test-dir build --output-on-failure
 
 ## Use
 
-A title's `eboot.bin` and the modules in its `sce_module` directory are SELF containers. AnyPS5's `unwrap_self.py` turns each decrypted one into a plain ELF, and the AnyPS5 relinker, which the test build compiles as `build/anyps5/core/relinker/relinker`, then converts the executable and the modules in the `sce_module` directory beside it. PS5 executables are position-independent, and the relinker places this one at 1008 GiB, where every guest image goes ([the design](docs/DESIGN.md#machine-model)):
+A title's `eboot.bin` and the modules it ships, in `sce_module`, `prx` and the other directories AnyPS5's `audit_dump.py` knows, are SELF containers. `tools/prepare_title.py` turns each decrypted one into a plain ELF with AnyPS5's `unwrap_self.py` and converts them with the AnyPS5 relinker, which the test build compiles as `build/anyps5/core/relinker/relinker`. PS5 executables are position-independent, and the relinker places this one at 1008 GiB, where every guest image goes ([the design](docs/DESIGN.md#machine-model)); the modules it loads go beside it under `app0`. With `--libs`, the tool also lists the imports AnyPS5's libraries do not export:
 
 ```sh
-python3 3rdparty/anyps5/tools/unwrap_self.py title/eboot.bin unwrapped/eboot.elf
-for prx in title/sce_module/*.prx; do python3 3rdparty/anyps5/tools/unwrap_self.py $prx unwrapped/sce_module/${prx##*/}; done
-build/anyps5/core/relinker/relinker --linux-fixed-base 0xFC00000000 unwrapped/eboot.elf app.elf
+python3 tools/prepare_title.py title work --libs build/anyps5/core/libs/libs
 ```
 
 ```sh
-build/lifter/ps5lift app.elf -o guest.a --cpu native
+build/lifter/ps5lift work/output/app.elf -o guest.a --cpu native
 python3 tools/generate_bridges.py libc libkernel --anyps5-build build/anyps5 -o bridges.cpp
 python3 tools/build_runtime.py --triple aarch64-unknown-linux-gnu --output build/runtime-aarch64-unknown-linux-gnu
 L=build/anyps5/core/libs/libs/unpatched
