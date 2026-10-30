@@ -411,7 +411,11 @@ GuestFunction DiscoverFunction(const GuestImage& image, const Decoder& decoder, 
                 function.Instructions.emplace(address, instruction);
                 const auto target = DirectTarget(instruction);
                 const auto mnemonic = instruction.Info.mnemonic;
-                if (mnemonic == ZYDIS_MNEMONIC_CALL && target) reachedStarts.insert(*target);
+                if (mnemonic == ZYDIS_MNEMONIC_CALL && target) {
+                    if (!image.IsExecutable(*target) && !image.Imports().contains(*target))
+                        throw UndecodableCode("The call at 0x" + Hex(address) + " in the function at 0x" + Hex(entry) + " reaches 0x" + Hex(*target) + ", outside executable segments");
+                    reachedStarts.insert(*target);
+                }
                 if (mnemonic == ZYDIS_MNEMONIC_CALL) {
                     if (const auto import = CalledImport(image, decoder, instruction); import && ReturnsTwice(*import)) {
                         if (!ownCode(instruction.Next())) throw std::runtime_error("The call to " + *import + " at 0x" + Hex(address) + " returns into another function's start at 0x" + Hex(instruction.Next()));
@@ -494,8 +498,9 @@ std::vector<std::pair<std::uint64_t, std::uint64_t>> CoveredCode(const std::map<
 
 // Code that nothing discovery follows names, such as the builtins an interpreter calls through offsets it adds at run
 // time, still starts where the compiler aligned it after the int3 padding that ends the code before it. Each such
-// address that no discovered function's code covers starts another function, unless its code does not decode: data
-// can follow padding too, as the version strings FreeBSD's assembly sources put among their code do.
+// address that no discovered function's code covers starts another function, unless its code does not decode or calls
+// outside the executable segments: data can follow padding too, as the version strings FreeBSD's assembly sources put
+// among their code do, and so can an immediate whose last bytes happen to be int3's.
 std::set<std::uint64_t> PaddedStarts(const GuestImage& image, const Decoder& decoder, const std::set<std::uint64_t>& references, const std::set<std::uint64_t>& known,
                                      const std::map<std::uint64_t, GuestFunction>& functions) {
     const auto covered = CoveredCode(functions);

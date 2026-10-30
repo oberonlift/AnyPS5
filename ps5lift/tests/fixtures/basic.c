@@ -796,8 +796,11 @@ __asm__(".text\n"
 // A function that no symbol, relocation, unwind entry or taken address names, as the builtins an interpreter calls
 // through offsets it adds at run time: only the int3 padding before it and its alignment mark where it starts. The
 // string after it is padded the same way, as FreeBSD's assembly sources put their version strings among their code.
+// The function after the string loads an immediate whose int3 byte ends just before an aligned address, from which the
+// immediate's next bytes decode as a call two gigabytes back, outside the image.
 long padded_anchor(void);
 extern const volatile long padded_distance;
+extern const volatile long padded_immediate_distance;
 __asm__(".text\n"
         ".p2align 4, 0xcc\n"
         ".type padded_anchor, @function\n"
@@ -810,9 +813,18 @@ __asm__(".text\n"
         "    ret\n"
         ".p2align 4, 0xcc\n"
         ".asciz \"from: FreeBSD: src/lib/msun/i387/e_remainder.S,v 1.8 2005/02/04 14:08:32 das Exp\"\n"
+        "    int3\n"
+        ".p2align 4, 0xcc\n"
+        ".Lpadded_immediate:\n"
+        "    movl $29, %eax\n"
+        "    movl $1, %edx\n"
+        "    addq %rdx, %rax\n"
+        "    movabsq $0x80000000e8cc, %rcx\n"
+        "    ret\n"
         ".section .rodata\n"
         ".p2align 3\n"
         "padded_distance: .quad .Lpadded_hidden - padded_anchor\n"
+        "padded_immediate_distance: .quad .Lpadded_immediate - padded_anchor\n"
         ".text\n");
 
 static u64 loop_sum(u64 count) {
@@ -959,6 +971,8 @@ int main(void) {
     line("jump table in a shared tail", shared_sum);
     long (*const padded_hidden)(void) = (long (*)(void))((const char*)padded_anchor + padded_distance);
     line("function found by its padding", padded_hidden() + padded_anchor() * 100);
+    long (*const padded_immediate)(void) = (long (*)(void))((const char*)padded_anchor + padded_immediate_distance);
+    line("function holding an int3 byte in an immediate", padded_immediate());
     line("loop sum", (i64)loop_sum(10));
     line("loopne remaining", (i64)loopne_remaining("abc\0de", 6));
     line("loope remaining", (i64)loope_remaining("aaabaa", 6));
