@@ -346,13 +346,15 @@ bool PassesArgument(const ZydisRegister reg) {
 
 // Position-independent code takes a function's address with a RIP-relative lea, which needs no relocation. Code also
 // keeps strings and tables among its instructions and takes their addresses the same way, so an address counts as a
-// function's only if the code stores it, branches to it or passes it to a call before it reads memory through it.
+// function's only if the code stores it, branches to it or passes it to a call before it reads memory through it. The
+// register is followed for as long as it holds the address, however many other instructions come first: a constructor
+// can fill in dozens of an object's fields before it stores a callback taken at its start.
 std::optional<std::uint64_t> TakenFunctionAddress(const GuestImage& image, const GuestFunction& function, const Instruction& lea) {
     const auto address = RipRelativeAddress(lea);
     if (!address || !image.IsExecutable(*address)) return std::nullopt;
     const auto reg = lea.Operands[0].reg.value;
     auto next = function.Instructions.find(lea.Next());
-    for (int depth = 0; depth < 16 && next != function.Instructions.end(); ++depth, next = function.Instructions.find(next->second.Next())) {
+    for (; next != function.Instructions.end(); next = function.Instructions.find(next->second.Next())) {
         const auto& instruction = next->second;
         const auto mnemonic = instruction.Info.mnemonic;
         const auto& target = instruction.Operands[0];
