@@ -113,6 +113,7 @@ i64 jump_falls_into_next(i64 value);
 i64 next_after_jump(i64 value);
 void store_address_taken_by_lea(i64 (**slot)(void));
 i64 pass_address_taken_by_lea(void);
+void store_address_taken_long_before(i64 (**slot)(void));
 
 __attribute__((noinline)) i64 call_function_pointer(i64 (*function)(void)) {
     return function();
@@ -262,7 +263,8 @@ __asm__(".text\n"
         ".size next_after_jump, .-next_after_jump\n");
 
 /* Functions with no symbol type and no unwind entry, whose addresses only a RIP-relative lea takes: one stored to
-   memory and one passed to a call. */
+   memory, one passed to a call and one stored only after a run of other instructions, as a constructor that fills in
+   an object's fields before its callback's. */
 __asm__(".text\n"
         "stored_through_lea:\n"
         "    mov $77, %eax\n"
@@ -270,6 +272,19 @@ __asm__(".text\n"
         "passed_through_lea:\n"
         "    mov $78, %eax\n"
         "    ret\n"
+        "stored_late_through_lea:\n"
+        "    mov $79, %eax\n"
+        "    ret\n"
+        ".globl store_address_taken_long_before\n"
+        ".type store_address_taken_long_before, @function\n"
+        "store_address_taken_long_before:\n"
+        "    lea stored_late_through_lea(%rip), %rax\n"
+        "    .rept 24\n"
+        "    xor %ecx, %ecx\n"
+        "    .endr\n"
+        "    mov %rax, (%rdi)\n"
+        "    ret\n"
+        ".size store_address_taken_long_before, .-store_address_taken_long_before\n"
         ".globl store_address_taken_by_lea\n"
         ".type store_address_taken_by_lea, @function\n"
         "store_address_taken_by_lea:\n"
@@ -925,6 +940,8 @@ int main(void) {
     store_address_taken_by_lea(&stored);
     line("function stored through lea", call_function_pointer(stored));
     line("function passed through lea", pass_address_taken_by_lea());
+    store_address_taken_long_before(&stored);
+    line("function stored long after its lea", call_function_pointer(stored));
     zen2_integer();
     unaligned_accesses();
     locked_forms();
