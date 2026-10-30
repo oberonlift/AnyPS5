@@ -36,6 +36,8 @@ struct Settings {
     void* authInfoArgument = nullptr;
     void* preSendCallback = nullptr;
     void* preSendArgument = nullptr;
+    void* redirectCallback = nullptr;
+    void* redirectArgument = nullptr;
 };
 
 struct Capacity {

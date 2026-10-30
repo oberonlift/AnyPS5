@@ -265,7 +265,10 @@ int APS5_VABI sceHttp2SetRecvTimeOut(int id, uint32_t usec) {
 }
 
 int APS5_VABI sceHttp2SetRedirectCallback(int id, void* cb_func, void* user_arg) {
-    return Update(id, __func__, [&](auto&) { if (cb_func || user_arg) NotImplemented_nid_no_patch("sceHttp2SetRedirectCallback"); });
+    return Update(id, __func__, [&](auto& settings) {
+        settings.redirectCallback = cb_func;
+        settings.redirectArgument = user_arg;
+    });
 }
 
 int APS5_VABI sceHttp2SetRequestContentLength(int id, uint64_t content_length) {
