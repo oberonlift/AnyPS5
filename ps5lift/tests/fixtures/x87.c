@@ -275,6 +275,43 @@ static void host_calls(void) {
     report("host-extended");
 }
 
+/* fxsave of a known x87 stack, MXCSR and xmm5, then fxrstor of a changed copy. The hash covers what every processor
+   writes alike: the control, status and abridged tag words, MXCSR and its mask, the two loaded registers and xmm5. The
+   last opcode and instruction pointers, the reserved bytes and the stale contents of empty registers are left out, and
+   MXCSR is loaded first, since a lifted guest starts with the console's and a native one with Linux's. */
+static void fx_state(void) {
+    static u8 saved[512] __attribute__((aligned(16)));
+    static u8 changed[512] __attribute__((aligned(16)));
+    static const u64 pattern[2] __attribute__((aligned(16))) = {0x0123456789abcdeful, 0xfedcba9876543210ul};
+    static const u64 other[2] __attribute__((aligned(16))) = {0x1111222233334444ul, 0x5555666677778888ul};
+    static u64 restored[2] __attribute__((aligned(16)));
+    static const u32 mxcsr = 0x1f80;
+    __asm__ volatile("ldmxcsr %[mxcsr]\n\tfninit\n\tfldpi\n\tfld1\n\tmovdqa %[pattern], %%xmm5\n\tfxsave %[saved]\n\tfstp %%st(0)\n\tfstp %%st(0)"
+                     : [saved] "=m"(saved) : [pattern] "m"(pattern), [mxcsr] "m"(mxcsr) : "xmm5", "st", "st(1)", "st(2)", "st(3)", "st(4)", "st(5)", "st(6)", "st(7)", "memory");
+    mix(saved, 5);
+    mix(saved + 24, 8);
+    mix(saved + 32, 10);
+    mix(saved + 48, 10);
+    mix(saved + 160 + 5 * 16, 16);
+    memcpy(changed, saved, sizeof(changed));
+    const u16 precision = 0x027f;
+    memcpy(changed, &precision, 2);
+    const long double two = 2.0L;
+    memcpy(changed + 32, &two, 10);
+    memcpy(changed + 160 + 5 * 16, other, 16);
+    u16 control;
+    long double first, second;
+    __asm__ volatile("fxrstor %[changed]\n\tfnstcw %[control]\n\tfstpt %[first]\n\tfstpt %[second]\n\tmovdqa %%xmm5, %[xmm]"
+                     : [control] "=m"(control), [first] "=m"(first), [second] "=m"(second), [xmm] "=m"(restored)
+                     : [changed] "m"(changed) : "xmm5", "st", "st(1)", "st(2)", "st(3)", "st(4)", "st(5)", "st(6)", "st(7)", "memory");
+    mix(&control, 2);
+    mix_ld(first);
+    mix_ld(second);
+    mix(restored, 16);
+    set_control(0x037f);
+    report("fx-state");
+}
+
 int main(void) {
     for (int i = 0; i < Count; ++i) {
         long double v;
@@ -294,6 +331,7 @@ int main(void) {
     }
     set_control(0x037f);
     edge_cases();
+    fx_state();
     return 0;
 }
 

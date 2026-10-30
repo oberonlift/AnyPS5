@@ -45,7 +45,7 @@ extern "C" void GuestCpuX87Wait_nid_no_patch(void) {
 }
 
 extern "C" std::uint32_t GuestCpuMxcsrMask_nid_no_patch(void) {
-    return 0xffffu;
+    return PS5LIFT_MXCSR_MASK;
 }
 
 extern "C" void GuestCpuStoreExtended_nid_no_patch(const long double* host, void* guest) {

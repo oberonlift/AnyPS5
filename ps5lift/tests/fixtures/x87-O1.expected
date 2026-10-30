@@ -54,3 +54,4 @@ fistp m16 70000.75 = 8000 C1 0 IE 1
 fistp m16 2.75 = 0003 C1 1 IE 0
 fistp m16 2.25 = 0002 C1 0 IE 0
 fxam freed -1 4300, freed +1 4100
+fx-state eaf46f9d708a26c1

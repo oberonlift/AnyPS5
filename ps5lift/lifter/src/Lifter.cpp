@@ -3232,6 +3232,17 @@ private:
             if (Operand(0).size != 224) throw UnsupportedInstruction("16-bit environment");
             CallX87(mnemonic == ZYDIS_MNEMONIC_FNSTENV ? PS5LIFT_X87_STORE_ENVIRONMENT : PS5LIFT_X87_LOAD_ENVIRONMENT, 0, X87Address(), 0);
             return true;
+        // fxsave reads the XMM registers from the state and fxrstor writes them there, so the cached registers are written
+        // back before either and read again after fxrstor.
+        case ZYDIS_MNEMONIC_FXSAVE: case ZYDIS_MNEMONIC_FXSAVE64:
+            Flush();
+            CallX87(PS5LIFT_X87_SAVE_STATE, 0, X87Address(), 0);
+            return true;
+        case ZYDIS_MNEMONIC_FXRSTOR: case ZYDIS_MNEMONIC_FXRSTOR64:
+            Flush();
+            CallX87(PS5LIFT_X87_RESTORE_STATE, 0, X87Address(), 0);
+            Reload();
+            return true;
         case ZYDIS_MNEMONIC_FLD1: CallX87(PS5LIFT_X87_LOAD_CONSTANT, 0, nullptr, 0); return true;
         case ZYDIS_MNEMONIC_FLDL2T: CallX87(PS5LIFT_X87_LOAD_CONSTANT, 0, nullptr, 1); return true;
         case ZYDIS_MNEMONIC_FLDL2E: CallX87(PS5LIFT_X87_LOAD_CONSTANT, 0, nullptr, 2); return true;
