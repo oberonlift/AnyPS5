@@ -551,9 +551,6 @@ SpirvBufferFormatInfo ImageConversionFormat(const ImageResource& image) {
 }
 
 void RequireConvertedUnormAccess(SpirvValueEmitContext& ctx, const ImageEmitAccess& access, const SpirvBufferFormatInfo& info) {
-    if (access.mem.dataBits == 16u && info.byteSize != 2u) {
-        ctx.Fail(access.inst, info.type == SpirvFormatComponentType::Float ? "reads or writes a converted float image with 16-bit data, which is not implemented" : "reads or writes a converted unorm image with 16-bit data, which is not implemented");
-    }
     for (std::uint32_t component = 0; component < 4u; component++) {
         const auto selector = (access.image.shaderSwizzle >> (component * 3u)) & 7u;
         if (selector >= 4u && selector - 4u >= info.componentCount && info.byteSize != 2u) {
@@ -611,13 +608,16 @@ std::uint32_t UnpackImageTexel(SpirvValueEmitContext& ctx, const ImageEmitAccess
     if (unorm) {
         RequireConvertedUnormAccess(ctx, access, info);
     }
+    const bool halves = unorm && access.mem.dataBits == 16u;
     const auto packed = state.module.AllocateId();
     state.module.AddFunction(spv::OpCompositeExtract, TypeU32(state), packed, texel, 0u);
     std::array<std::uint32_t, 4> components{ConstantU32(state, 0), ConstantU32(state, 0), ConstantU32(state, 0), ConstantU32(state, 0)};
     for (std::uint32_t component = 0; component < info.componentCount; component++) {
         components[component] = state.module.AllocateId();
         state.module.AddFunction(spv::OpBitFieldUExtract, TypeU32(state), components[component], packed, ConstantU32(state, info.componentBitOffset[component]), ConstantU32(state, info.componentBits[component]));
-        if (unorm) {
+        if (halves) {
+            components[component] = EmitD16FormatComponent(state, info, component, components[component]);
+        } else if (unorm) {
             components[component] = NormalizeFormatComponent(state, info, component, components[component]);
         }
     }
@@ -628,7 +628,7 @@ std::uint32_t UnpackImageTexel(SpirvValueEmitContext& ctx, const ImageEmitAccess
     for (std::uint32_t component = 0; component < 4u; component++) {
         const auto selector = RuntimeImageSwizzle(state, access.mem.resource, component);
         const auto value = RuntimeSwizzledComponent(state, selector, components);
-        selected[component] = Select(state, TypeU32(state), Binary(state, spv::OpIEqual, TypeBool(state), selector, ConstantU32(state, 1u)), ConstantU32(state, FormattedConstantBits(info, SpirvFormattedSourceKind::One)), value);
+        selected[component] = Select(state, TypeU32(state), Binary(state, spv::OpIEqual, TypeBool(state), selector, ConstantU32(state, 1u)), ConstantU32(state, halves ? 0x3c00u : FormattedConstantBits(info, SpirvFormattedSourceKind::One)), value);
     }
     const auto result = state.module.AllocateId();
     state.module.AddFunction(spv::OpCompositeConstruct, TypeU32Vector(state, 4), result, selected[0], selected[1], selected[2], selected[3]);
