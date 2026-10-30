@@ -21,14 +21,14 @@ Not goals: Intel Macs; running guest code under Rosetta, which AnyPS5's own macO
 - **ps5lift** builds against Ubuntu's LLVM 18 and, since phase 1, Homebrew's LLVM 23. Its output depends on the platform in two places only: it writes a GNU-format archive, and `main.cpp` picks the default CPU from the triple. Hidden visibility, the only symbol attribute it sets, means the same in Mach-O. AnyPS5's ELF reader, its other dependency, is part of AnyPS5's relinker, which already builds on Apple Silicon.
 - **The runtime** makes four Linux calls: `mmap` with `MAP_FIXED_NOREPLACE` for the guest images, `getauxval` for the CPU features it checks at start, `sched_getcpu` for `rdpid` and `getrandom` for `rdrand`. FPCR, `cntvct_el0` and the `dc` cache maintenance instructions are AArch64, not Linux; whether macOS lets user code run `dc civac` is unchecked, and `sys_dcache_flush` is its documented interface.
 - **Linking.** `build_runtime.py` and the fixture runners link with ELF `lld` options (`--undefined-glob`, `--export-dynamic-symbol`, `-rpath $ORIGIN`) so that AnyPS5's libraries, which are shared objects, bind to the runtime's `GuestCpu*_nid_no_patch` functions in the executable.
-- **The guest fixtures** are freestanding x86-64 Linux executables (`-nostdlib`, linked by `ld.lld`), so any clang with `lld` builds all but three of them on a Mac; Homebrew packages `lld` apart from `llvm`. `threads` and `callbacks` link host libraries that use pthreads, and `modules` links libc, so those three need an x86-64 Linux sysroot. They are position-independent code linked at 512 GiB, where the relinker places PS5 executables too (see below).
+- **The guest fixtures** are freestanding x86-64 Linux executables (`-nostdlib`, linked by `ld.lld`), so any clang with `lld` builds all but three of them on a Mac; Homebrew packages `lld` apart from `llvm`. `threads` and `callbacks` link host libraries that use pthreads, and `modules` links libc, so those three need an x86-64 Linux sysroot. They are position-independent code linked at 1008 GiB, where the relinker places PS5 executables too (see below).
 - **AnyPS5** has had a full macOS build since upstream commit `8ca4c1009`, for x86-64 under Rosetta: 291 `__APPLE__` paths, most in libc, libkernel and libSceAgcDriver (Mach VM calls, dispatch semaphores, `@loader_path` rpaths, DWARF unwind tables instead of compact unwind), MoltenVK handling in libSceAgcDriver, and FFmpeg prebuilts for macOS that include arm64. Its CMake stops on any other macOS architecture. Its lifted mode (`ANYPS5_GUEST_LIFTED`, 49 sites) was written for Linux on aarch64. `GuestLongDouble` requires a host `long double` that holds every x87 value, and on macOS arm64 `long double` is `double`, so the lifted libc does not compile there. 13 of libc's files use `long double`, and its math functions use their own polynomial approximations rather than the host's `sinl` and the like.
 
 ## Decisions
 
 ### Where guest memory goes
 
-Guest memory is identity mapped ([the design](DESIGN.md#machine-model)), and every guest image sits above 4 GiB, on every host. PS5 titles are the only goal, and PS5 executables are position-independent (`ET_SCE_DYNEXEC`, loaded at virtual address 0), so the relinker places each at 512 GiB with `--linux-fixed-base 0x8000000000`; the fixtures are position-independent code linked at the same base, and the lifter places modules after the executable as before. 512 GiB lies inside the PS5 application area and above everything a macOS process keeps below 448 GiB, so whether macOS lets an arm64 program shrink its `__PAGEZERO` no longer matters. Code that must sit below 4 GiB, such as code with 32-bit absolute addresses, is not PS5 code; the one fixture case that needed it is gone. A title that keeps pointers in 32 bits would break on every host; none is known.
+Guest memory is identity mapped ([the design](DESIGN.md#machine-model)), and every guest image sits above 4 GiB, on every host. PS5 titles are the only goal, and PS5 executables are position-independent (`ET_SCE_DYNEXEC`, loaded at virtual address 0), so the relinker places each at 1008 GiB with `--linux-fixed-base 0xFC00000000`; the fixtures are position-independent code linked at the same base, and the lifter places modules after the executable as before. 1008 GiB is where the PS5 application area ends, so it is clear of the ranges a title reserves inside it, and it lies above everything a macOS process keeps below 448 GiB, so whether macOS lets an arm64 program shrink its `__PAGEZERO` no longer matters. Code that must sit below 4 GiB, such as code with 32-bit absolute addresses, is not PS5 code; the one fixture case that needed it is gone. A title that keeps pointers in 32 bits would break on every host; none is known.
 
 ### Target and CPU
 
@@ -71,7 +71,7 @@ Done when the twelve fixtures that need no AnyPS5 pass on the Mac, at `-O0` to `
 
 ### 3. The relinker's fixtures
 
-Build AnyPS5's relinker on the Mac (its relinker-only build already supports Apple Silicon) and run the `import` and `tls` fixtures, which the tests relink at 512 GiB. Done when both pass.
+Build AnyPS5's relinker on the Mac (its relinker-only build already supports Apple Silicon) and run the `import` and `tls` fixtures, which the tests relink at 1008 GiB. Done when both pass.
 
 ### 4. AnyPS5's libraries for a lifted guest on macOS
 
@@ -85,7 +85,7 @@ Done when `libc`, `exceptions`, `kernel` and `fiber` pass and `run_libc_tests.py
 
 ### 5. EVO Player
 
-Build the rest of the libraries it imports (libSceAgcDriver and its shader recompiler on MoltenVK, libSceVideoOut, audio, pad, system service, networking), relink it at 512 GiB, lift it, and run it in a Cocoa window rather than under Xvfb. Done when it reaches its home screen. A screen that matches the GB10's, with the same colour fringes, puts those fringes in the shared code, not in either platform's renderer.
+Build the rest of the libraries it imports (libSceAgcDriver and its shader recompiler on MoltenVK, libSceVideoOut, audio, pad, system service, networking), relink it at 1008 GiB, lift it, and run it in a Cocoa window rather than under Xvfb. Done when it reaches its home screen. A screen that matches the GB10's, with the same colour fringes, puts those fringes in the shared code, not in either platform's renderer.
 
 ### 6. Both hosts, documented
 

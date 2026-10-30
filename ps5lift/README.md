@@ -30,12 +30,12 @@ ctest --test-dir build --output-on-failure
 
 ## Use
 
-A title's `eboot.bin` and the modules in its `sce_module` directory are SELF containers. AnyPS5's `unwrap_self.py` turns each decrypted one into a plain ELF, and the AnyPS5 relinker, which the test build compiles as `build/anyps5/core/relinker/relinker`, then converts the executable and the modules in the `sce_module` directory beside it. PS5 executables are position-independent, and the relinker places this one at 512 GiB, where every guest image goes ([the design](docs/DESIGN.md#machine-model)):
+A title's `eboot.bin` and the modules in its `sce_module` directory are SELF containers. AnyPS5's `unwrap_self.py` turns each decrypted one into a plain ELF, and the AnyPS5 relinker, which the test build compiles as `build/anyps5/core/relinker/relinker`, then converts the executable and the modules in the `sce_module` directory beside it. PS5 executables are position-independent, and the relinker places this one at 1008 GiB, where every guest image goes ([the design](docs/DESIGN.md#machine-model)):
 
 ```sh
 python3 3rdparty/anyps5/tools/unwrap_self.py title/eboot.bin unwrapped/eboot.elf
 for prx in title/sce_module/*.prx; do python3 3rdparty/anyps5/tools/unwrap_self.py $prx unwrapped/sce_module/${prx##*/}; done
-build/anyps5/core/relinker/relinker --linux-fixed-base 0x8000000000 unwrapped/eboot.elf app.elf
+build/anyps5/core/relinker/relinker --linux-fixed-base 0xFC00000000 unwrapped/eboot.elf app.elf
 ```
 
 ```sh
