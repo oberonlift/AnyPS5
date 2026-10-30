@@ -30,6 +30,46 @@ int guest_sigprocmask(int how, const unsigned* set, unsigned* old) __asm__(NID_s
 int guest_sigsetjmp(long* buffer, long save_mask) __asm__(NID_sigsetjmp) __attribute__((returns_twice));
 void guest_siglongjmp(long* buffer, int value) __asm__(NID_siglongjmp) __attribute__((noreturn));
 
+struct module_segment {
+    unsigned long address;
+    unsigned size;
+    int prot;
+};
+
+struct module_info {
+    unsigned long st_size;
+    char name[256];
+    int id;
+    unsigned tls_index;
+    unsigned long tls_init_address;
+    unsigned tls_init_size, tls_size, tls_offset, tls_align;
+    unsigned long init_address, fini_address, reserved[2], eh_frame_hdr_address, eh_frame_address;
+    unsigned eh_frame_hdr_size, eh_frame_size;
+    struct module_segment segments[4];
+    unsigned segment_count, ref_count;
+};
+_Static_assert(__builtin_offsetof(struct module_info, segments) == 0x160, "ModuleInfoEx layout");
+
+struct unwind_info {
+    unsigned long st_size;
+    char name[256];
+    unsigned long eh_frame_hdr_address, eh_frame_address, eh_frame_size, first_segment_address, first_segment_size;
+};
+
+int guest_module_info_from_address(unsigned long address, int flags, struct module_info* info) __asm__(NID_sceKernelGetModuleInfoFromAddr);
+
+/* The fixtures build without unwind tables, so this function brings the executable an .eh_frame and its header. */
+void unwound_function(void);
+__asm__(".text\n"
+        ".globl unwound_function\n"
+        ".type unwound_function, @function\n"
+        "unwound_function:\n"
+        "    .cfi_startproc\n"
+        "    ret\n"
+        "    .cfi_endproc\n"
+        ".size unwound_function, .-unwound_function\n");
+int guest_module_info_for_unwind(unsigned long address, int flags, struct unwind_info* info) __asm__(NID_sceKernelGetModuleInfoForUnwind);
+
 static void interrupted(int number) {
     (void)number;
 }
@@ -181,6 +221,21 @@ int main(void) {
     const int absent = guest_dlsym(module, "kernel_module_absent", &missing);
     guest_printf("module loaded %d started %d, dlsym %d answer %ld, absent symbol %d\n", module > 0, started, found, answer ? ((long (*)(long))answer)(6) : -1,
                  absent != 0 && missing == 0);
+
+    const unsigned long code = (unsigned long)&unwound_function;
+    struct module_info module_info;
+    module_info.st_size = sizeof(module_info);
+    const int queried = guest_module_info_from_address(code, 1, &module_info);
+    int contains = 0;
+    for (unsigned index = 0; index < module_info.segment_count && index < 4; ++index) {
+        const struct module_segment* segment = &module_info.segments[index];
+        if (code >= segment->address && code - segment->address < segment->size) contains = 1;
+    }
+    struct unwind_info unwind_info;
+    unwind_info.st_size = sizeof(unwind_info);
+    const int unwound = guest_module_info_for_unwind(code, 0, &unwind_info);
+    guest_printf("module of the executable's code %d, holds it %d, unwind tables %d %d\n", queried, contains, unwound,
+                 unwind_info.eh_frame_hdr_address == module_info.eh_frame_hdr_address && unwind_info.eh_frame_hdr_address != 0 && unwind_info.eh_frame_size != 0);
 
     const unsigned long before = guest_process_time();
     guest_usleep(20000);
