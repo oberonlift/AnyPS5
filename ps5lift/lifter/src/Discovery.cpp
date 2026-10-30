@@ -348,7 +348,8 @@ bool PassesArgument(const ZydisRegister reg) {
 // keeps strings and tables among its instructions and takes their addresses the same way, so an address counts as a
 // function's only if the code stores it, branches to it or passes it to a call before it reads memory through it. The
 // register is followed for as long as it holds the address, however many other instructions come first: a constructor
-// can fill in dozens of an object's fields before it stores a callback taken at its start.
+// can fill in dozens of an object's fields before it stores a callback taken at its start. A NOP's memory operand
+// reads nothing, so the padding that aligns a loop after the lea does not count as a read.
 std::optional<std::uint64_t> TakenFunctionAddress(const GuestImage& image, const GuestFunction& function, const Instruction& lea) {
     const auto address = RipRelativeAddress(lea);
     if (!address || !image.IsExecutable(*address)) return std::nullopt;
@@ -357,6 +358,7 @@ std::optional<std::uint64_t> TakenFunctionAddress(const GuestImage& image, const
     for (; next != function.Instructions.end(); next = function.Instructions.find(next->second.Next())) {
         const auto& instruction = next->second;
         const auto mnemonic = instruction.Info.mnemonic;
+        if (mnemonic == ZYDIS_MNEMONIC_NOP) continue;
         const auto& target = instruction.Operands[0];
         for (std::uint8_t i = 0; i < instruction.Info.operand_count_visible; ++i) {
             const auto& operand = instruction.Operands[i];
