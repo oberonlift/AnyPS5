@@ -47,6 +47,7 @@ constexpr std::uint32_t SwizzleX011 = 0x244u;
 constexpr std::uint32_t SwizzleYXZ1 = 0x3a5u;
 constexpr std::uint32_t SwizzleXYZW = 0xfacu;
 constexpr std::uint32_t D16 = 0x80000000u;
+constexpr std::uint32_t HalfOne = 0x3c00u;
 constexpr std::uint32_t DivisionUlps = 3;
 constexpr std::size_t BlockBytes = 65536;
 constexpr std::size_t RoundTripOffset = 16384;
@@ -79,9 +80,9 @@ constexpr std::array<std::uint32_t, 9> StoreCode(std::uint32_t dmask, std::uint3
     };
 }
 
-constexpr std::array<std::uint32_t, 9> SamplerCode(std::uint32_t word0) {
+constexpr std::array<std::uint32_t, 9> SamplerCode(std::uint32_t word0, std::uint32_t d16 = 0u) {
     return {
-        0x34060084u, 0x7e280280u, 0x7e2a0280u, word0, 0x00610a14u, 0xbf8c3f70u, 0xe0781000u, 0x80000a03u,
+        0x34060084u, 0x7e280280u, 0x7e2a0280u, word0, 0x00610a14u | d16, 0xbf8c3f70u, 0xe0781000u, 0x80000a03u,
         0xbf810000u,
     };
 }
@@ -106,6 +107,7 @@ alignas(256) constexpr auto StoreXyz = StoreCode(0x7u, 0u);
 alignas(256) constexpr auto StoreXz = StoreCode(0x5u, 0u);
 alignas(256) constexpr auto StoreD16 = StoreCode(0x7u, D16);
 alignas(256) constexpr auto SampleLz = SamplerCode(0xf09c0f08u);
+alignas(256) constexpr auto SampleLzD16 = SamplerCode(0xf09c0f08u, D16);
 alignas(256) constexpr auto Gather4Lz = SamplerCode(0xf11c0108u);
 alignas(256) constexpr auto GetLod = SamplerCode(0xf1800308u);
 alignas(256) constexpr auto SampleAt = SampleAtCode(SampleStep, SampleStart);
@@ -336,6 +338,69 @@ void CheckFloatLoad(AgcDriver::VulkanDevice& device, std::uint8_t* texels) {
     }
 }
 
+void CheckFloatD16(AgcDriver::VulkanDevice& device, std::uint8_t* texels) {
+    for (std::uint32_t index = 0; index < LoadWidth; ++index) {
+        const auto texel = FloatTexel(index);
+        std::memcpy(texels + index * 4u, &texel, 4u);
+    }
+    Run(device, LoadD16, TextureDescriptor(texels, FloatFormat, SwizzleXYZ1, LoadWidth), {}, LoadGroups);
+    for (std::uint32_t index = 0; index < LoadWidth; ++index) {
+        const std::array<std::uint32_t, 2> expected{SmallFloat(FloatValues[index % 11u], 10u) | (SmallFloat(FloatValues[(index + 4u) % 11u], 10u) << 16u), SmallFloat(FloatValues[(index + 8u) % 11u], 10u) | (HalfOne << 16u)};
+        for (std::uint32_t word = 0; word < 2u; ++word) {
+            const auto actual = Output[index * 4u + word];
+            Require(actual == expected[word], "image_load d16 of R10_G11_B11_FLOAT: texel " + std::to_string(index) + " word " + std::to_string(word) + " is " + Hex(actual) + ", expected " + Hex(expected[word]));
+        }
+    }
+    std::fill(texels, texels + Threads * 4u, static_cast<std::uint8_t>(0xa5u));
+    Input.fill(0u);
+    for (std::uint32_t tid = 0; tid < Threads; ++tid) {
+        Input[tid * 4u + 0u] = SmallFloat(FloatValues[tid % 11u], 10u) | (SmallFloat(FloatValues[(tid + 4u) % 11u], 10u) << 16u);
+        Input[tid * 4u + 1u] = SmallFloat(FloatValues[(tid + 8u) % 11u], 10u);
+    }
+    Run(device, StoreD16, TextureDescriptor(texels, FloatFormat, SwizzleXYZ1, Threads), BufferDescriptor(Input.data(), static_cast<std::uint32_t>(Input.size() * 4u)), 1);
+    AgcDriver::Graphics::StorageTexture::FlushPending(reinterpret_cast<std::uintptr_t>(texels), Threads * 4u, nullptr, "test");
+    device.WaitIdle();
+    for (std::uint32_t tid = 0; tid < Threads; ++tid) {
+        std::uint32_t actual = 0;
+        std::memcpy(&actual, texels + tid * 4u, 4u);
+        Require(actual == FloatTexel(tid), "image_store d16 of R10_G11_B11_FLOAT: texel " + std::to_string(tid) + " is " + Hex(actual) + ", expected " + Hex(FloatTexel(tid)));
+    }
+}
+void CheckUnormD16(AgcDriver::VulkanDevice& device, std::uint8_t* texels, std::uint8_t* stored) {
+    for (std::uint32_t index = 0; index < LoadWidth; ++index) {
+        const auto texel = ((index & 1u) != 0u ? 2047u : 0u) | ((index & 2u) != 0u ? 2047u << 11u : 0u) | ((index & 4u) != 0u ? 1023u << 22u : 0u);
+        std::memcpy(texels + index * 4u, &texel, 4u);
+    }
+    Run(device, LoadD16, TextureDescriptor(texels, UnormFormat, SwizzleXYZ1, LoadWidth), {}, LoadGroups);
+    for (std::uint32_t index = 0; index < LoadWidth; ++index) {
+        const auto half = [&](std::uint32_t bit) { return (index & bit) != 0u ? HalfOne : 0u; };
+        const std::array<std::uint32_t, 2> expected{half(1u) | (half(2u) << 16u), half(4u) | (HalfOne << 16u)};
+        for (std::uint32_t word = 0; word < 2u; ++word) {
+            const auto actual = Output[index * 4u + word];
+            Require(actual == expected[word], "image_load d16 of a converted unorm image: texel " + std::to_string(index) + " word " + std::to_string(word) + " is " + Hex(actual) + ", expected " + Hex(expected[word]));
+        }
+    }
+    constexpr std::array<float, 6> UnitValues{0.0f, 1.0f, 0.5f, 0.25f, 0.75f, 0.125f};
+    std::fill(stored, stored + Threads * 4u, static_cast<std::uint8_t>(0xa5u));
+    Input.fill(0u);
+    std::array<std::uint32_t, Threads> expected{};
+    for (std::uint32_t tid = 0; tid < Threads; ++tid) {
+        const std::array<float, 3> values{UnitValues[tid % 6u], UnitValues[(tid + 2u) % 6u], UnitValues[(tid + 4u) % 6u]};
+        Input[tid * 4u + 0u] = SmallFloat(values[0], 10u) | (SmallFloat(values[1], 10u) << 16u);
+        Input[tid * 4u + 1u] = SmallFloat(values[2], 10u);
+        for (std::uint32_t component = 0; component < 3u; ++component) {
+            expected[tid] |= StoreField(std::bit_cast<std::uint32_t>(values[component]), component == 2u ? 1023u : 2047u) << (component * 11u);
+        }
+    }
+    Run(device, StoreD16, TextureDescriptor(stored, UnormFormat, SwizzleXYZ1, Threads), BufferDescriptor(Input.data(), static_cast<std::uint32_t>(Input.size() * 4u)), 1);
+    AgcDriver::Graphics::StorageTexture::FlushPending(reinterpret_cast<std::uintptr_t>(stored), Threads * 4u, nullptr, "test");
+    device.WaitIdle();
+    for (std::uint32_t tid = 0; tid < Threads; ++tid) {
+        std::uint32_t actual = 0;
+        std::memcpy(&actual, stored + tid * 4u, 4u);
+        Require(actual == expected[tid], "image_store d16 of a converted unorm image: texel " + std::to_string(tid) + " is " + Hex(actual) + ", expected " + Hex(expected[tid]));
+    }
+}
 void CheckFloatStore(AgcDriver::VulkanDevice& device, std::uint8_t* texels) {
     std::fill(texels, texels + Threads * 4u, static_cast<std::uint8_t>(0xa5u));
     Input.fill(0u);
@@ -598,8 +663,9 @@ int main(int argc, char** argv) {
         RequireRefused(*device, SampleLz, texels, SwizzleXYZ1, BorderSampler, "implemented only with wrap or clamp-to-edge addressing", "image_sample_lz with clamp-to-border addressing");
         RequireRefused(*device, Gather4Lz, texels, SwizzleXYZ1, PointSampler, "sampling, gathering or querying LOD of a converted unorm image", "image_gather4_lz");
         RequireRefused(*device, GetLod, texels, SwizzleXYZ1, PointSampler, "sampling, gathering or querying LOD of a converted unorm image", "image_get_lod");
-        RequireRefused(*device, LoadD16, texels, SwizzleXYZ1, {}, "converted unorm image with 16-bit data", "image_load d16");
-        RequireRefused(*device, StoreD16, texels + StoreOffset, SwizzleXYZ1, BufferDescriptor(Input.data(), static_cast<std::uint32_t>(Input.size() * 4u)), "converted unorm image with 16-bit data", "image_store d16");
+        CheckFloatD16(*device, texels + FloatOffset);
+        CheckUnormD16(*device, texels, texels + StoreOffset);
+        RequireRefused(*device, SampleLzD16, texels, SwizzleXYZ1, PointSampler, "accesses a sampled converted unorm image with 16-bit data", "image_sample_lz d16");
         RequireRefused(*device, LoadXyzw, texels, SwizzleXYZW, {}, "selects a channel the converted image format does not have", "image_load with DST_SEL X Y Z W");
         RequireRefused(*device, StoreXyz, texels + StoreOffset, SwizzleXYZW, BufferDescriptor(Input.data(), static_cast<std::uint32_t>(Input.size() * 4u)), "selects a channel the converted image format does not have", "image_store with DST_SEL X Y Z W");
         std::puts("image converted unorm tests passed");
