@@ -49,6 +49,7 @@ function stored through lea = 77
 function passed through lea = 78
 function stored long after its lea = 79
 function called through lea after a nop = 80
+function returned through lea = 81
 bswap 64 = 0xefcdab8967452301
 bswap 32 = 0x0000000067452301
 movbe load 64 = 0xefcdab8967452301

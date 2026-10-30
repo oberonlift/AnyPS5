@@ -346,10 +346,10 @@ bool PassesArgument(const ZydisRegister reg) {
 
 // Position-independent code takes a function's address with a RIP-relative lea, which needs no relocation. Code also
 // keeps strings and tables among its instructions and takes their addresses the same way, so an address counts as a
-// function's only if the code stores it, branches to it or passes it to a call before it reads memory through it. The
-// register is followed for as long as it holds the address, however many other instructions come first: a constructor
-// can fill in dozens of an object's fields before it stores a callback taken at its start. A NOP's memory operand
-// reads nothing, so the padding that aligns a loop after the lea does not count as a read.
+// function's only if the code stores it, branches to it, passes it to a call or returns it before it reads memory
+// through it. The register is followed for as long as it holds the address, however many other instructions come
+// first: a constructor can fill in dozens of an object's fields before it stores a callback taken at its start. A NOP's
+// memory operand reads nothing, so the padding that aligns a loop after the lea does not count as a read.
 std::optional<std::uint64_t> TakenFunctionAddress(const GuestImage& image, const GuestFunction& function, const Instruction& lea) {
     const auto address = RipRelativeAddress(lea);
     if (!address || !image.IsExecutable(*address)) return std::nullopt;
@@ -366,6 +366,7 @@ std::optional<std::uint64_t> TakenFunctionAddress(const GuestImage& image, const
         }
         if ((mnemonic == ZYDIS_MNEMONIC_CALL || mnemonic == ZYDIS_MNEMONIC_JMP) && target.type == ZYDIS_OPERAND_TYPE_REGISTER && target.reg.value == reg) return address;
         if (mnemonic == ZYDIS_MNEMONIC_CALL) return PassesArgument(reg) ? address : std::nullopt;
+        if (mnemonic == ZYDIS_MNEMONIC_RET) return Enclosing(reg) == ZYDIS_REGISTER_RAX ? address : std::nullopt;
         if (mnemonic == ZYDIS_MNEMONIC_MOV && target.type == ZYDIS_OPERAND_TYPE_MEMORY && instruction.Operands[1].type == ZYDIS_OPERAND_TYPE_REGISTER && instruction.Operands[1].reg.value == reg)
             return address;
         if (WritesRegister(instruction, reg) || EndsFlow(instruction) || IsConditionalJump(mnemonic)) return std::nullopt;
