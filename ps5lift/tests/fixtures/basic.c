@@ -114,6 +114,7 @@ i64 next_after_jump(i64 value);
 void store_address_taken_by_lea(i64 (**slot)(void));
 i64 pass_address_taken_by_lea(void);
 void store_address_taken_long_before(i64 (**slot)(void));
+i64 call_address_taken_before_nop(void);
 
 __attribute__((noinline)) i64 call_function_pointer(i64 (*function)(void)) {
     return function();
@@ -263,8 +264,8 @@ __asm__(".text\n"
         ".size next_after_jump, .-next_after_jump\n");
 
 /* Functions with no symbol type and no unwind entry, whose addresses only a RIP-relative lea takes: one stored to
-   memory, one passed to a call and one stored only after a run of other instructions, as a constructor that fills in
-   an object's fields before its callback's. */
+   memory, one passed to a call, one stored only after a run of other instructions, as a constructor that fills in
+   an object's fields before its callback's, and one called after a NOP whose operand names the register. */
 __asm__(".text\n"
         "stored_through_lea:\n"
         "    mov $77, %eax\n"
@@ -285,6 +286,19 @@ __asm__(".text\n"
         "    mov %rax, (%rdi)\n"
         "    ret\n"
         ".size store_address_taken_long_before, .-store_address_taken_long_before\n"
+        "called_after_nop_through_lea:\n"
+        "    mov $80, %eax\n"
+        "    ret\n"
+        ".globl call_address_taken_before_nop\n"
+        ".type call_address_taken_before_nop, @function\n"
+        "call_address_taken_before_nop:\n"
+        "    sub $8, %rsp\n"
+        "    lea called_after_nop_through_lea(%rip), %rax\n"
+        "    nopl 0x0(%rax,%rax,1)\n"
+        "    call *%rax\n"
+        "    add $8, %rsp\n"
+        "    ret\n"
+        ".size call_address_taken_before_nop, .-call_address_taken_before_nop\n"
         ".globl store_address_taken_by_lea\n"
         ".type store_address_taken_by_lea, @function\n"
         "store_address_taken_by_lea:\n"
@@ -942,6 +956,7 @@ int main(void) {
     line("function passed through lea", pass_address_taken_by_lea());
     store_address_taken_long_before(&stored);
     line("function stored long after its lea", call_function_pointer(stored));
+    line("function called through lea after a nop", call_address_taken_before_nop());
     zen2_integer();
     unaligned_accesses();
     locked_forms();
