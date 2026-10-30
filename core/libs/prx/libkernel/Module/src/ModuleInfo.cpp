@@ -407,7 +407,13 @@ int APS5_VABI sceKernelGetModuleInfoFromAddr(std::uint64_t address, int flags, M
     MEMORY_BASIC_INFORMATION memory{};
     const bool found = Fill(static_cast<std::uintptr_t>(address), result) &&
         VirtualQuery(reinterpret_cast<LPCVOID>(address), &memory, sizeof(memory)) == sizeof(memory);
-    const GuestImage image{nullptr, found ? reinterpret_cast<std::uintptr_t>(memory.AllocationBase) : 0};
+    const bool system = found && SystemImage(GuestImage{nullptr, reinterpret_cast<std::uintptr_t>(memory.AllocationBase)});
+#elif defined(ANYPS5_GUEST_LIFTED)
+    ImageSearch<ModuleInfoEx> search{static_cast<std::uintptr_t>(address), &result, false};
+    dl_iterate_phdr(FindImage<ModuleInfoEx>, &search);
+    const bool found = search.found && result.segment_count != 0;
+    if (found) result.id = ModuleIdForImage_nid_no_patch(reinterpret_cast<const void*>(result.segments[0].address));
+    const bool system = false;
 #else
     Dl_info symbol{};
     link_map* native = nullptr;
@@ -416,9 +422,9 @@ int APS5_VABI sceKernelGetModuleInfoFromAddr(std::uint64_t address, int flags, M
         dl_iterate_phdr(FindImage<ModuleInfoEx>, &search);
     const bool found = search.found;
     if (found) result.id = ModuleIdForImage_nid_no_patch(native);
-    const GuestImage image{native, 0};
+    const bool system = found && SystemImage(GuestImage{native, 0});
 #endif
-    if (!found || (flags == 2 && SystemImage(image))) {
+    if (!found || (flags == 2 && system)) {
         *info = {};
         return SCE_KERNEL_ERROR_ESRCH;
     }
