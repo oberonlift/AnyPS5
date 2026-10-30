@@ -115,6 +115,7 @@ void store_address_taken_by_lea(i64 (**slot)(void));
 i64 pass_address_taken_by_lea(void);
 void store_address_taken_long_before(i64 (**slot)(void));
 i64 call_address_taken_before_nop(void);
+i64 (*return_address_taken_by_lea(void))(void);
 
 __attribute__((noinline)) i64 call_function_pointer(i64 (*function)(void)) {
     return function();
@@ -265,7 +266,8 @@ __asm__(".text\n"
 
 /* Functions with no symbol type and no unwind entry, whose addresses only a RIP-relative lea takes: one stored to
    memory, one passed to a call, one stored only after a run of other instructions, as a constructor that fills in
-   an object's fields before its callback's, and one called after a NOP whose operand names the register. */
+   an object's fields before its callback's, one called after a NOP whose operand names the register and one
+   returned, as a state machine's state returns the next. */
 __asm__(".text\n"
         "stored_through_lea:\n"
         "    mov $77, %eax\n"
@@ -299,6 +301,17 @@ __asm__(".text\n"
         "    add $8, %rsp\n"
         "    ret\n"
         ".size call_address_taken_before_nop, .-call_address_taken_before_nop\n"
+        "returned_through_lea:\n"
+        "    mov $81, %eax\n"
+        "    ret\n"
+        ".globl return_address_taken_by_lea\n"
+        ".type return_address_taken_by_lea, @function\n"
+        "return_address_taken_by_lea:\n"
+        "    push %rbx\n"
+        "    lea returned_through_lea(%rip), %rax\n"
+        "    pop %rbx\n"
+        "    ret\n"
+        ".size return_address_taken_by_lea, .-return_address_taken_by_lea\n"
         ".globl store_address_taken_by_lea\n"
         ".type store_address_taken_by_lea, @function\n"
         "store_address_taken_by_lea:\n"
@@ -957,6 +970,7 @@ int main(void) {
     store_address_taken_long_before(&stored);
     line("function stored long after its lea", call_function_pointer(stored));
     line("function called through lea after a nop", call_address_taken_before_nop());
+    line("function returned through lea", call_function_pointer(return_address_taken_by_lea()));
     zen2_integer();
     unaligned_accesses();
     locked_forms();
