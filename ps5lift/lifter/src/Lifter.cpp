@@ -71,6 +71,27 @@ bool IsHighByte(const ZydisRegister reg) {
     return reg == ZYDIS_REGISTER_AH || reg == ZYDIS_REGISTER_CH || reg == ZYDIS_REGISTER_DH || reg == ZYDIS_REGISTER_BH;
 }
 
+// Whether the instruction gives RSP a value it does not compute from RSP, as a context switch does when it loads the
+// stack pointer it switches to. Adding, subtracting or masking keeps the stack the function runs on.
+bool AssignsStackPointer(const Instruction& instruction) {
+    switch (instruction.Info.mnemonic) {
+    case ZYDIS_MNEMONIC_ADD:
+    case ZYDIS_MNEMONIC_SUB:
+    case ZYDIS_MNEMONIC_AND:
+        return false;
+    case ZYDIS_MNEMONIC_LEA:
+        if (instruction.Operands[1].mem.base == ZYDIS_REGISTER_RSP) return false;
+        break;
+    default:
+        break;
+    }
+    for (unsigned i = 0; i < instruction.Info.operand_count_visible; ++i) {
+        const auto& operand = instruction.Operands[i];
+        if (operand.type == ZYDIS_OPERAND_TYPE_REGISTER && operand.reg.value == ZYDIS_REGISTER_RSP && (operand.actions & ZYDIS_OPERAND_ACTION_MASK_WRITE) != 0) return true;
+    }
+    return false;
+}
+
 enum class Condition {
     O, NO, B, AE, E, NE, BE, A, S, NS, P, NP, L, GE, LE, G
 };
@@ -322,7 +343,7 @@ public:
         auto* entry = llvm::BasicBlock::Create(Context(), "entry", _host);
         _builder.SetInsertPoint(entry);
         _state = _host->getArg(0);
-        FindUsedRegisters();
+        ScanInstructions();
         for (int i = 0; i < PS5LIFT_GPR_COUNT; ++i) {
             if (_usedGprs[i]) _gpr[i] = _builder.CreateAlloca(I64(), nullptr, "gpr" + std::to_string(i));
         }
@@ -381,6 +402,7 @@ private:
     std::array<bool, PS5LIFT_GPR_COUNT> _usedGprs{};
     std::array<bool, VectorCount> _usedVectors{};
     bool _usesFlags = false;
+    bool _assignsStackPointer = false;
     std::map<std::uint64_t, llvm::BasicBlock*> _blocks;
     const Instruction* _instruction = nullptr;
     llvm::Value* _entryRsp = nullptr;
@@ -417,13 +439,14 @@ private:
         if (const auto gpr = GprIndex(reg); gpr >= 0) _usedGprs[gpr] = true;
     }
 
-    void FindUsedRegisters() {
+    void ScanInstructions() {
         _usedGprs[PS5LIFT_RSP] = true;
         for (const auto& [address, instruction] : _function.Instructions) {
             const auto mnemonic = instruction.Info.mnemonic;
             if (mnemonic == ZYDIS_MNEMONIC_VZEROUPPER || mnemonic == ZYDIS_MNEMONIC_VZEROALL) _usedVectors.fill(true);
             const auto* flags = instruction.Info.cpu_flags;
             if (flags != nullptr && (flags->tested | flags->modified | flags->set_0 | flags->set_1 | flags->undefined) != 0) _usesFlags = true;
+            if (AssignsStackPointer(instruction)) _assignsStackPointer = true;
             for (unsigned i = 0; i < instruction.Info.operand_count; ++i) {
                 const auto& operand = instruction.Operands[i];
                 if (operand.type == ZYDIS_OPERAND_TYPE_REGISTER) MarkRegister(operand.reg.value);
@@ -796,6 +819,23 @@ private:
         _builder.CreateCondBr(unwinding, UnwindBlock(), returned, llvm::MDBuilder(Context()).createBranchWeights(1, 1u << 20));
         _builder.SetInsertPoint(returned);
         Reload();
+    }
+
+    // A ret on another stack than the function's own, as libunwind's jumpto makes after loading the landing pad's RSP,
+    // continues at the address it pops in the frame that stack belongs to. The host frames below it unwind to that
+    // frame, as they do for a longjmp.
+    void ResumeIfStackSwitched(llvm::Value* rsp, llvm::Value* popped) {
+        auto* switched = llvm::BasicBlock::Create(Context(), "switched_stack", _host);
+        auto* own = llvm::BasicBlock::Create(Context(), "own_stack", _host);
+        _builder.CreateCondBr(_builder.CreateICmpEQ(rsp, _entryRsp), own, switched, llvm::MDBuilder(Context()).createBranchWeights(1u << 20, 1));
+        _builder.SetInsertPoint(switched);
+        StateStore(Load(rsp, 64, false), offsetof(Ps5LiftState, ResumeRip));
+        StateStore(popped, offsetof(Ps5LiftState, ResumeRsp));
+        StateStore(_builder.getInt8(1), offsetof(Ps5LiftState, Unwinding));
+        SetGpr(PS5LIFT_RSP, popped);
+        Flush();
+        _builder.CreateBr(UnwindBlock());
+        _builder.SetInsertPoint(own);
     }
 
     llvm::BasicBlock* UnwindBlock() {
@@ -3677,8 +3717,10 @@ private:
             return;
         }
         case ZYDIS_MNEMONIC_RET: {
-            auto* pop = _builder.getInt64(8 + (_instruction->Info.operand_count_visible == 1 ? Operand(0).imm.value.u : 0));
-            SetGpr(PS5LIFT_RSP, _builder.CreateAdd(Gpr(PS5LIFT_RSP), pop));
+            auto* rsp = Gpr(PS5LIFT_RSP);
+            auto* popped = _builder.CreateAdd(rsp, _builder.getInt64(8 + (_instruction->Info.operand_count_visible == 1 ? Operand(0).imm.value.u : 0)));
+            if (_assignsStackPointer) ResumeIfStackSwitched(rsp, popped);
+            SetGpr(PS5LIFT_RSP, popped);
             Flush();
             _builder.CreateRetVoid();
             return;

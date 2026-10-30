@@ -126,6 +126,55 @@ static void through_pointer(void) {
     line("pointer", result);
 }
 
+long switch_stack(long* environment, int value);
+
+__asm__(".text\n"
+        ".globl switch_stack\n"
+        ".type switch_stack, @function\n"
+        "switch_stack:\n"
+        "    test %esi, %esi\n"
+        "    jnz 1f\n"
+        "    push %rsp\n"
+        "    pop %rsp\n"
+        "    mov $5, %eax\n"
+        "    ret\n"
+        "1:\n"
+        "    mov 16(%rdi), %rcx\n"
+        "    mov 0(%rdi), %rdx\n"
+        "    mov %rdx, -8(%rcx)\n"
+        "    mov %rdi, -16(%rcx)\n"
+        "    mov %esi, %eax\n"
+        "    mov 8(%rdi), %rbx\n"
+        "    mov 24(%rdi), %rbp\n"
+        "    mov 32(%rdi), %r12\n"
+        "    mov 40(%rdi), %r13\n"
+        "    mov 48(%rdi), %r14\n"
+        "    mov 56(%rdi), %r15\n"
+        "    mov 16(%rdi), %rsp\n"
+        "    sub $16, %rsp\n"
+        "    pop %rdi\n"
+        "    ret\n");
+
+__attribute__((noinline)) static long switch_from(int depth, long* target, int value) {
+    volatile char pad[48];
+    pad[0] = (char)depth;
+    if (depth == 0) return switch_stack(target, value);
+    return switch_from(depth - 1, target, value) + pad[0];
+}
+
+static void switched_stack(void) {
+    jmp_buf buffer;
+    const long a = mix(6), b = mix(7);
+    const int result = setjmp(buffer);
+    if (result == 0) {
+        line("stack kept", switch_from(3, buffer, 0));
+        switch_from(3, buffer, 13);
+        line("stack not switched", 0);
+    }
+    line("stack switched", result);
+    line("stack saved", a + b * 3 == mix(6) + mix(7) * 3);
+}
+
 int main(void) {
     basic();
     zero_value();
@@ -133,6 +182,7 @@ int main(void) {
     two_sites();
     recursive();
     through_pointer();
+    switched_stack();
     return 0;
 }
 
