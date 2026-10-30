@@ -7,6 +7,7 @@
 #include <array>
 #include <deque>
 #include <initializer_list>
+#include <iterator>
 #include <sstream>
 #include <stdexcept>
 #include <utility>
@@ -480,6 +481,23 @@ GuestFunction DiscoverFunction(const GuestImage& image, const Decoder& decoder, 
     return function;
 }
 
+// Whether one of these new starts can change how the function decodes. Its code stops where another function starts,
+// and a jump table ends at the starts around its jump, so only a start within the span of its instructions and table
+// targets matters.
+bool SpansAny(const GuestFunction& function, const std::set<std::uint64_t>& added) {
+    if (function.Instructions.empty()) return false;
+    auto low = function.Instructions.begin()->first;
+    auto high = function.Instructions.rbegin()->second.Next();
+    for (const auto& [jump, targets] : function.JumpTables) {
+        for (const auto target : targets) {
+            low = std::min(low, target);
+            high = std::max(high, target + 1);
+        }
+    }
+    const auto first = added.lower_bound(low);
+    return first != added.end() && *first < high;
+}
+
 constexpr std::uint8_t Int3 = 0xcc;
 constexpr std::uint64_t FunctionAlignment = 16;
 
@@ -673,16 +691,21 @@ std::map<std::uint64_t, GuestFunction> DiscoverFunctions(const GuestImage& image
     }
     for (const auto address : image.ExceptionFunctionStarts()) starts.insert(address);
 
+    // Each round decodes the new starts and again only the functions they can change, so a chain of functions that each
+    // name only the next, as a state machine's states do, costs a round per link but not a pass over the image.
+    std::map<std::uint64_t, GuestFunction> functions;
+    auto added = starts;
     while (true) {
-        std::map<std::uint64_t, GuestFunction> functions;
         std::set<std::uint64_t> reachedStarts;
-        for (const auto entry : starts) functions.emplace(entry, DiscoverFunction(image, decoder, references, entry, starts, reachedStarts));
-        const auto before = starts.size();
-        starts.insert(reachedStarts.begin(), reachedStarts.end());
-        if (starts.size() > before) continue;
-        const auto padded = PaddedStarts(image, decoder, references, starts, functions);
-        if (padded.empty()) return functions;
-        starts.insert(padded.begin(), padded.end());
+        for (auto& [entry, function] : functions) {
+            if (SpansAny(function, added)) function = DiscoverFunction(image, decoder, references, entry, starts, reachedStarts);
+        }
+        for (const auto entry : added) functions.emplace(entry, DiscoverFunction(image, decoder, references, entry, starts, reachedStarts));
+        added.clear();
+        std::set_difference(reachedStarts.begin(), reachedStarts.end(), starts.begin(), starts.end(), std::inserter(added, added.end()));
+        if (added.empty()) added = PaddedStarts(image, decoder, references, starts, functions);
+        if (added.empty()) return functions;
+        starts.insert(added.begin(), added.end());
     }
 }
 
