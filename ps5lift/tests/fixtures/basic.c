@@ -116,8 +116,18 @@ i64 pass_address_taken_by_lea(void);
 void store_address_taken_long_before(i64 (**slot)(void));
 i64 call_address_taken_before_nop(void);
 i64 (*return_address_taken_by_lea(void))(void);
+i64 push_address_taken_by_lea(void);
+i64 copy_address_taken_by_lea(void);
+i64 (*select_address_taken_by_lea(i64 pick))(void);
+i64 tail_pass_address_taken_by_lea(void);
+void store_address_past_jump(i64 (**slot)(void));
 
 __attribute__((noinline)) i64 call_function_pointer(i64 (*function)(void)) {
+    return function();
+}
+
+__attribute__((noinline)) i64 call_seventh_argument(i64 a, i64 b, i64 c, i64 d, i64 e, i64 f, i64 (*function)(void)) {
+    (void)a, (void)b, (void)c, (void)d, (void)e, (void)f;
     return function();
 }
 
@@ -266,8 +276,9 @@ __asm__(".text\n"
 
 /* Functions with no symbol type and no unwind entry, whose addresses only a RIP-relative lea takes: one stored to
    memory, one passed to a call, one stored only after a run of other instructions, as a constructor that fills in
-   an object's fields before its callback's, one called after a NOP whose operand names the register and one
-   returned, as a state machine's state returns the next. */
+   an object's fields before its callback's, one called after a NOP whose operand names the register, one returned, as
+   a state machine's state returns the next, one pushed as a stack argument, one copied to an argument register, one
+   picked by a conditional move, one passed to a tail call and one stored past a jump within its function. */
 __asm__(".text\n"
         "stored_through_lea:\n"
         "    mov $77, %eax\n"
@@ -312,6 +323,64 @@ __asm__(".text\n"
         "    pop %rbx\n"
         "    ret\n"
         ".size return_address_taken_by_lea, .-return_address_taken_by_lea\n"
+        "pushed_through_lea:\n"
+        "    mov $82, %eax\n"
+        "    ret\n"
+        ".globl push_address_taken_by_lea\n"
+        ".type push_address_taken_by_lea, @function\n"
+        "push_address_taken_by_lea:\n"
+        "    lea pushed_through_lea(%rip), %rax\n"
+        "    push %rax\n"
+        "    call call_seventh_argument\n"
+        "    add $8, %rsp\n"
+        "    ret\n"
+        ".size push_address_taken_by_lea, .-push_address_taken_by_lea\n"
+        "copied_through_lea:\n"
+        "    mov $83, %eax\n"
+        "    ret\n"
+        ".globl copy_address_taken_by_lea\n"
+        ".type copy_address_taken_by_lea, @function\n"
+        "copy_address_taken_by_lea:\n"
+        "    sub $8, %rsp\n"
+        "    lea copied_through_lea(%rip), %rax\n"
+        "    mov %rax, %rdi\n"
+        "    call call_function_pointer\n"
+        "    add $8, %rsp\n"
+        "    ret\n"
+        ".size copy_address_taken_by_lea, .-copy_address_taken_by_lea\n"
+        "selected_through_lea:\n"
+        "    mov $84, %eax\n"
+        "    ret\n"
+        ".globl select_address_taken_by_lea\n"
+        ".type select_address_taken_by_lea, @function\n"
+        "select_address_taken_by_lea:\n"
+        "    xor %eax, %eax\n"
+        "    lea selected_through_lea(%rip), %rdx\n"
+        "    test %rdi, %rdi\n"
+        "    cmovne %rdx, %rax\n"
+        "    ret\n"
+        ".size select_address_taken_by_lea, .-select_address_taken_by_lea\n"
+        "tail_passed_through_lea:\n"
+        "    mov $85, %eax\n"
+        "    ret\n"
+        ".globl tail_pass_address_taken_by_lea\n"
+        ".type tail_pass_address_taken_by_lea, @function\n"
+        "tail_pass_address_taken_by_lea:\n"
+        "    lea tail_passed_through_lea(%rip), %rdi\n"
+        "    jmp call_function_pointer\n"
+        ".size tail_pass_address_taken_by_lea, .-tail_pass_address_taken_by_lea\n"
+        "stored_past_jump_through_lea:\n"
+        "    mov $86, %eax\n"
+        "    ret\n"
+        ".globl store_address_past_jump\n"
+        ".type store_address_past_jump, @function\n"
+        "store_address_past_jump:\n"
+        "    lea stored_past_jump_through_lea(%rip), %rax\n"
+        "    jmp 1f\n"
+        "    ud2\n"
+        "1:  mov %rax, (%rdi)\n"
+        "    ret\n"
+        ".size store_address_past_jump, .-store_address_past_jump\n"
         ".globl store_address_taken_by_lea\n"
         ".type store_address_taken_by_lea, @function\n"
         "store_address_taken_by_lea:\n"
@@ -971,6 +1040,12 @@ int main(void) {
     line("function stored long after its lea", call_function_pointer(stored));
     line("function called through lea after a nop", call_address_taken_before_nop());
     line("function returned through lea", call_function_pointer(return_address_taken_by_lea()));
+    line("function pushed through lea", push_address_taken_by_lea());
+    line("function copied through lea", copy_address_taken_by_lea());
+    line("function picked by a conditional move", call_function_pointer(select_address_taken_by_lea(1)));
+    line("function passed to a tail call", tail_pass_address_taken_by_lea());
+    store_address_past_jump(&stored);
+    line("function stored past a jump", call_function_pointer(stored));
     zen2_integer();
     unaligned_accesses();
     locked_forms();
