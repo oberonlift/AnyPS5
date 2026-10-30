@@ -19,6 +19,7 @@ inline std::atomic<LookupHook>& LookupHookSlot() {
 
 struct Settings {
     std::string userAgent;
+    int version = 3;
     std::vector<std::pair<std::string, std::string>> headers;
     std::uint64_t contentLength = 0;
     bool noContentLength = false;

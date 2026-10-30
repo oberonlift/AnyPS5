@@ -422,6 +422,7 @@ struct Request::State {
             socketOwner.reset();
         }
         if (result < 0) return result;
+        Require(settings.version == 3, "sceHttp2SendRequest: HTTP/1.x transport");
         ssl = sceSslCreateConnection(sslContext, socket, url.host.c_str());
         Require(ssl > 0, "sceHttp2: SSL context or connection unavailable");
         Require(SslTrustSystemRoots_nid_no_patch(ssl) == 0, "sceHttp2: system CA list unavailable");
