@@ -708,6 +708,17 @@ void Asynchronous(int ssl) {
     server.Join();
 }
 
+void Http1(int ssl) {
+    std::fprintf(stderr, "HTTP2 HTTP/1.x template scenario\n");
+    Server server(Mode::Normal);
+    Client client(ssl);
+    const int http1 = sceHttp2CreateTemplate(client.context, "loopback-agent", 2, 0);
+    Require(http1 > 0 && sceHttp2SslDisableOption(http1, 0x4) == 0, "HTTP/1.x template");
+    const int request = sceHttp2CreateRequestWithURL(http1, "GET", server.Url().c_str(), 0);
+    Require(request > 0, "HTTP/1.x request");
+    Require(Throws([&] { sceHttp2SendRequest(request, nullptr, 0); }), "an HTTP/1.x request throws once it has connected");
+}
+
 void Capacity(int ssl) {
     Server server(Mode::StallBody);
     Client client(ssl, 1);
@@ -792,6 +803,7 @@ int main(int argc, char** argv) {
         Capacity(ssl);
         Retries(ssl);
         Asynchronous(ssl);
+        Http1(ssl);
         const int untrusted = sceSslInit_nid_postfix(8 * 1024 * 1024);
         Require(untrusted > 0, "untrusted SSL context");
         Failure(untrusted, Mode::Normal);

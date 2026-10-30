@@ -88,7 +88,9 @@ int main() {
     Require(sceKernelDeleteEqueue(eq) == 0);
     const int sibling = sceHttp2CreateTemplate(context, "other", 2, 0);
     const int child = sceHttp2CreateRequestWithURL(sibling, "GET", "https://localhost/", 0);
-    Require(Throws([&] { sceHttp2SendRequest(child, nullptr, 0); }));
+    Http2SetLookupHook_nid_no_patch(FailLookup);
+    Require(sceHttp2SendRequest(child, nullptr, 0) == ResolverNoDns);
+    Http2SetLookupHook_nid_no_patch(nullptr);
     Require(sceHttp2DeleteTemplate(tmpl) == 0);
     Require(sceHttp2SslEnableOption(sibling, 0) == 0);
     Require(sceHttp2DeleteRequest(request) == InvalidId);

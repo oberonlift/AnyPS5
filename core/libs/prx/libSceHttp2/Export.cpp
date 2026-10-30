@@ -31,7 +31,6 @@ struct Http2Handle {
     std::size_t poolSize;
     std::shared_ptr<void> cookieMemory;
     int sslContext = 0;
-    int version = 0;
     Http2::Settings settings;
     std::string method, url;
     std::shared_ptr<Http2::Request> transport;
@@ -117,7 +116,6 @@ static std::shared_ptr<Http2::Request> Transport(int id, bool create) {
     auto* handle = FindHandle(id, Http2Kind::Request);
     if (!handle) return nullptr;
     if (create && !handle->transport) {
-        if (handle->version != 3) NotImplemented_nid_no_patch("sceHttp2SendRequest: HTTP/1.x transport is not implemented");
         handle->transport = Http2::CreateRequest_nid_no_patch(handle->sslContext, handle->capacity, handle->settings, handle->method, handle->url);
     }
     if (!handle->transport) NotImplemented_nid_no_patch("sceHttp2: request has not been sent");
@@ -149,7 +147,6 @@ int APS5_VABI sceHttp2CreateRequestWithURL(int tmpl_id, const char* method, cons
     Http2Handle handle{Http2Kind::Request, tmpl_id, 0};
     handle.sslContext = parent->sslContext;
     handle.capacity = parent->capacity;
-    handle.version = parent->version;
     handle.settings = parent->settings;
     handle.settings.contentLength = content_length;
     handle.method = method;
@@ -168,9 +165,9 @@ int APS5_VABI sceHttp2CreateTemplate(int lib_http2_ctx_id, const char* user_agen
     Http2Handle handle{Http2Kind::Template, lib_http2_ctx_id, 0};
     handle.sslContext = parent->sslContext;
     handle.capacity = parent->capacity;
-    handle.version = http_ver;
     handle.settings = parent->settings;
     handle.settings.userAgent = user_agent;
+    handle.settings.version = http_ver;
     const int id = g_nextHandle.fetch_add(1, std::memory_order_relaxed);
     g_handles.emplace(id, std::move(handle));
     return id;
