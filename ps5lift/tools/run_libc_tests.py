@@ -14,11 +14,13 @@ from run_fixture import ROOT, host_triple
 TESTS = {
     "Formatting": ["libc"], "GuestStrings": ["libc", "libScePosixForWebKit"], "GuestWideFormatting": ["libc"], "GuestStdioVariadic": ["libc"],
     "GuestAllocatingStrings": ["libkernel", "libc"], "GuestSyslog": ["libc"], "GuestWideStreamScan": ["libc"], "HostExceptionPointer": ["libc"],
-    "GuestHttp2": ["libSceHttp2", "libkernel", "libc"],
+    "GuestHttp2": ["libSceHttp2", "libkernel", "libc"], "GuestHttp2Transport": ["libSceHttp2", "libSceNet", "libSceSsl", "libkernel", "libc"],
     "GuestNetworkPolicy": ["libSceNetCtl", "libScePosixForWebKit", "libkernel", "libc"], "GuestTcp": ["libkernel", "libc"],
     "GuestSocketOptions": ["libkernel", "libc"], "GuestResolver": ["libScePosixForWebKit", "libSceNet", "libc"], "ResolverRaw": ["libScePosixForWebKit", "libc"],
 }
-RUNS = {"GuestNetworkPolicy": [["offline"], ["allow"], ["deny"]]}
+RUNS = {"GuestNetworkPolicy": [["offline"], ["allow"], ["deny"]], "GuestHttp2Transport": [[], ["--early"]]}
+ARCHIVES = {"GuestHttp2Transport": ["3rdparty/nghttp2/lib/libnghttp2.a", "3rdparty/mbedtls/library/libmbedtls.a", "3rdparty/mbedtls/library/libmbedx509.a",
+                                    "3rdparty/mbedtls/library/libmbedcrypto.a"]}
 IMAGE_STUB = ROOT / "tests" / "libc" / "image_stub.cpp"
 
 
@@ -70,7 +72,7 @@ def main():
     failures = 0
     for test in tests:
         program = work / test
-        libraries = [str(anyps5.library(name)) for name in TESTS[test]]
+        libraries = [str(anyps5.library(name)) for name in TESTS[test]] + [str(anyps5.directory / archive) for archive in ARCHIVES.get(test, [])]
         link = [args.clangxx, "-fuse-ld=lld", str(work / f"{test}.o"), str(stub), *libraries, *link_arguments(runtime), f"-Wl,-rpath,{anyps5.libraries_directory}",
                 "-latomic", "-pthread", "-ldl", "-o", str(program)]
         linked = subprocess.run(link, capture_output=True, text=True)
