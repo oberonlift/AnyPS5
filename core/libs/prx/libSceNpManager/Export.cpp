@@ -1034,8 +1034,9 @@ int APS5_VABI sceNpGetUserIdByAccountId(uint64_t account_id, int* user_id) {
 }
 
 int APS5_VABI sceNpGetSandboxInfo(void* sandbox_info) {
-    (void)sandbox_info;
-    NotImplemented_nid_no_patch(__func__);
+    constexpr std::size_t SandboxInfoBytes = 0x50;
+    if (!sandbox_info) NotImplemented_nid_no_patch("sceNpGetSandboxInfo with a null buffer");
+    std::memset(sandbox_info, 0, SandboxInfoBytes);
     return 0;
 }
 

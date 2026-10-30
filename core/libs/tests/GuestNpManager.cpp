@@ -583,6 +583,14 @@ void CheckPlusAndContentRestriction() {
     Require(SetContentRestriction(bad) == InvalidArgument, "sceNpSetContentRestriction must reject restrictions without an array");
 }
 
+void CheckSandboxInfo() {
+    unsigned char info[0x60];
+    std::memset(info, 0x5a, sizeof(info));
+    Require(sceNpGetSandboxInfo(info) == 0, "sceNpGetSandboxInfo must succeed");
+    for (std::size_t index = 0; index < 0x50; ++index) Require(info[index] == 0, "sceNpGetSandboxInfo must write two empty strings over its 0x50 bytes");
+    for (std::size_t index = 0x50; index < sizeof(info); ++index) Require(info[index] == 0x5a, "sceNpGetSandboxInfo must not write past its 0x50 bytes");
+}
+
 static void APS5_VABI PremiumEvent(int, int, void*) {}
 
 static void CheckAccountQueriesAndPremiumCallback() {
@@ -616,6 +624,7 @@ int main() {
     CheckManagerIntUserLookups();
     CheckManagerIntAuthorization();
     CheckPlusAndContentRestriction();
+    CheckSandboxInfo();
     NpId npId{};
     std::memset(&npId, 0x5a, sizeof(npId));
     NpId untouched{};
