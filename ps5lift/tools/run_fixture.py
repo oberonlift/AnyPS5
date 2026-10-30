@@ -69,10 +69,11 @@ def lifter_target(triple, runner, cpu=None):
 
 
 # Every guest executable is position-independent code at GUEST_BASE, as a PS5 executable is once the relinker places it
-# with --linux-fixed-base. 512 GiB lies inside the PS5 application area and above everything an arm64 macOS process
-# keeps below 448 GiB (the low 4 GiB, its executable, the shared region and the GPU's range), so every host has the same
-# guest layout.
-GUEST_BASE = 0x8000000000
+# with --linux-fixed-base. 1008 GiB is where the PS5 application area ends, as AnyPS5's guest arena lays it out: a title
+# allocates and reserves its memory below it, from 64 GiB (an Unreal title reserves 512 GiB there), so the image never
+# lies in a range the title asks for. It is also above everything an arm64 macOS process keeps below 448 GiB (the low
+# 4 GiB, its executable, the shared region and the GPU's range), so every host has the same guest layout.
+GUEST_BASE = 0xFC00000000
 CONSOLE_OUTPUT = {"cpu"}
 PROGRAM_TIMEOUT = 300
 GUEST_MODULES = {"modules": ("guestmodule", "module.c")}
