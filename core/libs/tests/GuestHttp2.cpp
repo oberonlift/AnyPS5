@@ -9,6 +9,13 @@
 static void Require(bool value) { if (!value) std::abort(); }
 
 static constexpr int InvalidId = static_cast<int>(0x817B1100);
+static constexpr int NullPointer = static_cast<int>(0x817B1225);
+static constexpr int AsyncNotReady = static_cast<int>(0x817B1079);
+static constexpr int ResolverNoDns = static_cast<int>(0x804101E1);
+
+extern "C" void Http2SetLookupHook_nid_no_patch(int (*hook)(const char* host));
+
+static int FailLookup(const char*) { return -1; }
 
 template <typename TCall>
 static bool Throws(TCall call) {
@@ -57,21 +64,27 @@ int main() {
     Require(sceHttp2GetMemoryPoolStats(context, &stats) == 0);
     Require(stats.pool_size == 0x10000 && stats.max_inuse_size == 0 && stats.current_inuse_size == 0 && stats.reserved == 0);
     KernelEqueue eq = 0;
-    Require(sceKernelCreateEqueue(&eq, "http2-unsupported-async") == 0);
+    Require(sceKernelCreateEqueue(&eq, "http2-async") == 0);
     Require(sceKernelAddUserEventEdge(eq, request) == 0);
     Http2AsyncOption option{};
     option.equeue = eq;
     option.user_event_id = request;
-    Require(Throws([&] { sceHttp2SendRequestAsync(request, nullptr, 0, &option, nullptr); }));
     Http2AsyncResult result{};
     result.req_id = 123;
-    std::uint32_t timeout = 500;
-    Require(Throws([&] { sceHttp2WaitAsync(request, &result, &timeout, nullptr); }));
-    Require(result.req_id == 123 && timeout == 500);
+    std::uint32_t timeout = 0;
+    Require(sceHttp2WaitAsync(request, &result, &timeout, nullptr) == AsyncNotReady && result.req_id == 123);
+    Require(sceHttp2WaitAsync(request, nullptr, &timeout, nullptr) == NullPointer);
+    Require(sceHttp2WaitAsync(InvalidId, &result, &timeout, nullptr) == InvalidId);
+    Http2SetLookupHook_nid_no_patch(FailLookup);
+    Require(sceHttp2SendRequestAsync(request, nullptr, 0, &option, nullptr) == 0);
     KernelEvent event{};
-    int count = 123;
-    const KernelUseconds poll = 0;
-    Require(sceKernelWaitEqueue(eq, &event, 1, &count, &poll) != 0);
+    int count = 0;
+    const KernelUseconds patience = 5000000;
+    Require(sceKernelWaitEqueue(eq, &event, 1, &count, &patience) == 0 && count == 1 && event.ident == static_cast<std::uintptr_t>(request));
+    Require(sceHttp2WaitAsync(request, &result, &timeout, nullptr) == 0);
+    Require(result.event_type == 0 && result.req_id == request && result.result == ResolverNoDns);
+    Require(sceHttp2WaitAsync(request, &result, &timeout, nullptr) == AsyncNotReady);
+    Http2SetLookupHook_nid_no_patch(nullptr);
     Require(sceKernelDeleteEqueue(eq) == 0);
     const int sibling = sceHttp2CreateTemplate(context, "other", 2, 0);
     const int child = sceHttp2CreateRequestWithURL(sibling, "GET", "https://localhost/", 0);

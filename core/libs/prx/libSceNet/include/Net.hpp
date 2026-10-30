@@ -2,6 +2,8 @@
 
 #include "SceTypes.hpp"
 
+inline constexpr int NET_ERROR_RESOLVER_ENODNS = static_cast<int>(0x804101E1u);
+
 struct NetRoutingRule {
     std::int32_t protocol;
     std::uint32_t firstAddress;

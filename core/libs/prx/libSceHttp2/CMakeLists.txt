@@ -32,7 +32,7 @@ set_target_properties(anyps5_http2_transport PROPERTIES POSITION_INDEPENDENT_COD
 if(MINGW OR CMAKE_SYSTEM_NAME STREQUAL "Linux")
     target_link_options(anyps5_http2_transport INTERFACE LINKER:--exclude-libs,libanyps5_http2_transport.a)
 endif()
-add_library(libSceHttp2 SHARED EXCLUDE_FROM_ALL Export.cpp Cookies.cpp InventoryExports.cpp)
+add_library(libSceHttp2 SHARED EXCLUDE_FROM_ALL Export.cpp Async.cpp Cookies.cpp InventoryExports.cpp)
 target_include_directories(libSceHttp2 PRIVATE ${LIBS_INCLUDE_DIR})
 target_link_libraries(libSceHttp2 PRIVATE libc libkernel anyps5_http2_transport)
 if(WIN32)

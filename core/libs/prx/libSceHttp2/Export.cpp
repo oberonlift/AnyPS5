@@ -4,6 +4,7 @@
 #include <cstring>
 #include "SceTypes.hpp"
 #include "Transport.hpp"
+#include "Async.hpp"
 #include "Cookies.hpp"
 #include "prx/libkernel/include/Api.hpp"
 #include "prx/libc/include/General.hpp"
@@ -35,6 +36,7 @@ struct Http2Handle {
     std::string method, url;
     std::shared_ptr<Http2::Request> transport;
     std::shared_ptr<Http2::Capacity> capacity;
+    std::shared_ptr<Http2::AsyncOperations> async;
 };
 
 static std::atomic<int> g_nextHandle{1};
@@ -120,6 +122,14 @@ static std::shared_ptr<Http2::Request> Transport(int id, bool create) {
     }
     if (!handle->transport) NotImplemented_nid_no_patch("sceHttp2: request has not been sent");
     return handle->transport;
+}
+
+static std::shared_ptr<Http2::AsyncOperations> Async(int id) {
+    std::lock_guard lock(g_handlesMutex);
+    auto* handle = FindHandle(id, Http2Kind::Request);
+    if (!handle) return nullptr;
+    if (!handle->async) handle->async = std::make_shared<Http2::AsyncOperations>();
+    return handle->async;
 }
 
 
@@ -216,8 +226,12 @@ int APS5_VABI sceHttp2ReadData(int req_id, void* data, size_t size) {
     return request ? request->Read(data, size) : ERROR_INVALID_ID;
 }
 
-int APS5_VABI sceHttp2ReadDataAsync(int req_id, void* data, size_t size, void* kqueue_option, void* option) {
-    NotImplemented_nid_no_patch(__func__);
+int APS5_VABI sceHttp2ReadDataAsync(int req_id, void* data, size_t size, Http2AsyncOption* kqueue_option, void* option) {
+    if (option) NotImplemented_nid_no_patch("sceHttp2ReadDataAsync: options");
+    const auto async = Async(req_id);
+    const auto request = async ? Transport(req_id, false) : nullptr;
+    if (!request) return ERROR_INVALID_ID;
+    async->Start(Http2::AsyncReadEvent, kqueue_option, [request, data, size] { return request->Read(data, size); });
     return 0;
 }
 
@@ -227,9 +241,11 @@ int APS5_VABI sceHttp2SendRequest(int req_id, const void* post_data, size_t size
 }
 
 int APS5_VABI sceHttp2SendRequestAsync(int req_id, const void* post_data, size_t size, Http2AsyncOption* kqueue_option, void* option) {
-    std::lock_guard lock(g_handlesMutex);
-    if (!FindHandle(req_id, Http2Kind::Request)) return ERROR_INVALID_ID;
-    NotImplemented_nid_no_patch(__func__);
+    if (option) NotImplemented_nid_no_patch("sceHttp2SendRequestAsync: options");
+    const auto async = Async(req_id);
+    const auto request = async ? Transport(req_id, true) : nullptr;
+    if (!request) return ERROR_INVALID_ID;
+    async->Start(Http2::AsyncSendEvent, kqueue_option, [request, post_data, size] { return request->Send(post_data, size); });
     return 0;
 }
 
@@ -327,8 +343,12 @@ int APS5_VABI sceHttp2Term(int lib_http2_ctx_id) {
 }
 
 int APS5_VABI sceHttp2WaitAsync(int req_id, Http2AsyncResult* result, uint32_t* timeout, void* option) {
-    NotImplemented_nid_no_patch(__func__);
-    return 0;
+    if (option) NotImplemented_nid_no_patch("sceHttp2WaitAsync: options");
+    if (!timeout) NotImplemented_nid_no_patch("sceHttp2WaitAsync: waiting without a timeout");
+    if (!result) return ERROR_NULL_POINTER;
+    const auto async = Async(req_id);
+    if (!async) return ERROR_INVALID_ID;
+    return async->Wait(req_id, result, *timeout);
 }
 
 int APS5_VABI sceHttp2AbortRequest(int req_id) {
