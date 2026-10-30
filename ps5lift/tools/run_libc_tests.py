@@ -14,7 +14,7 @@ from run_fixture import ROOT, host_triple
 TESTS = {
     "Formatting": ["libc"], "GuestStrings": ["libc", "libScePosixForWebKit"], "GuestWideFormatting": ["libc"], "GuestStdioVariadic": ["libc"],
     "GuestAllocatingStrings": ["libkernel", "libc"], "GuestSyslog": ["libc"], "GuestWideStreamScan": ["libc"], "HostExceptionPointer": ["libc"],
-    "GuestHttp2": ["libSceHttp2", "libkernel", "libc"], "GuestHttp2Transport": ["libSceHttp2", "libSceNet", "libSceSsl", "libkernel", "libc"],
+    "GuestHttp2": ["libSceHttp2", "libkernel", "libc"], "GuestNpManager": ["libSceNpManager", "libc"], "GuestHttp2Transport": ["libSceHttp2", "libSceNet", "libSceSsl", "libkernel", "libc"],
     "GuestNetworkPolicy": ["libSceNetCtl", "libScePosixForWebKit", "libkernel", "libc"], "GuestTcp": ["libkernel", "libc"],
     "GuestSocketOptions": ["libkernel", "libc"], "GuestResolver": ["libScePosixForWebKit", "libSceNet", "libc"], "ResolverRaw": ["libScePosixForWebKit", "libc"],
 }
