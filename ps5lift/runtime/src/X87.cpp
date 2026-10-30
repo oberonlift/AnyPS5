@@ -27,6 +27,9 @@ constexpr std::uint16_t StatusC3 = 1u << 14;
 constexpr std::uint16_t StatusBusy = 1u << 15;
 constexpr std::uint16_t StatusConditions = StatusC0 | StatusC1 | StatusC2 | StatusC3;
 constexpr unsigned TopShift = 11;
+// fxsave and fxrstor read and write the control, status and tag words, MXCSR, the x87 registers and XMM0-XMM15, the
+// first 416 bytes of the 512-byte area; the rest is reserved or left to software.
+constexpr std::size_t FxStateBytes = 416;
 constexpr std::uint16_t InitialControl = 0x037f;
 
 constexpr std::uint32_t CompareGreater = 0;
@@ -463,6 +466,41 @@ extern "C" std::uint32_t ps5lift_x87(Ps5LiftState* state, const std::uint32_t op
         const std::uint32_t environment[7] = {0xffff0000u | state->X87Control, 0xffff0000u | state->X87Status, 0xffff0000u | TagWord(*state), 0, 0, 0, 0xffff0000u};
         std::memcpy(reinterpret_cast<void*>(address), environment, sizeof(environment));
         state->X87Control = static_cast<std::uint16_t>(state->X87Control | 0x3f);
+        return 0;
+    }
+    case PS5LIFT_X87_SAVE_STATE: {
+        if ((address & 15) != 0) ps5lift_fail("fxsave to 0x%llx, which is not 16-byte aligned; the console raises #GP", static_cast<unsigned long long>(address));
+        std::uint8_t area[FxStateBytes] = {};
+        std::memcpy(area, &state->X87Control, 2);
+        std::memcpy(area + 2, &state->X87Status, 2);
+        area[4] = state->X87Valid;
+        const std::uint32_t mxcsr[2] = {ps5lift_read_mxcsr(state), PS5LIFT_MXCSR_MASK};
+        std::memcpy(area + 24, mxcsr, sizeof(mxcsr));
+        const unsigned top = (state->X87Status >> TopShift) & 7;
+        for (unsigned index = 0; index < 8; ++index) std::memcpy(area + 32 + 16 * index, state->X87Registers[(top + index) & 7], 10);
+        for (unsigned reg = 0; reg < 16; ++reg) std::memcpy(area + 160 + 16 * reg, state->Vector[reg], 16);
+        std::memcpy(reinterpret_cast<void*>(address), area, sizeof(area));
+        return 0;
+    }
+    case PS5LIFT_X87_RESTORE_STATE: {
+        if ((address & 15) != 0) ps5lift_fail("fxrstor from 0x%llx, which is not 16-byte aligned; the console raises #GP", static_cast<unsigned long long>(address));
+        std::uint8_t area[FxStateBytes];
+        std::memcpy(area, reinterpret_cast<const void*>(address), sizeof(area));
+        std::uint32_t mxcsr;
+        std::memcpy(&mxcsr, area + 24, 4);
+        if ((mxcsr & ~PS5LIFT_MXCSR_MASK) != 0) ps5lift_fail("fxrstor of MXCSR 0x%x, which sets reserved bits; the console raises #GP", mxcsr);
+        std::memcpy(&state->X87Control, area, 2);
+        std::memcpy(&state->X87Status, area + 2, 2);
+        state->X87Valid = area[4];
+        const unsigned top = (state->X87Status >> TopShift) & 7;
+        for (unsigned index = 0; index < 8; ++index) {
+            auto* reg = state->X87Registers[(top + index) & 7];
+            std::memcpy(reg, area + 32 + 16 * index, 10);
+            std::memset(reg + 10, 0, sizeof(state->X87Registers[0]) - 10);
+        }
+        for (unsigned reg = 0; reg < 16; ++reg) std::memcpy(state->Vector[reg], area + 160 + 16 * reg, 16);
+        state->Mxcsr = mxcsr;
+        ps5lift_apply_mxcsr(state);
         return 0;
     }
     case PS5LIFT_X87_LOAD_ENVIRONMENT: {
