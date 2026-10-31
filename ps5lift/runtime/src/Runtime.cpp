@@ -180,10 +180,11 @@ void UnbindThread() {
 }
 
 void PrepareState(Ps5LiftState& state, std::uint8_t* const tls, const std::uint32_t mxcsr) {
+    const auto& program = Ps5Lift::Program();
     const auto threadPointer = reinterpret_cast<std::uint64_t>(tls + TlsSize / 2);
     std::memcpy(reinterpret_cast<void*>(threadPointer), &threadPointer, sizeof(threadPointer));
-    for (std::uint64_t i = 0; i < ps5lift_program.ImageCount; ++i) {
-        const auto& image = ps5lift_program.Images[i];
+    for (std::uint64_t i = 0; i < program.ImageCount; ++i) {
+        const auto& image = program.Images[i];
         if (image.TlsMemorySize == 0) continue;
         if (image.TlsOffset > TlsSize / 2) ps5lift_fail("the static TLS of image %llu does not fit", static_cast<unsigned long long>(i));
         std::memcpy(reinterpret_cast<void*>(threadPointer - image.TlsOffset), reinterpret_cast<const void*>(image.TlsAddress), image.TlsFileSize);
@@ -194,8 +195,9 @@ void PrepareState(Ps5LiftState& state, std::uint8_t* const tls, const std::uint3
 }
 
 void Initialize(const std::uint64_t argc, const std::uint64_t argv, const std::uint64_t environment) {
-    for (std::uint64_t i = 0; i < ps5lift_program.InitializationCount; ++i) {
-        const auto& image = ps5lift_program.Images[ps5lift_program.Initialization[i]];
+    const auto& program = Ps5Lift::Program();
+    for (std::uint64_t i = 0; i < program.InitializationCount; ++i) {
+        const auto& image = program.Images[program.Initialization[i]];
         if (image.Init != 0) Ps5Lift::Bridge::CallGuest<void>(image.Init, argc, argv, environment);
         for (std::uint64_t index = 0; index < image.InitCount; ++index) {
             std::uint64_t initializer = 0;
@@ -386,11 +388,12 @@ extern "C" void ps5lift_fail(const char* format, ...) {
 }
 
 extern "C" void ps5lift_import_____tls__get__addr(Ps5LiftState* state) {
+    const auto& program = Ps5Lift::Program();
     std::uint64_t index[2];
     std::memcpy(index, reinterpret_cast<const void*>(state->Gpr[PS5LIFT_RDI]), sizeof(index));
-    if (index[0] == 0 || index[0] > ps5lift_program.ImageCount || ps5lift_program.Images[index[0] - 1].TlsMemorySize == 0)
+    if (index[0] == 0 || index[0] > program.ImageCount || program.Images[index[0] - 1].TlsMemorySize == 0)
         ps5lift_fail("__tls_get_addr of module %" PRIu64 ", which has no TLS", index[0]);
-    state->Gpr[PS5LIFT_RAX] = state->FsBase - ps5lift_program.Images[index[0] - 1].TlsOffset + index[1];
+    state->Gpr[PS5LIFT_RAX] = state->FsBase - program.Images[index[0] - 1].TlsOffset + index[1];
 }
 
 extern "C" void ps5lift_unsupported(Ps5LiftState*, const std::uint64_t address, const char* mnemonic) {
@@ -550,22 +553,40 @@ void RequireHostFeatures() {
 
 }
 
+namespace {
+
+const Ps5LiftProgram* UsedProgram = nullptr;
+
+}
+
+extern "C" void ps5lift_use_program(const Ps5LiftProgram* program) {
+    if (UsedProgram != nullptr && UsedProgram != program) ps5lift_fail("the executable handed the runtime a second lifted program");
+    UsedProgram = program;
+}
+
+const Ps5LiftProgram& Ps5Lift::Program() {
+    if (UsedProgram == nullptr) ps5lift_fail("the executable has not handed the runtime its lifted program yet");
+    return *UsedProgram;
+}
+
 Ps5LiftFunction Ps5Lift::LookupFunction(const std::uint64_t address) {
-    const auto* begin = ps5lift_program.Functions;
-    const auto* end = begin + ps5lift_program.FunctionCount;
+    const auto& program = Ps5Lift::Program();
+    const auto* begin = program.Functions;
+    const auto* end = begin + program.FunctionCount;
     const auto* found = std::lower_bound(begin, end, address, [](const Ps5LiftFunctionEntry& entry, const std::uint64_t target) { return entry.GuestAddress < target; });
     if (found == end || found->GuestAddress != address) return nullptr;
     return found->Host;
 }
 
 extern "C" void ps5lift_run_main(void) {
+    const auto& program = Ps5Lift::Program();
     RequireHostFeatures();
-    for (std::uint64_t i = 0; i < ps5lift_program.ImageCount; ++i) {
-        MapSegments(ps5lift_program.Images[i]);
+    for (std::uint64_t i = 0; i < program.ImageCount; ++i) {
+        MapSegments(program.Images[i]);
     }
     Ps5Lift::InstallNativeCalls();
     GuestThread thread;
-    thread.Entry = ps5lift_program.Entry;
+    thread.Entry = program.Entry;
     thread.Main = true;
     StartThread(thread);
     pthread_join(thread.Handle, nullptr);

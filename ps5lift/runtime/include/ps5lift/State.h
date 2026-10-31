@@ -184,7 +184,9 @@ typedef struct Ps5LiftProgram {
     uint64_t Entry;
 } Ps5LiftProgram;
 
-extern const Ps5LiftProgram ps5lift_program;
+// A lifted program's executable defines its tables as `ps5lift_program` and hands them to the runtime, a shared library
+// that cannot name them, before anything asks for them.
+void ps5lift_use_program(const Ps5LiftProgram* program);
 
 void ps5lift_dispatch(Ps5LiftState* state, uint64_t target);
 Ps5LiftFunction ps5lift_resolve(uint64_t target);

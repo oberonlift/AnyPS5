@@ -1,3 +1,5 @@
+#include "Runtime.hpp"
+
 #include <ps5lift/Bridge.hpp>
 #include <ps5lift/State.h>
 
@@ -89,10 +91,11 @@ extern "C" void GuestCpuUnwindStart_nid_no_patch(std::uint64_t* registers) {
 }
 
 extern "C" int GuestCpuIterateImages_nid_no_patch(int (*callback)(LoadedImage*, std::size_t, void*), void* data) {
+    const auto& program = Ps5Lift::Program();
     const auto* state = ps5lift_current_state();
-    for (std::uint64_t index = 0; index < ps5lift_program.ImageCount; ++index) {
-        const auto& image = ps5lift_program.Images[index];
-        LoadedImage loaded{image.LoadBias, image.Name, reinterpret_cast<const void*>(image.ProgramHeaders), static_cast<std::uint16_t>(image.ProgramHeaderCount), ps5lift_program.ImageCount, 0, image.TlsModule,
+    for (std::uint64_t index = 0; index < program.ImageCount; ++index) {
+        const auto& image = program.Images[index];
+        LoadedImage loaded{image.LoadBias, image.Name, reinterpret_cast<const void*>(image.ProgramHeaders), static_cast<std::uint16_t>(image.ProgramHeaderCount), program.ImageCount, 0, image.TlsModule,
             image.TlsModule == 0 ? nullptr : reinterpret_cast<void*>(state->FsBase - image.TlsOffset)};
         if (const int result = callback(&loaded, sizeof(loaded), data); result != 0) return result;
     }
@@ -100,8 +103,9 @@ extern "C" int GuestCpuIterateImages_nid_no_patch(int (*callback)(LoadedImage*, 
 }
 
 extern "C" const char* GuestCpuImportName_nid_no_patch(const std::uint64_t address) {
-    for (std::uint64_t index = 0; index < ps5lift_program.ImageCount; ++index) {
-        const auto& image = ps5lift_program.Images[index];
+    const auto& program = Ps5Lift::Program();
+    for (std::uint64_t index = 0; index < program.ImageCount; ++index) {
+        const auto& image = program.Images[index];
         for (std::uint64_t i = 0; i < image.ImportCount; ++i) {
             if (image.Imports[i].GuestAddress == address) return image.Imports[i].Name;
         }
@@ -137,9 +141,10 @@ std::uint64_t ImageSymbol(const Ps5LiftImage& image, const char* name) {
 // Images are numbered from 1 in the order the lifter loaded them, the executable first; 0 names none, or for a symbol
 // every image in that order.
 extern "C" std::uint64_t GuestCpuFindImage_nid_no_patch(const char* fileName) {
+    const auto& program = Ps5Lift::Program();
     const std::string_view wanted(fileName);
-    for (std::uint64_t index = 1; index < ps5lift_program.ImageCount; ++index) {
-        const std::string_view name(ps5lift_program.Images[index].Name);
+    for (std::uint64_t index = 1; index < program.ImageCount; ++index) {
+        const std::string_view name(program.Images[index].Name);
         if (name.size() < wanted.size() || !SameName(name.substr(name.size() - wanted.size()), wanted)) continue;
         if (name.size() == wanted.size() || name[name.size() - wanted.size() - 1] == '/') return index + 1;
     }
@@ -147,10 +152,11 @@ extern "C" std::uint64_t GuestCpuFindImage_nid_no_patch(const char* fileName) {
 }
 
 extern "C" std::uint64_t GuestCpuImageSymbol_nid_no_patch(const std::uint64_t image, const char* name) {
-    if (image > ps5lift_program.ImageCount) ps5lift_fail("GuestCpuImageSymbol: there is no image %" PRIu64, image);
-    if (image != 0) return ImageSymbol(ps5lift_program.Images[image - 1], name);
-    for (std::uint64_t index = 0; index < ps5lift_program.ImageCount; ++index) {
-        if (const auto address = ImageSymbol(ps5lift_program.Images[index], name)) return address;
+    const auto& program = Ps5Lift::Program();
+    if (image > program.ImageCount) ps5lift_fail("GuestCpuImageSymbol: there is no image %" PRIu64, image);
+    if (image != 0) return ImageSymbol(program.Images[image - 1], name);
+    for (std::uint64_t index = 0; index < program.ImageCount; ++index) {
+        if (const auto address = ImageSymbol(program.Images[index], name)) return address;
     }
     return 0;
 }

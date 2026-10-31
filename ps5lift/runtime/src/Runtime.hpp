@@ -7,6 +7,9 @@
 
 namespace Ps5Lift {
 
+// The lifted program's tables, as its executable handed them over.
+const Ps5LiftProgram& Program();
+
 // The lifted function that starts at a guest address, or null.
 Ps5LiftFunction LookupFunction(std::uint64_t address);
 

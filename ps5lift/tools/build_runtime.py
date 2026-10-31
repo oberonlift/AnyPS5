@@ -13,7 +13,6 @@ ROOT = Path(__file__).resolve().parent.parent
 SOFTFLOAT = ROOT / "3rdparty" / "softfloat"
 RUNTIME_SOURCES = ["runtime/src/Runtime.cpp", "runtime/src/GuestCpu.cpp", "runtime/src/X87.cpp", "runtime/src/Jump.cpp", "runtime/src/Cpuid.cpp", "runtime/src/StringCompare.cpp", "runtime/src/NativeCall.cpp"]
 MAIN_SOURCE = "runtime/src/Main.cpp"
-GUEST_CPU_INTERFACE = "GuestCpu*_nid_no_patch"
 SOFTFLOAT_FLAGS = [
     "-DSOFTFLOAT_FAST_INT64", "-DSOFTFLOAT_ROUND_ODD", "-DINLINE_LEVEL=5", "-DSOFTFLOAT_FAST_DIV32TO16", "-DSOFTFLOAT_FAST_DIV64TO32",
     "-DTHREAD_LOCAL=_Thread_local", f"-I{SOFTFLOAT / 'build' / 'Linux-x86_64-GCC'}", f"-I{SOFTFLOAT / 'source' / '8086-SSE'}", f"-I{SOFTFLOAT / 'source' / 'include'}",
@@ -60,7 +59,7 @@ def compiler_version(compiler):
 
 def build(triple, output_directory, clang, clangxx, jobs):
     output_directory = Path(output_directory)
-    library = output_directory / "libps5lift_runtime.a"
+    library = output_directory / "libps5lift_runtime.so"
     main_library = output_directory / "libps5lift_main.a"
     target = [f"--target={triple}", "-O2", "-fPIC"]
     units = []
@@ -71,34 +70,37 @@ def build(triple, output_directory, clang, clangxx, jobs):
         units.append(([clangxx, *target, "-std=c++20", f"-I{ROOT / 'runtime' / 'include'}", f"-I{SOFTFLOAT / 'source' / 'include'}", "-DTHREAD_LOCAL=thread_local", "-DSOFTFLOAT_FAST_INT64", "-DLITTLEENDIAN=1"], path, output_directory / "runtime" / (path.stem + ".o")))
     versions = {compiler: compiler_version(compiler) for compiler in (clang, clangxx)}
     units = [(command, source, output, fingerprint(versions[command[0]], *command, source)) for command, source, output in units]
-    # Parallel tests share this directory: build under a lock, and replace archives whole so a link never sees one missing.
+    shared = [clangxx, f"--target={triple}", "-shared", "-fuse-ld=lld", f"-Wl,-soname,{library.name}", "-pthread", "-ldl"]
+    archiver = subprocess.run([clang, "--print-prog-name=llvm-ar"], capture_output=True, text=True, check=True).stdout.strip()
+    outputs = ((library, units[:-1], lambda temporary, objects: [*shared, *objects, "-o", temporary]),
+               (main_library, units[-1:], lambda temporary, objects: [archiver, "crs", temporary, *objects]))
+    # Parallel tests share this directory: build under a lock, and replace outputs whole so a link never sees one missing.
     output_directory.mkdir(parents=True, exist_ok=True)
     with open(output_directory / ".lock", "w") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
         stale = [unit for unit in units if needs_build(unit[3], unit[2], unit[2].with_suffix(".d"))]
         with concurrent.futures.ThreadPoolExecutor(jobs) as pool:
             list(pool.map(lambda unit: compile_one(*unit), stale))
-        archiver = subprocess.run([clang, "--print-prog-name=llvm-ar"], capture_output=True, text=True, check=True).stdout.strip()
-        for archive, members in ((library, units[:-1]), (main_library, units[-1:])):
-            record = fingerprint(archiver, *(unit[2] for unit in members))
-            listing = archive.with_suffix(".a.cmd")
-            if archive.exists() and listing.exists() and listing.read_text() == record and not any(unit in stale for unit in members):
+        for output, members, command in outputs:
+            objects = [str(unit[2]) for unit in members]
+            record = fingerprint(*command("", objects))
+            listing = output.with_name(output.name + ".cmd")
+            if output.exists() and listing.exists() and listing.read_text() == record and not any(unit in stale for unit in members):
                 continue
-            temporary = archive.with_suffix(".a.tmp")
+            temporary = output.with_name(output.name + ".tmp")
             temporary.unlink(missing_ok=True)
-            subprocess.run([archiver, "crs", str(temporary), *(str(unit[2]) for unit in members)], check=True)
-            temporary.replace(archive)
+            subprocess.run(command(str(temporary), objects), check=True)
+            temporary.replace(output)
             listing.write_text(record)
     return library, main_library
 
 
 def link_arguments(library, main_library=None):
-    # AnyPS5's lifted libraries import GuestCpu from the program, also when a library needs it only as another library's dependency.
-    return [f"-Wl,--undefined-glob={GUEST_CPU_INTERFACE}", f"-Wl,--export-dynamic-symbol={GUEST_CPU_INTERFACE}", str(library), *([str(main_library)] if main_library else [])]
+    return [*([str(main_library)] if main_library else []), str(library), f"-Wl,-rpath,{library.parent}"]
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Build the ps5lift runtime and SoftFloat as a static library for a target")
+    parser = argparse.ArgumentParser(description="Build the ps5lift runtime and SoftFloat as a shared library for a target, and its main as an archive")
     parser.add_argument("--triple", required=True)
     parser.add_argument("--output", required=True)
     parser.add_argument("--clang", default="clang")
