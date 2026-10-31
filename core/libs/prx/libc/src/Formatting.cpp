@@ -20,6 +20,8 @@
 
 #include "prx/libc/include/WindowsFormatting.hpp"
 #include "prx/libc/include/ScanWideField.hpp"
+#include "prx/libc/include/ScanFloatField.hpp"
+#include "prx/libc/include/GuestLongDouble.hpp"
 #include "prx/libc/include/ScanQuadLength.hpp"
 
 #ifdef _WIN32
@@ -380,6 +382,29 @@ int ScanSource(TSource source, const char* format, bool secure, NextPointer next
             target = nextPointer();
             if (target == nullptr) return EOF;
         }
+#ifdef ANYPS5_GUEST_LIFTED
+        if (length == "L" && std::strchr("aAeEfFgG", conversion) != nullptr) {
+            std::string field;
+            const std::size_t limit = width == 0 ? std::string::npos : width;
+            while (field.size() < limit) {
+                const int next = source.Peek();
+                if (next == EOF) break;
+                field.push_back(static_cast<char>(next));
+                if (LibcDetail::FloatFit(field) == LibcDetail::Fit::Invalid) {
+                    field.pop_back();
+                    break;
+                }
+                source.Skip();
+            }
+            if (LibcDetail::FloatFit(field) != LibcDetail::Fit::Valid) return finish(!converted && source.Peek() == EOF ? EOF : assigned);
+            if (!suppress) {
+                LibcDetail::GuestLongDoubleStore(target, LibcDetail::GuestLongDoubleParse(field.c_str(), nullptr));
+                ++assigned;
+            }
+            converted = true;
+            continue;
+        }
+#endif
         if constexpr (!TSource::Contiguous) if (conversion == 'c' && length != "l") {
             const unsigned long wanted = width == 0 ? 1 : width;
             if (secure && !suppress) {
@@ -418,11 +443,8 @@ int ScanSource(TSource source, const char* format, bool secure, NextPointer next
         directive += specifier;
         directive += "%n";
         int consumed = -1;
-        const bool extended = !suppress && length == "L" && std::strchr("aAeEfFgG", conversion) != nullptr;
-        long double extendedValue = 0;
-        const int matched = source.Scan(directive.c_str(), suppress, extended ? &extendedValue : target, &consumed);
+        const int matched = source.Scan(directive.c_str(), suppress, target, &consumed);
         if (consumed < 0 || (!suppress && matched != 1)) return finish(!converted && source.Peek() == EOF ? EOF : assigned);
-        if (extended) LibcDetail::GuestLongDoubleStore(target, extendedValue);
         source.Advance(consumed);
         if (capped && conversion != 'c') {
             const int next = source.Peek();
