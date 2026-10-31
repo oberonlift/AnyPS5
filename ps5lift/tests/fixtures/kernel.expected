@@ -1,6 +1,7 @@
 mutex init 0
 counter 40000 results 30
 mutex destroy 0
+thread handles are guest addresses 1
 scePthreadExit join 0 result 77
 32 MiB stack join 0 levels 5000, reported stack holds it 1
 raised 0, frame intact 1, rip after the last call 1
