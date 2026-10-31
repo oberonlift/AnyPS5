@@ -16,6 +16,7 @@
 #include "ShaderDiskCache.hpp"
 #include "prx/libc/include/GuestArena.hpp"
 #include "prx/libc/include/GuestWriteWatch.hpp"
+#include "prx/libc/include/HostThreadStack.hpp"
 #include <atomic>
 #include <cstdint>
 #include <cstdio>
@@ -30,7 +31,6 @@
 #endif
 #include <windows.h>
 #else
-#include <pthread.h>
 #include <sys/mman.h>
 #endif
 
@@ -97,30 +97,7 @@ void MapDriverMemory() {
 }
 
 bool StackHoldsImport() {
-#ifdef _WIN32
-    ULONG_PTR low = 0;
-    ULONG_PTR high = 0;
-    GetCurrentThreadStackLimits(&low, &high);
-#else
-    struct Bounds {
-        std::uintptr_t low = 0;
-        std::uintptr_t high = 0;
-        Bounds() {
-            pthread_attr_t attributes;
-            if (pthread_getattr_np(pthread_self(), &attributes) != 0) return;
-            void* base = nullptr;
-            std::size_t size = 0;
-            if (pthread_attr_getstack(&attributes, &base, &size) == 0 && base != nullptr) {
-                low = reinterpret_cast<std::uintptr_t>(base);
-                high = low + size;
-            }
-            pthread_attr_destroy(&attributes);
-        }
-    };
-    thread_local const Bounds bounds;
-    const auto low = bounds.low;
-    const auto high = bounds.high;
-#endif
+    const auto [low, high] = CurrentHostThreadStack();
     const auto frame = reinterpret_cast<std::uintptr_t>(__builtin_frame_address(0));
     return frame >= low && frame < high && frame - low >= InlineImportStackBytes;
 }

@@ -1,4 +1,5 @@
 #include "SpirvBackend/SpirvOptimizer.hpp"
+#include "prx/libc/include/HostThreadStack.hpp"
 #include <spirv-tools/libspirv.hpp>
 #include <spirv-tools/optimizer.hpp>
 #include <spirv/unified1/spirv.hpp>
@@ -10,14 +11,6 @@
 #include <stdexcept>
 #include <string>
 #include <thread>
-#ifdef _WIN32
-#ifndef NOMINMAX
-#define NOMINMAX
-#endif
-#include <windows.h>
-#else
-#include <pthread.h>
-#endif
 
 namespace ShaderRecompiler {
 
@@ -29,30 +22,7 @@ constexpr std::uintptr_t InlineOptimizerStackBytes = 256 * 1024;
 std::atomic<std::uint64_t> optimizerHostThreads{0};
 
 bool StackHoldsOptimizer() {
-#ifdef _WIN32
-    ULONG_PTR low = 0;
-    ULONG_PTR high = 0;
-    GetCurrentThreadStackLimits(&low, &high);
-#else
-    struct Bounds {
-        std::uintptr_t low = 0;
-        std::uintptr_t high = 0;
-        Bounds() {
-            pthread_attr_t attributes;
-            if (pthread_getattr_np(pthread_self(), &attributes) != 0) return;
-            void* base = nullptr;
-            std::size_t size = 0;
-            if (pthread_attr_getstack(&attributes, &base, &size) == 0 && base != nullptr) {
-                low = reinterpret_cast<std::uintptr_t>(base);
-                high = low + size;
-            }
-            pthread_attr_destroy(&attributes);
-        }
-    };
-    thread_local const Bounds bounds;
-    const auto low = bounds.low;
-    const auto high = bounds.high;
-#endif
+    const auto [low, high] = CurrentHostThreadStack();
     const auto frame = reinterpret_cast<std::uintptr_t>(__builtin_frame_address(0));
     return frame >= low && frame < high && frame - low >= InlineOptimizerStackBytes;
 }

@@ -14,6 +14,7 @@
 #include "prx/libc/include/GuestAllocations.hpp"
 #include "prx/libc/include/GuestCpu.hpp"
 #include "prx/libc/include/GuestHeap.hpp"
+#include "prx/libc/include/HostThreadStack.hpp"
 #include "prx/libkernel/DirectMemory/DirectMemory.hpp"
 #include <algorithm>
 #include <cstdio>
@@ -346,35 +347,13 @@ static std::uintptr_t PrecommittedStackStart(std::uintptr_t low, std::uintptr_t 
 #endif
 
 static bool HostStackLimits(std::uintptr_t* low, std::uintptr_t* high) {
+    const HostThreadStack stack = CurrentHostThreadStack();
 #ifdef _WIN32
-    ULONG_PTR lowLimit = 0;
-    ULONG_PTR highLimit = 0;
-    GetCurrentThreadStackLimits(&lowLimit, &highLimit);
-    *low = PrecommittedStackStart(lowLimit, highLimit);
-    *high = highLimit;
-#elif defined(__APPLE__)
-    const pthread_t self = pthread_self();
-    *high = reinterpret_cast<std::uintptr_t>(pthread_get_stackaddr_np(self));
-    *low = *high - pthread_get_stacksize_np(self);
+    *low = PrecommittedStackStart(stack.low, stack.high);
 #else
-    static thread_local std::uintptr_t stackLow = 0;
-    static thread_local std::uintptr_t stackHigh = 0;
-    if (stackHigh == 0) {
-        pthread_attr_t attr;
-        if (pthread_getattr_np(pthread_self(), &attr) != 0)
-            return false;
-        void* address = nullptr;
-        std::size_t size = 0;
-        const bool queried = pthread_attr_getstack(&attr, &address, &size) == 0;
-        pthread_attr_destroy(&attr);
-        if (!queried || size == 0)
-            return false;
-        stackLow = reinterpret_cast<std::uintptr_t>(address);
-        stackHigh = stackLow + size;
-    }
-    *low = stackLow;
-    *high = stackHigh;
+    *low = stack.low;
 #endif
+    *high = stack.high;
     return *high > *low;
 }
 
