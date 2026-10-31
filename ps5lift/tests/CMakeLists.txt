@@ -92,13 +92,19 @@ add_custom_target(ps5lift_host_runtime
         VERBATIM)
 
 set(PS5LIFT_ANYPS5_BUILD ${CMAKE_BINARY_DIR}/anyps5)
+# The libraries share the process with lifted code and the runtime, so they are built for the CPU both are built for
+# (tools/build_runtime.py).
+set(PS5LIFT_ANYPS5_CPU_FLAGS)
+if(PS5LIFT_HOST_ARCH STREQUAL "aarch64")
+    set(PS5LIFT_ANYPS5_CPU_FLAGS -DCMAKE_C_FLAGS=-mcpu=neoverse-v2 -DCMAKE_CXX_FLAGS=-mcpu=neoverse-v2)
+endif()
 ExternalProject_Add(anyps5
         SOURCE_DIR ${CMAKE_SOURCE_DIR}/..
         BINARY_DIR ${PS5LIFT_ANYPS5_BUILD}
         DEPENDS ps5lift_host_runtime
         CMAKE_ARGS -G Ninja -DCMAKE_BUILD_TYPE=Release -DANYPS5_GUEST_LIFTED=ON -DBUILD_TESTING=ON -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
                    -DCMAKE_C_COMPILER=${CMAKE_C_COMPILER} -DCMAKE_CXX_COMPILER=${CMAKE_CXX_COMPILER}
-                   -DANYPS5_LIFTED_RUNTIME=${PS5LIFT_HOST_RUNTIME}
+                   -DANYPS5_LIFTED_RUNTIME=${PS5LIFT_HOST_RUNTIME} ${PS5LIFT_ANYPS5_CPU_FLAGS}
         BUILD_COMMAND ${CMAKE_COMMAND} --build <BINARY_DIR> --target libs relinker
         INSTALL_COMMAND ""
         BUILD_ALWAYS ON
