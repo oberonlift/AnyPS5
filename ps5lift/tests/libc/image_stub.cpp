@@ -1,3 +1,8 @@
 #include <ps5lift/State.h>
 
-extern "C" const Ps5LiftProgram ps5lift_program = {};
+namespace {
+
+const Ps5LiftProgram EmptyProgram = {};
+const bool Used = (ps5lift_use_program(&EmptyProgram), true);
+
+}

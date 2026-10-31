@@ -36,8 +36,9 @@ struct sigaction PreviousSegv;
 struct sigaction PreviousBus;
 
 bool InsideGuestImage(const std::uint64_t address) {
-    for (std::uint64_t image = 0; image < ps5lift_program.ImageCount; ++image) {
-        const auto& entry = ps5lift_program.Images[image];
+    const auto& program = Ps5Lift::Program();
+    for (std::uint64_t image = 0; image < program.ImageCount; ++image) {
+        const auto& entry = program.Images[image];
         for (std::uint64_t segment = 0; segment < entry.SegmentCount; ++segment) {
             const auto& mapped = entry.Segments[segment];
             if (address - mapped.GuestAddress < mapped.MemorySize) return true;
