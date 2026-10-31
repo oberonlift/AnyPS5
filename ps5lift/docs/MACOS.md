@@ -1,6 +1,6 @@
 # macOS
 
-A plan for running lifted programs natively on Apple Silicon Macs. Phases 1 to 4 are done; the rest is not built yet. The facts below were checked on 2026-10-29 on an M4 running macOS 27.2 with Xcode's toolchain and Homebrew's LLVM.
+A plan for running lifted programs natively on Apple Silicon Macs. Phases 1 to 4 are done; phase 5 is paused on the decision below, and the rest is not built yet. The facts below were checked on 2026-10-29 on an M4 running macOS 27.2 with Xcode's toolchain and Homebrew's LLVM.
 
 ## Goal
 
@@ -98,9 +98,10 @@ In progress since 2026-10-31. Every AnyPS5 library builds on the Mac, and ctest 
 
 That address is the blocker. Every arm64 process on macOS 27 has the shared region from 6 to 63 GiB, an inaccessible reservation from 63 to 64 GiB and the GPU carve-out from 64 to 448 GiB, so a PS5 address in those ranges cannot be identity mapped. The driver keeps its memory at 63.5 GiB because a title's shaders name its FS table there. With the memory moved for a test, EVO goes on to the driver's guest memory queries, which exist for Linux (`/proc/self/maps`) and Windows only. Next:
 
-- Decide how a PS5 address inside macOS's reserved ranges maps, starting with the driver's memory, and whether titles map memory at fixed addresses there.
 - Port the driver's guest memory queries to `mach_vm_region`.
 - SDL is linked into several libraries, and macOS warns that their Objective-C classes are defined more than once.
+
+Paused on 2026-10-31, with the address question measured. Of the five titles that run on the GB10, three map memory at fixed addresses between 64 and 68 GiB that they do not get from an earlier reservation, one reserves 512 GiB with a hint at 64 GiB, and one's shaders read the driver's table at its fixed address; only the test program asks for nothing there. macOS refuses to map over its reservations: `mmap` with `MAP_FIXED` fails with `EPERM`, and `mach_vm_deallocate` succeeds but leaves the range reserved. So on macOS a guest address cannot always be its host address. Lifted code would add a base to every guest memory access, and every guest pointer that crosses into AnyPS5's libraries, in arguments, results and the structures they read and write, would need translating. That design comes first when the port resumes.
 
 ### 6. Both hosts, documented
 
