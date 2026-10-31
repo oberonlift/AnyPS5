@@ -58,6 +58,7 @@ function stored past a jump = 86
 function kept across a call and stored past a branch = 87
 function stored from a vector register = 88
 pointer stored beside it = 8
+strings returned through lea = aes(8x,int) aes(16x,int)
 bswap 64 = 0xefcdab8967452301
 bswap 32 = 0x0000000067452301
 movbe load 64 = 0xefcdab8967452301

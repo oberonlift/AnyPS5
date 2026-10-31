@@ -454,7 +454,7 @@ Instruction DecodeReached(const GuestImage& image, const Decoder& decoder, const
 }
 
 GuestFunction DiscoverFunction(const GuestImage& image, const Decoder& decoder, const std::set<std::uint64_t>& references, const std::uint64_t entry, const std::set<std::uint64_t>& starts,
-                               std::set<std::uint64_t>& reachedStarts) {
+                               std::set<std::uint64_t>& reachedStarts, std::set<std::uint64_t>& takenAddresses) {
     GuestFunction discovered;
     discovered.Entry = entry;
     const auto symbol = image.FunctionSymbols().find(entry);
@@ -535,7 +535,7 @@ GuestFunction DiscoverFunction(const GuestImage& image, const Decoder& decoder, 
         indirectJumps = std::move(unresolved);
     }
     for (const auto& [address, instruction] : function.Instructions) {
-        if (const auto taken = TakenFunctionAddress(image, function, instruction)) reachedStarts.insert(*taken);
+        if (const auto taken = TakenFunctionAddress(image, function, instruction)) takenAddresses.insert(*taken);
     }
     // An instruction that another overlaps, such as a cmpxchg after a lock prefix that a jump skips, continues at its own
     // end, which then needs a block of its own.
@@ -594,6 +594,19 @@ std::vector<std::pair<std::uint64_t, std::uint64_t>> CoveredCode(const std::map<
     return merged;
 }
 
+// Whether code at an address that nothing calls or jumps to reads as a function: it decodes and calls nothing outside the
+// executable segments, which data an address merely points at rarely does.
+bool Decodes(const GuestImage& image, const Decoder& decoder, const std::set<std::uint64_t>& references, const std::uint64_t address, const std::set<std::uint64_t>& known) {
+    std::set<std::uint64_t> reached;
+    std::set<std::uint64_t> taken;
+    try {
+        DiscoverFunction(image, decoder, references, address, known, reached, taken);
+        return true;
+    } catch (const UndecodableCode&) {
+        return false;
+    }
+}
+
 // Code that nothing discovery follows names, such as the builtins an interpreter calls through offsets it adds at run
 // time, still starts where the compiler aligned it after the int3 padding that ends the code before it. Each such
 // address that no discovered function's code covers starts another function, unless its code does not decode or calls
@@ -606,22 +619,13 @@ std::set<std::uint64_t> PaddedStarts(const GuestImage& image, const Decoder& dec
         const auto after = std::upper_bound(covered.begin(), covered.end(), address, [](const std::uint64_t value, const auto& range) { return value < range.first; });
         return after != covered.begin() && address < std::prev(after)->second;
     };
-    const auto decodes = [&](const std::uint64_t address) {
-        std::set<std::uint64_t> reached;
-        try {
-            DiscoverFunction(image, decoder, references, address, known, reached);
-            return true;
-        } catch (const UndecodableCode&) {
-            return false;
-        }
-    };
     std::set<std::uint64_t> starts;
     for (const auto& segment : image.Segments()) {
         if (!segment.IsExecutable()) continue;
         const auto first = (segment.Address / FunctionAlignment + 1) * FunctionAlignment;
         for (auto address = first; address < segment.Address + segment.Bytes.size(); address += FunctionAlignment) {
             const auto offset = address - segment.Address;
-            if (segment.Bytes[offset - 1] == Int3 && segment.Bytes[offset] != Int3 && !isCovered(address) && decodes(address)) starts.insert(address);
+            if (segment.Bytes[offset - 1] == Int3 && segment.Bytes[offset] != Int3 && !isCovered(address) && Decodes(image, decoder, references, address, known)) starts.insert(address);
         }
     }
     return starts;
@@ -771,15 +775,21 @@ std::map<std::uint64_t, GuestFunction> DiscoverFunctions(const GuestImage& image
     for (const auto address : image.ExceptionFunctionStarts()) starts.insert(address);
 
     // Each round decodes the new starts and again only the functions they can change, so a chain of functions that each
-    // name only the next, as a state machine's states do, costs a round per link but not a pass over the image.
+    // name only the next, as a state machine's states do, costs a round per link but not a pass over the image. An
+    // address a lea takes starts a function only where its code decodes: a function can return its strings' address as
+    // it would a callback's, as OpenSSL's RC4_options does.
     std::map<std::uint64_t, GuestFunction> functions;
     auto added = starts;
     while (true) {
         std::set<std::uint64_t> reachedStarts;
+        std::set<std::uint64_t> takenAddresses;
         for (auto& [entry, function] : functions) {
-            if (SpansAny(function, added)) function = DiscoverFunction(image, decoder, references, entry, starts, reachedStarts);
+            if (SpansAny(function, added)) function = DiscoverFunction(image, decoder, references, entry, starts, reachedStarts, takenAddresses);
         }
-        for (const auto entry : added) functions.emplace(entry, DiscoverFunction(image, decoder, references, entry, starts, reachedStarts));
+        for (const auto entry : added) functions.emplace(entry, DiscoverFunction(image, decoder, references, entry, starts, reachedStarts, takenAddresses));
+        for (const auto address : takenAddresses) {
+            if (!starts.contains(address) && !reachedStarts.contains(address) && Decodes(image, decoder, references, address, starts)) reachedStarts.insert(address);
+        }
         added.clear();
         std::set_difference(reachedStarts.begin(), reachedStarts.end(), starts.begin(), starts.end(), std::inserter(added, added.end()));
         if (added.empty()) added = PaddedStarts(image, decoder, references, starts, functions);
