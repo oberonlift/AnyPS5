@@ -547,6 +547,15 @@ __attribute__((noinline)) static void unaligned_accesses(void) {
         __asm__ volatile("movq (%1), %0" : "=r"(aligned) : "r"(bytes + 8 * i) : "memory");
         line_hex("after unaligned stores", aligned);
     }
+    i64 sign_word;
+    i64 sign_double;
+    u32 inside;
+    __asm__ volatile("movswq 18(%1), %0" : "=r"(sign_word) : "r"(base) : "memory");
+    __asm__ volatile("movslq 34(%1), %0" : "=r"(sign_double) : "r"(base) : "memory");
+    __asm__ volatile("movl 4(%1), %0" : "=r"(inside) : "r"(base) : "memory");
+    line_hex("unaligned sign-extended load 16", (u64)sign_word);
+    line_hex("unaligned sign-extended load 32", (u64)sign_double);
+    line_hex("unaligned load 32 within 16 bytes", inside);
 }
 
 static __thread u64 thread_word = 0x0807060504030201UL;
