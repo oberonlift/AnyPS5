@@ -45,6 +45,7 @@ struct SpirvTargetOptions {
     bool deviceScopeLdsMemoryBarriers = false;
     bool ldsLockFences = false;
     bool meshWindowBuffer = false;
+    bool inlinableHelpers = false;
 };
 
 struct SpirvEmitInfo {

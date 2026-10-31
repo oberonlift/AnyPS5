@@ -813,7 +813,7 @@ std::uint32_t formattedCall(SpirvValueEmitContext& context, const IrValue& instr
         };
         state.module.BeginHelperFunction();
         const Restore restore{state, element, label, byteOffset};
-        state.module.AddFunction(spv::OpFunction, resultType, id, spv::FunctionControlDontInlineMask, functionType);
+        state.module.AddFunction(spv::OpFunction, resultType, id, HelperFunctionControl(state), functionType);
         std::array<std::uint32_t, 10> parameters{};
         for (std::uint32_t index = 0; index < (store ? 10u : 9u); ++index) {
             parameters[index] = state.module.AllocateId();
@@ -877,7 +877,7 @@ std::uint32_t formattedGpuCall(SpirvValueEmitContext& context, const IrValue& in
         state.module.BeginHelperFunction();
         const Restore restore{state, state.currentLabel, state.bdaStopValue};
         state.module.AddName(id, std::string(store ? "store" : "load") + "_formatted_gpu_buffer_x" + std::to_string(components));
-        state.module.AddFunction(spv::OpFunction, resultType, id, spv::FunctionControlDontInlineMask, functionType);
+        state.module.AddFunction(spv::OpFunction, resultType, id, HelperFunctionControl(state), functionType);
         const std::array<std::uint32_t, 11> types{u64, u32, u32, u32, boolean, u32, boolean, u32, u32, u32, valueType};
         std::array<std::uint32_t, 11> parameters{};
         for (std::uint32_t index = 0; index < (store ? 11u : 10u); ++index) {

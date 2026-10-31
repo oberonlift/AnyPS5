@@ -123,6 +123,10 @@ void verifyDriverQuirk() {
         require(AgcDriver::SubgroupControlBarrierUsable(item.driver) == item.usable, "driver " + std::to_string(static_cast<int>(item.driver)) + ": expected subgroup control barriers to be " + (item.usable ? "usable" : "unusable"));
         require(AgcDriver::WorkgroupScopeFenceUsable(item.driver) == item.usable, "driver " + std::to_string(static_cast<int>(item.driver)) + ": expected workgroup-scope fences to be " + (item.usable ? "usable" : "unusable"));
     }
+    for (const auto driver : {VK_DRIVER_ID_AMD_PROPRIETARY, VK_DRIVER_ID_MESA_RADV, VK_DRIVER_ID_MOLTENVK, VK_DRIVER_ID_MESA_LLVMPIPE, VK_DRIVER_ID_NVIDIA_PROPRIETARY}) {
+        const bool usable = driver != VK_DRIVER_ID_NVIDIA_PROPRIETARY;
+        require(AgcDriver::HelperCallsUsable(driver) == usable, "driver " + std::to_string(static_cast<int>(driver)) + ": expected calls to helper functions to be " + (usable ? "usable" : "inlinable"));
+    }
 }
 
 void verifyLdsMemoryBarrierScope() {

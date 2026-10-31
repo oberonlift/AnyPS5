@@ -145,7 +145,7 @@ std::uint32_t DefineBdaSpanLoadFunction(SpirvEmitterState& state, bool coherent)
     const auto values = TypeU32Vector(state, 4);
     const auto function = state.module.AllocateId();
     state.module.AddName(function, std::string("load_bda_span") + (coherent ? "_coherent" : ""));
-    state.module.AddFunction(spv::OpFunction, values, function, spv::FunctionControlDontInlineMask, state.module.Type(spv::OpTypeFunction, values, u64, u32, u32));
+    state.module.AddFunction(spv::OpFunction, values, function, HelperFunctionControl(state), state.module.Type(spv::OpTypeFunction, values, u64, u32, u32));
     const auto physical = state.module.AllocateId();
     const auto firstBytes = state.module.AllocateId();
     const auto used = state.module.AllocateId();
@@ -184,7 +184,7 @@ std::uint32_t DefineBdaSpanReadFunction(SpirvEmitterState& state, bool coherent,
     const auto reader = state.bdaDwordReadFunctions[stops][coherent];
     const auto function = state.module.AllocateId();
     state.module.AddName(function, std::string("read_bda_span") + (stops ? "_stop" : "") + (coherent ? "_coherent" : ""));
-    state.module.AddFunction(spv::OpFunction, result, function, spv::FunctionControlDontInlineMask, state.module.Type(spv::OpTypeFunction, result, u64, u32, u32, u32));
+    state.module.AddFunction(spv::OpFunction, result, function, HelperFunctionControl(state), state.module.Type(spv::OpTypeFunction, result, u64, u32, u32, u32));
     const auto address = state.module.AllocateId();
     const auto offset = state.module.AllocateId();
     const auto used = state.module.AllocateId();
@@ -285,7 +285,7 @@ void DefineBdaDwordReadFunctions(SpirvEmitterState& state) {
             if ((stop && !stops) || (coherent && !coherentAccesses)) continue;
             const auto function = state.module.AllocateId();
             state.module.AddName(function, std::string("read_bda_dword_bytes") + (stop ? "_stop" : "") + (coherent ? "_coherent" : ""));
-            state.module.AddFunction(spv::OpFunction, pair, function, spv::FunctionControlDontInlineMask, type);
+            state.module.AddFunction(spv::OpFunction, pair, function, HelperFunctionControl(state), type);
             const auto address = state.module.AllocateId();
             const auto instruction = state.module.AllocateId();
             state.module.AddFunction(spv::OpFunctionParameter, u64, address);
@@ -687,7 +687,7 @@ void DefineBdaByteWriteFunctions(SpirvEmitterState& state) {
         if (coherent && !coherentAccesses) continue;
         const auto function = state.module.AllocateId();
         state.module.AddName(function, std::string("write_bda_bytes") + (coherent ? "_coherent" : ""));
-        state.module.AddFunction(spv::OpFunction, voidType, function, spv::FunctionControlDontInlineMask, type);
+        state.module.AddFunction(spv::OpFunction, voidType, function, HelperFunctionControl(state), type);
         const auto address = state.module.AllocateId();
         const auto value = state.module.AllocateId();
         const auto bytes = state.module.AllocateId();
