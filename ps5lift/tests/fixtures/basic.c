@@ -122,6 +122,7 @@ i64 (*select_address_taken_by_lea(i64 pick))(void);
 i64 tail_pass_address_taken_by_lea(void);
 void store_address_past_jump(i64 (**slot)(void));
 void store_address_after_call_and_branch(i64 (**slot)(void));
+void store_address_through_vector(i64 (**slots)(void));
 
 __attribute__((noinline)) i64 call_function_pointer(i64 (*function)(void)) {
     return function();
@@ -279,8 +280,9 @@ __asm__(".text\n"
    memory, one passed to a call, one stored only after a run of other instructions, as a constructor that fills in
    an object's fields before its callback's, one called after a NOP whose operand names the register, one returned, as
    a state machine's state returns the next, one pushed as a stack argument, one copied to an argument register, one
-   picked by a conditional move, one passed to a tail call, one stored past a jump within its function and one kept in a
-   callee-saved register across a call and stored past a conditional jump. */
+   picked by a conditional move, one passed to a tail call, one stored past a jump within its function, one kept in a
+   callee-saved register across a call and stored past a conditional jump and one paired with another pointer in a vector
+   register and stored with it. */
 __asm__(".text\n"
         "stored_through_lea:\n"
         "    mov $77, %eax\n"
@@ -404,6 +406,20 @@ __asm__(".text\n"
         "    pop %rbx\n"
         "    ret\n"
         ".size store_address_after_call_and_branch, .-store_address_after_call_and_branch\n"
+        "stored_through_vector_lea:\n"
+        "    mov $88, %eax\n"
+        "    ret\n"
+        ".globl store_address_through_vector\n"
+        ".type store_address_through_vector, @function\n"
+        "store_address_through_vector:\n"
+        "    lea stored_through_vector_lea(%rip), %rcx\n"
+        "    vmovq %rcx, %xmm1\n"
+        "    lea 8(%rdi), %rcx\n"
+        "    vmovq %rcx, %xmm0\n"
+        "    vpunpcklqdq %xmm0, %xmm1, %xmm0\n"
+        "    vmovdqu %xmm0, (%rdi)\n"
+        "    ret\n"
+        ".size store_address_through_vector, .-store_address_through_vector\n"
         ".globl store_address_taken_by_lea\n"
         ".type store_address_taken_by_lea, @function\n"
         "store_address_taken_by_lea:\n"
@@ -1071,6 +1087,10 @@ int main(void) {
     line("function stored past a jump", call_function_pointer(stored));
     store_address_after_call_and_branch(&stored);
     line("function kept across a call and stored past a branch", call_function_pointer(stored));
+    i64 (*paired[2])(void);
+    store_address_through_vector(paired);
+    line("function stored from a vector register", call_function_pointer(paired[0]));
+    line("pointer stored beside it", (u64)paired[1] - (u64)paired);
     zen2_integer();
     unaligned_accesses();
     locked_forms();
