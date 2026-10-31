@@ -93,15 +93,12 @@ The test was a C program for the host. It set the bit with `mrs`/`msr fpcr`, ran
 
 ## Work items
 
-### 1. Leave loads from read-only segments unordered
+### 1. Drop a jump table's fallback when the table is read-only
 
-- **Code:** `NeedsOrdering` in Lifter.cpp.
-- **Change:** an access through `rip` without an index or segment override has a known address, `_instruction->Next() + disp`. If the whole access lies in a segment without `PF_W` (`GuestSegment::Flags` in [GuestImage.hpp](../lifter/include/lifter/GuestImage.hpp)), no other thread can write it, so the load can be plain.
-- **Gain:** many of these are float constants loaded with `movss` or `movsd`. Today they take an `ldapr` into a general register and a move to the vector unit.
-- **What must stay true:** the values in those segments never change, so reordering loads of them cannot be observed. That holds while the guest neither makes its read-only segments writable nor maps their pages a second time. Write that assumption down where the rule goes.
-- **Make it checked:** in lifted builds, AnyPS5's `sceKernelMprotect` and POSIX `mprotect` ([DirectMemory](../../core/libs/prx/libkernel/DirectMemory/)) should stop with an error when asked to make any part of a guest image's read-only segment writable. The images are found through `GuestCpuIterateImages`. A title that breaks the assumption then stops at that call instead of running with unordered loads.
-- **Check:** `ctest`, and the ordered-instruction count.
-- **Also:** the same facts can drop a jump table's fallback. A recovered table lifts as a `switch` that falls back to dispatch. When the table lies wholly in a segment without `PF_W`, no relocation overlaps it and its bound comes from a recognised guard, every target is known, so the fallback is unreachable. AnyPS5's ARM64 compiler ([below](#from-anyps5s-arm64-compiler)) skips re-validating targets under the same three conditions.
+- **Code:** jump tables in [Lifter.cpp](../lifter/src/Lifter.cpp). A recovered table lifts as a `switch` that falls back to dispatch.
+- **Change:** when the table lies wholly in a segment without `PF_W` (`GuestImage::IsReadOnly`), no relocation overlaps it and its bound comes from a recognised guard, every target is known, so the fallback is unreachable and can go. AnyPS5's ARM64 compiler ([below](#from-anyps5s-arm64-compiler)) skips re-validating targets under the same three conditions.
+- **What must stay true:** the table never changes, which holds for the same reason as for [read-only loads](#leave-loads-from-read-only-segments-unordered).
+- **Check:** `ctest`.
 
 ## Later
 
@@ -201,6 +198,10 @@ Landed on 2026-10-31. `Ps5Lift::LookupFunction` in [Runtime.cpp](../runtime/src/
 ### Leave a frame unordered only when its address does not escape
 
 Landed on 2026-10-31. Accesses through `rsp` used to be plain in every function. A function that handed out the address of a local, such as a completion flag other threads set, then read it unordered, and LLVM could hoist the load out of a spin loop on it. `ScanInstructions` in [Lifter.cpp](../lifter/src/Lifter.cpp) now decides per function whether its frame is private (`HandsOutFrameAddress`), and whether it keeps a frame pointer (`KeepsFramePointer`). Only a private frame's accesses through `rsp`, and through `rbp` where the function keeps a frame pointer, are plain, so the titles' accesses through `rbp`, 19–24% of their memory operands, are plain wherever the frame is private. [DESIGN.md](DESIGN.md)'s memory-ordering section states the rule, and the stack message case in `tests/fixtures/threads.c` covers the hole.
+
+### Leave loads from read-only segments unordered
+
+Landed on 2026-10-31. An access through `rip` with no index or segment override has a known address. When the whole access lies in a segment without `PF_W` (`InReadOnlySegment` in [Lifter.cpp](../lifter/src/Lifter.cpp)), no other thread writes it, so the load is plain. Many of these are float constants loaded with `movss` or `movsd`, which took an `ldapr` into a general register and a move to the vector unit. The runtime keeps the assumption checked: AnyPS5's `DoMprotect` calls `GuestCpuMakingWritable` in [GuestCpu.cpp](../runtime/src/GuestCpu.cpp) for every range the guest makes writable, which stops the program if the range overlaps such a segment.
 
 ## Ruled out
 

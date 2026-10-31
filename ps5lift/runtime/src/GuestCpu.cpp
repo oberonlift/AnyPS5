@@ -144,6 +144,22 @@ extern "C" int GuestCpuIterateImages_nid_no_patch(int (*callback)(LoadedImage*, 
     return 0;
 }
 
+// The lifter leaves loads from the images' segments without PF_W unordered, which is safe only while nothing writes
+// there, so making any part of one writable stops the program.
+extern "C" void GuestCpuMakingWritable_nid_no_patch(const std::uint64_t address, const std::uint64_t length) {
+    constexpr std::uint32_t Write = 2;
+    const auto& program = Ps5Lift::Program();
+    for (std::uint64_t index = 0; index < program.ImageCount; ++index) {
+        const auto& image = program.Images[index];
+        for (std::uint64_t i = 0; i < image.SegmentCount; ++i) {
+            const auto& segment = image.Segments[i];
+            if ((segment.Protection & Write) != 0 || address >= segment.GuestAddress + segment.MemorySize || segment.GuestAddress >= address + length) continue;
+            ps5lift_fail("the guest makes 0x%" PRIx64 "-0x%" PRIx64 " writable, inside the read-only segment at 0x%" PRIx64 " of %s, whose loads were lifted unordered", address, address + length,
+                segment.GuestAddress, image.Name);
+        }
+    }
+}
+
 extern "C" const char* GuestCpuImportName_nid_no_patch(const std::uint64_t address) {
     const auto& program = Ps5Lift::Program();
     for (std::uint64_t index = 0; index < program.ImageCount; ++index) {

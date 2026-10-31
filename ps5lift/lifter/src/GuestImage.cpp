@@ -415,6 +415,11 @@ bool GuestSegment::IsExecutable() const {
     return (Flags & Execute) != 0;
 }
 
+bool GuestSegment::IsWritable() const {
+    constexpr std::uint32_t Write = 2;
+    return (Flags & Write) != 0;
+}
+
 const std::vector<GuestSegment>& GuestImage::Segments() const {
     return _segments;
 }
@@ -442,6 +447,13 @@ std::optional<std::uint64_t> GuestImage::ReadData(const std::uint64_t address, c
 
 bool GuestImage::IsExecutable(const std::uint64_t address) const {
     return !CodeAt(address).empty();
+}
+
+bool GuestImage::IsReadOnly(const std::uint64_t address, const unsigned size) const {
+    for (const auto& segment : _segments) {
+        if (address >= segment.Address && Within(address - segment.Address, size, segment.MemorySize)) return !segment.IsWritable();
+    }
+    return false;
 }
 
 const std::map<std::uint64_t, std::string>& GuestImage::FunctionSymbols() const {
