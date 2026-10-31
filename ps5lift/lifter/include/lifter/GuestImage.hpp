@@ -34,6 +34,7 @@ struct GuestSegment {
     std::uint32_t Flags;
 
     bool IsExecutable() const;
+    bool IsWritable() const;
 };
 
 struct GuestArray {
@@ -74,6 +75,7 @@ public:
     std::span<const std::uint8_t> CodeAt(std::uint64_t address) const;
     std::optional<std::uint64_t> ReadData(std::uint64_t address, unsigned size) const;
     bool IsExecutable(std::uint64_t address) const;
+    bool IsReadOnly(std::uint64_t address, unsigned size) const;
     const std::map<std::uint64_t, std::string>& FunctionSymbols() const;
     const std::map<std::uint64_t, std::string>& Imports() const;
     std::optional<std::uint64_t> ImportAt(std::uint64_t slot) const;

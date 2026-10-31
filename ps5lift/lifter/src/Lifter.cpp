@@ -666,7 +666,7 @@ private:
 
     bool NeedsOrdering(const ZydisDecodedOperand& operand, const unsigned bits) const {
         if (_module.Options().Memory != MemoryModel::Tso || bits > 64) return false;
-        return !InPrivateFrame(operand);
+        return !InPrivateFrame(operand) && !InReadOnlySegment(operand, bits);
     }
 
     // Whether a memory operand lies in the function's frame, through rsp or the frame pointer, where no other thread can
@@ -674,6 +674,14 @@ private:
     bool InPrivateFrame(const ZydisDecodedOperand& operand) const {
         if (_frameEscapes || operand.mem.segment == ZYDIS_REGISTER_FS || operand.mem.segment == ZYDIS_REGISTER_GS) return false;
         return IsFrameRegister(operand.mem.base);
+    }
+
+    // Whether a RIP-relative memory operand lies wholly in a segment of the image without PF_W. No thread writes there:
+    // the runtime stops a guest that makes such a segment writable (GuestCpuMakingWritable), and a guest that maps its
+    // pages a second time is out of scope.
+    bool InReadOnlySegment(const ZydisDecodedOperand& operand, const unsigned bits) const {
+        if (operand.mem.base != ZYDIS_REGISTER_RIP || operand.mem.index != ZYDIS_REGISTER_NONE || operand.mem.segment == ZYDIS_REGISTER_FS || operand.mem.segment == ZYDIS_REGISTER_GS) return false;
+        return _module.Image().IsReadOnly(_instruction->Next() + static_cast<std::uint64_t>(operand.mem.disp.value), bits / 8);
     }
 
     llvm::Value* Load(llvm::Value* address, const unsigned bits, const bool ordered) {
@@ -3212,7 +3220,7 @@ private:
     // The runtime reads and writes an x87 memory operand with memcpy, so under TSO the call is fenced on both sides.
     llvm::Value* CallX87(const std::uint32_t operation, const std::uint32_t format, llvm::Value* address, const std::uint32_t index) {
         const auto* memory = address ? X87Memory() : nullptr;
-        const bool ordered = memory != nullptr && _module.Options().Memory == MemoryModel::Tso && !InPrivateFrame(*memory);
+        const bool ordered = memory != nullptr && _module.Options().Memory == MemoryModel::Tso && !InPrivateFrame(*memory) && !InReadOnlySegment(*memory, memory->size);
         if (ordered) _builder.CreateFence(llvm::AtomicOrdering::SequentiallyConsistent);
         auto callee = _module.Runtime("ps5lift_x87", llvm::FunctionType::get(_builder.getInt32Ty(), {_module.Pointer(), _builder.getInt32Ty(), _builder.getInt32Ty(), I64(), _builder.getInt32Ty()}, false));
         auto* result = _builder.CreateCall(callee, {_state, _builder.getInt32(operation), _builder.getInt32(format), address ? address : _builder.getInt64(0), _builder.getInt32(index)});
