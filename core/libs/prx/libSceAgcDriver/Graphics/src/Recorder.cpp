@@ -665,10 +665,20 @@ bool SnapshotOverlaps(const WriteRanges* snapshot, std::uint64_t address, std::s
     return it != snapshot->end() && it->first < address + bytes;
 }
 
+const WriteRanges* CurrentPendingWrites() {
+    thread_local std::uint64_t generation = ~std::uint64_t{0};
+    thread_local std::shared_ptr<const WriteRanges> snapshot;
+    const auto current = publishGeneration.load(std::memory_order_acquire);
+    if (current != generation) {
+        snapshot = pendingWrites.load(std::memory_order_acquire);
+        generation = current;
+    }
+    return snapshot.get();
+}
+
 bool SnapshotOverlaps(std::uint64_t address, std::size_t bytes) {
     if (bytes == 0) return false;
-    const auto snapshot = pendingWrites.load(std::memory_order_acquire);
-    return SnapshotOverlaps(snapshot.get(), address, bytes);
+    return SnapshotOverlaps(CurrentPendingWrites(), address, bytes);
 }
 
 // Whether one merged range of the snapshot contains [address, end) entirely.
@@ -679,8 +689,7 @@ bool SnapshotCovers(const WriteRanges* snapshot, std::uint64_t address, std::uin
 }
 
 bool SnapshotCovers(std::uint64_t address, std::uint64_t end) {
-    const auto snapshot = pendingWrites.load(std::memory_order_acquire);
-    return SnapshotCovers(snapshot.get(), address, end);
+    return SnapshotCovers(CurrentPendingWrites(), address, end);
 }
 
 // Attribution of the pending-write syncs the hook makes (the [hooksync] line every 10 s, under
