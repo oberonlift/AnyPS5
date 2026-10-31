@@ -294,6 +294,34 @@ void Driver::dumpSampleCounters(std::uint64_t address) {
     }
 }
 
+bool Driver::enqueueSampleDump(std::span<const std::uint32_t> packet, std::uint32_t queue) {
+    if (queue != 0 || !Pm4::SampleDump(packet) || !DrawPipeline::Active() || DrawFinisher::Overlap()) return false;
+    const auto address = Pm4::SampleDumpAddress(packet);
+    DrawPipeline::Queue0().Enqueue([this, queue, address] {
+        GuestMemory::SetCurrentPacket(0x46, queue);
+        commitSampleDump(queue, address);
+    }, {{address, address + Pm4::SampleDumpBytes}});
+    return true;
+}
+
+void Driver::commitSampleDump(std::uint32_t queue, std::uint64_t address) {
+    bool dumped = false;
+    {
+        GuestMemory::TagGpuLockSite(GuestMemory::GpuLockSite::Label);
+        std::lock_guard gpuLock(GuestMemory::GpuMutex());
+        const auto localDevice = device.Load();
+        recordDeferredLabels(localDevice.get(), queue);
+        dumped = localDevice != nullptr && localDevice->DumpSamplesOnGpu(address);
+        if (!dumped && localDevice != nullptr) {
+            bumpEpoch(&EpochBumps::drains);
+            static_cast<void>(Graphics::StorageTexture::StoreDrawnLinear("drain"));
+            localDevice->WaitIdle();
+        }
+    }
+    if (dumped) Graphics::Recorder::CountRecordedWork();
+    else dumpSampleCounters(address);
+}
+
 bool Driver::enqueueDmaPacket(std::span<const std::uint32_t> packet, std::uint32_t opcode, std::uint32_t queue, const QueueState& state) {
     if (opcode != 0x50 || queue != 0 || packet.size() < 7 || !DrawPipeline::Active() || !deferredLabels().labels.empty()) return false;
     const auto source = ((packet[1] >> 29u) & 3u) | ((packet[6] >> 24u) & 4u) | ((packet[6] >> 25u) & 8u);
