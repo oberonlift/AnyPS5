@@ -38,6 +38,9 @@
 #include <pthread.h>
 #include <sys/mman.h>
 #include <unistd.h>
+#ifdef __APPLE__
+#include <mach/mach.h>
+#endif
 #endif
 
 #ifdef __linux__
@@ -100,7 +103,7 @@ static GuestThreadState& CurrentGuestState() {
 static std::mutex& stackLock = *new std::mutex();
 static auto& liveStacks = *new std::map<PthreadPrivate*, std::pair<std::uintptr_t, std::uintptr_t>>();
 static auto& protectedStackPages = *new std::map<std::uintptr_t, std::size_t>();
-#if defined(__linux__)
+#if defined(__linux__) || (defined(__APPLE__) && defined(ANYPS5_GUEST_LIFTED))
 struct GuestStackMapping {
     std::uintptr_t mappingEnd;
     std::uintptr_t stackStart;
@@ -122,13 +125,39 @@ static void UnregisterGuestStackMapping(void* mapping) {
 }
 #endif
 
-#if defined(__linux__)
+#if defined(__linux__) || (defined(__APPLE__) && defined(ANYPS5_GUEST_LIFTED))
 static constexpr std::size_t GUEST_STACK_GUARD = PS5_PAGE_SIZE;
+
+#ifdef __APPLE__
+using HostThreadName = mach_port_t;
+
+static void RetainHostThread(const mach_port_t name) {
+    for (;;) {
+        mach_port_type_t type = 0;
+        if (const kern_return_t status = mach_port_type(mach_task_self(), name, &type); status != KERN_SUCCESS)
+            throw std::runtime_error(std::string("Retaining a host thread port: ") + mach_error_string(status));
+        const mach_port_right_t right = (type & MACH_PORT_TYPE_DEAD_NAME) != 0 ? MACH_PORT_RIGHT_DEAD_NAME : MACH_PORT_RIGHT_SEND;
+        const kern_return_t status = mach_port_mod_refs(mach_task_self(), name, right, 1);
+        if (status == KERN_SUCCESS) return;
+        if (status != KERN_INVALID_RIGHT) throw std::runtime_error(std::string("Retaining a host thread port: ") + mach_error_string(status));
+    }
+}
+
+static void ReleaseHostThread(const mach_port_t name) {
+    if (const kern_return_t status = mach_port_deallocate(mach_task_self(), name); status != KERN_SUCCESS)
+        throw std::runtime_error(std::string("Releasing a host thread port: ") + mach_error_string(status));
+}
+#else
+using HostThreadName = int;
+
+static void RetainHostThread(int) {}
+static void ReleaseHostThread(int) {}
+#endif
 
 struct RetiredStack {
     void* address;
     std::size_t bytes;
-    int hostTid;
+    HostThreadName host;
 };
 
 struct FinishedStack {
@@ -243,19 +272,29 @@ static void FreeGuestStack(PthreadPrivate* thread) {
     thread->guestStackBytes = 0;
 }
 
+#ifdef __APPLE__
+static bool HostThreadGone(const mach_port_t name) {
+    mach_port_type_t type = 0;
+    if (const kern_return_t status = mach_port_type(mach_task_self(), name, &type); status != KERN_SUCCESS)
+        throw std::runtime_error(std::string("Checking a host thread port: ") + mach_error_string(status));
+    return (type & MACH_PORT_TYPE_DEAD_NAME) != 0;
+}
+#else
 static bool HostThreadGone(int hostTid) {
     if (hostTid == 0) return false;
     char path[48];
     std::snprintf(path, sizeof(path), "/proc/self/task/%d", hostTid);
     return access(path, F_OK) != 0;
 }
+#endif
 
 static void ReapRetiredStacks() {
     std::vector<RetiredStack> ready;
     {
         std::lock_guard lock(retiredStacksLock);
         for (auto it = retiredStacks.begin(); it != retiredStacks.end();) {
-            if (HostThreadGone(it->hostTid)) {
+            if (HostThreadGone(it->host)) {
+                ReleaseHostThread(it->host);
                 ready.push_back(*it);
                 it = retiredStacks.erase(it);
             } else {
@@ -268,9 +307,15 @@ static void ReapRetiredStacks() {
 
 static void RetireGuestStack(PthreadPrivate* thread) {
     if (thread->guestStack == nullptr) return;
+#ifdef __APPLE__
+    const HostThreadName host = thread->hostMachThread;
+#else
+    const HostThreadName host = thread->hostTid;
+#endif
+    RetainHostThread(host);
     {
         std::lock_guard lock(retiredStacksLock);
-        retiredStacks.push_back({thread->guestStack, thread->guestStackBytes, thread->hostTid});
+        retiredStacks.push_back({thread->guestStack, thread->guestStackBytes, host});
     }
     thread->guestStack = nullptr;
     thread->guestStackBytes = 0;
@@ -307,6 +352,10 @@ static bool HostStackLimits(std::uintptr_t* low, std::uintptr_t* high) {
     GetCurrentThreadStackLimits(&lowLimit, &highLimit);
     *low = PrecommittedStackStart(lowLimit, highLimit);
     *high = highLimit;
+#elif defined(__APPLE__)
+    const pthread_t self = pthread_self();
+    *high = reinterpret_cast<std::uintptr_t>(pthread_get_stackaddr_np(self));
+    *low = *high - pthread_get_stacksize_np(self);
 #else
     static thread_local std::uintptr_t stackLow = 0;
     static thread_local std::uintptr_t stackHigh = 0;
@@ -526,11 +575,19 @@ PthreadPrivate::~PthreadPrivate() {
     auto& registry = CpuClocks();
     std::lock_guard lock(registry.lock);
     registry.threads.erase(cpuClockThread);
+#ifdef __APPLE__
+    if (hostMachThread != MACH_PORT_NULL) mach_port_deallocate(mach_task_self(), hostMachThread);
+#endif
 }
 
 static void BindHostCpuClock(PthreadPrivate* self) {
 #ifdef _WIN32
     (void)self;
+#elif defined(__APPLE__)
+    auto& registry = CpuClocks();
+    std::lock_guard lock(registry.lock);
+    if (self->hostMachThread == MACH_PORT_NULL) self->hostMachThread = mach_thread_self();
+    self->hostCpuClockBound = true;
 #else
     clockid_t clock{};
     const int error = pthread_getcpuclockid(pthread_self(), &clock);
@@ -673,10 +730,20 @@ bool GuestThreadCpuNanos(int cpuClockThread, std::uint64_t* nanos) {
         *nanos = 0;
         return true;
     }
+#ifdef __APPLE__
+    thread_basic_info_data_t info{};
+    mach_msg_type_number_t count = THREAD_BASIC_INFO_COUNT;
+    const kern_return_t status = thread_info(thread->hostMachThread, THREAD_BASIC_INFO, reinterpret_cast<thread_info_t>(&info), &count);
+    if (status != KERN_SUCCESS)
+        throw std::runtime_error("Querying guest thread CPU time: thread_info failed with " + std::to_string(status));
+    const auto micros = [](const time_value_t& value) { return static_cast<std::uint64_t>(value.seconds) * 1000000ULL + static_cast<std::uint64_t>(value.microseconds); };
+    *nanos = (micros(info.user_time) + micros(info.system_time)) * 1000ULL;
+#else
     struct timespec time{};
     if (clock_gettime(thread->hostCpuClock, &time) != 0)
         throw std::system_error(errno, std::generic_category(), "Querying guest thread CPU time");
     *nanos = static_cast<std::uint64_t>(time.tv_sec) * 1000000000ULL + static_cast<std::uint64_t>(time.tv_nsec);
+#endif
 #endif
     return true;
 }
@@ -967,6 +1034,9 @@ static void* StartNativeThread(void* opaque) {
 #if defined(__linux__)
         self->hostTid = static_cast<int>(gettid());
         RegisterGuestStackMapping(self);
+#elif defined(__APPLE__) && defined(ANYPS5_GUEST_LIFTED)
+        self->hostMachThread = mach_thread_self();
+        RegisterGuestStackMapping(self);
 #endif
         args->initialized.set_value();
     } catch (...) {
@@ -1063,7 +1133,7 @@ int APS5_VABI scePthreadCreate(Pthread* thread, const PthreadAttr* attr, Pthread
     sigset_t creatorMask;
     pthread_sigmask(SIG_SETMASK, nullptr, &creatorMask);
     args->signalMask = creatorMask;
-#if defined(__linux__)
+#if defined(__linux__) || (defined(__APPLE__) && defined(ANYPS5_GUEST_LIFTED))
     ReapRetiredStacks();
     AllocateGuestStack(p.get(), stackBytes);
 #endif

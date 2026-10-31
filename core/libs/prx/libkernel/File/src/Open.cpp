@@ -260,6 +260,13 @@ static int OpenNative(const std::filesystem::path& native, int flags, std::uint1
             errno = EISDIR;
         }
     }
+    if (fd >= 0) {
+        struct stat opened{};
+        if (::fstat(fd, &opened) == 0 && S_ISDIR(opened.st_mode)) {
+            ::close(fd);
+            fd = File::OpenDirectoryDescriptor(native);
+        }
+    }
 #endif
 #ifdef _WIN32
     if (fd < 0 && (errno != ENOENT || !native.has_filename())) {

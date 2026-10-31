@@ -28,7 +28,11 @@
 #include <cstdlib>
 #include <system_error>
 #include <pthread.h>
+#ifdef __APPLE__
+#include <sys/ucontext.h>
+#else
 #include <ucontext.h>
+#endif
 #include <unistd.h>
 #endif
 

@@ -72,7 +72,7 @@ function(configure_windows_unwind target)
 endfunction()
 
 function(configure_macos_unwind target)
-    if(APPLE)
+    if(APPLE AND NOT ANYPS5_GUEST_LIFTED)
         target_compile_options(${target} PRIVATE -femit-dwarf-unwind=always)
         target_link_options(${target} PRIVATE LINKER:-no_compact_unwind)
     endif()
