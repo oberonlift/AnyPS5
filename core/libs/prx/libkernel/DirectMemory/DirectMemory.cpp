@@ -27,6 +27,7 @@
 #include <fcntl.h>
 #include <sys/mman.h>
 #include <unistd.h>
+#include "prx/libc/include/HostMapNoReplace.hpp"
 #include "prx/libc/include/specifics/linux/ElfTypes.hpp"
 #include <fstream>
 #include <sstream>
@@ -41,6 +42,7 @@
 #include <link.h>
 #include <sys/mman.h>
 #include <unistd.h>
+#include "prx/libc/include/HostMapNoReplace.hpp"
 #else
 #include <windows.h>
 #include "prx/libc/include/WindowsDescriptor.hpp"
@@ -218,20 +220,6 @@ namespace {
 constexpr int GuestMapFixedFlag = 0x10;
 constexpr int GuestProtGpuReadWrite = 0x30;
 constexpr int GuestProtCpuExecute = 0x4;
-
-#if defined(__linux__) || defined(__EMSCRIPTEN__) || defined(__APPLE__)
-void* MapAnonymousNoReplace(void* address, size_t len, int prot) {
-#ifdef __APPLE__
-    void* const placed = ::mmap(address, len, prot, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-    if (placed == MAP_FAILED || placed == address) return placed;
-    if (::munmap(placed, len) != 0) throw std::system_error(errno, std::generic_category(), "unmap a hinted mapping placed away from its hint");
-    errno = EEXIST;
-    return MAP_FAILED;
-#else
-    return mmap(address, len, prot, MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED_NOREPLACE, -1, 0);
-#endif
-}
-#endif
 
 #if defined(__linux__) || defined(__APPLE__)
 void* MapAtOrAbove(std::uintptr_t start, size_t len, int prot, size_t alignment) {
