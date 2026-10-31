@@ -88,11 +88,19 @@ Done on 2026-10-31. `libc`, `exceptions`, `kernel` and `fiber` pass natively on 
 - The bridge generator: Homebrew's libclang, given its resource directory, and a library's exports read from its Mach-O symbol table.
 - Upstream's tests: the library names a numeric host as its own canonical name, which macOS's `getaddrinfo` leaves out, and the formatting tests check x87 digits only where the host's `long double` holds them.
 
-The Mac builds only the libraries the tests load: AnyPS5's GPU driver imports shared memory through Linux's `udmabuf`, which phase 5 ports first. Unchecked: whether the guest arena, which starts at 8 GiB, keeps out of the shared region and the GPU carve-out on its own. It skips the ranges the host reports as mapped, and phase 5 is the first to allocate much.
+Until phase 5 ported AnyPS5's GPU driver, the Mac built only the libraries the tests load.
 
 ### 5. EVO Player
 
 Build the rest of the libraries it imports (libSceAgcDriver and its shader recompiler on MoltenVK, libSceVideoOut, audio, pad, system service, networking), relink it at 1008 GiB, lift it, and run it in a Cocoa window rather than under Xvfb. Done when it reaches its home screen. A screen that matches the GB10's, with the same colour fringes, puts those fringes in the shared code, not in either platform's renderer.
+
+In progress since 2026-10-31. Every AnyPS5 library builds on the Mac, and ctest builds them all there, as on Linux. The GPU driver imports guest memory through host pointers, which MoltenVK 1.2.11 offers with `VK_EXT_external_memory_host`, since its dma-buf imports need Linux's `udmabuf`; the NID-patched libraries are signed again after patching, since Apple's linker signs every arm64 image; the import audit reads Mach-O libraries; and the bridge generator gives libclang the SDK Apple's compiler driver adds. EVO Player prepares, lifts for `arm64-apple-macosx` (8 minutes 27 seconds, 4.1 GB peak, 59,697 functions as on Linux), links and runs natively: it boots, brings up its video decoders and allocates above 448 GiB, then stops where the GPU driver maps its own memory at `0xfe0000000`.
+
+That address is the blocker. Every arm64 process on macOS 27 has the shared region from 6 to 63 GiB, an inaccessible reservation from 63 to 64 GiB and the GPU carve-out from 64 to 448 GiB, so a PS5 address in those ranges cannot be identity mapped. The driver keeps its memory at 63.5 GiB because a title's shaders name its FS table there. With the memory moved for a test, EVO goes on to the driver's guest memory queries, which exist for Linux (`/proc/self/maps`) and Windows only. Next:
+
+- Decide how a PS5 address inside macOS's reserved ranges maps, starting with the driver's memory, and whether titles map memory at fixed addresses there.
+- Port the driver's guest memory queries to `mach_vm_region`.
+- SDL is linked into several libraries, and macOS warns that their Objective-C classes are defined more than once.
 
 ### 6. Both hosts, documented
 
@@ -101,6 +109,7 @@ The README's build section for macOS (Xcode, Homebrew `llvm` and `lld`, MoltenVK
 ## Risks
 
 - **Low addresses.** A PS5 title that relies on its executable sitting below 4 GiB, if any, now breaks on every host, not only on macOS.
+- **Fixed PS5 addresses in macOS's reserved ranges.** Guest memory is identity mapped, and macOS keeps 6 to 448 GiB for itself (phase 5). The guest arena keeps out of those ranges on its own, but a PS5 address fixed inside them, such as the GPU driver's, cannot be mapped there.
 - **Overlap of Rosetta and lifted code in AnyPS5.** The two were written apart. Phase 4 met it in libc and libkernel (above); the libraries phase 5 adds have `__APPLE__` paths of their own, written for Rosetta.
 - **MoltenVK.** It ran AnyPS5's renderer under Rosetta, and the GPU side does not change with the CPU, but nothing has run on it from an arm64 process yet.
 - **Precision of the new long double.** Exact x87 rounding is the point, and it changed the lifted libc's results on Linux too. The libc fixtures' expected output did not change, and the parser and the bit operations matched x87 on an x86-64 machine.
