@@ -280,9 +280,12 @@ std::set<std::uint64_t> DataReferences(const GuestImage& image, const Decoder& d
     return references;
 }
 
+// A closed table holds every target its jump can take: a guard bounds it, and nothing writes it, since it lies in a
+// read-only segment no relocation touches.
 struct RecoveredTable {
     std::vector<std::uint64_t> Targets;
     bool Guarded = false;
+    bool Closed = false;
 };
 
 // A table's targets lie in the code between the function starts around its jump, which is the function's own code
@@ -312,6 +315,8 @@ RecoveredTable RecoverJumpTable(const GuestImage& image, const DecodedFunction& 
         }
         targets.push_back(destination);
     }
+    const auto bytes = TableEntryBytes * count;
+    table.Closed = bound && targets.size() == count && image.IsReadOnly(shape->Address, bytes) && !image.Relocates(shape->Address, bytes);
     return table;
 }
 
@@ -530,6 +535,7 @@ GuestFunction DiscoverFunction(const GuestImage& image, const Decoder& decoder, 
             }
             function.JumpTables.emplace(jump, std::move(table.Targets));
             if (!table.Guarded) function.UnguardedJumpTables.insert(jump);
+            if (table.Closed) function.ClosedJumpTables.insert(jump);
         }
         if (unresolved.size() == indirectJumps.size()) break;
         indirectJumps = std::move(unresolved);
