@@ -14,12 +14,15 @@ int guest_fiber_run(Fiber* fiber, unsigned long argOnRun, unsigned long* argOnRe
 int guest_fiber_switch(Fiber* fiber, unsigned long argOnRun, unsigned long* argOnRunOut) __asm__(NID_sceFiberSwitch);
 int guest_fiber_return(unsigned long argOnReturn, unsigned long* argOnRun) __asm__(NID_sceFiberReturnToThread);
 int guest_fiber_self(Fiber** fiber) __asm__(NID_sceFiberGetSelf);
+int guest_pthread_create(void** thread, const void* attr, void* (*entry)(void*), void* argument, const char* name) __asm__(NID_scePthreadCreate);
+int guest_pthread_join(void* thread, void** result) __asm__(NID_scePthreadJoin);
 
 enum { ContextSize = 64 << 10, Rounds = 5 };
 
-static Fiber ping, pong;
+static Fiber ping, pong, away;
 static _Alignas(16) unsigned char pingStack[ContextSize];
 static _Alignas(16) unsigned char pongStack[ContextSize];
+static _Alignas(16) unsigned char awayStack[ContextSize];
 
 static unsigned long mix(unsigned long value, unsigned long salt) {
     return value * 6364136223846793005ul + salt;
@@ -54,6 +57,20 @@ static void pong_entry(unsigned long argOnInitialize, unsigned long argOnRun) {
     }
 }
 
+static void away_entry(unsigned long argOnInitialize, unsigned long argOnRun) {
+    unsigned long received = 0;
+    guest_fiber_return(argOnInitialize + argOnRun, &received);
+    guest_printf("away resumed with %lu\n", received);
+    guest_fiber_return(received, &received);
+}
+
+static void* resume_away(void* argument) {
+    unsigned long returned = 0;
+    const int run = guest_fiber_run(&away, (unsigned long)argument, &returned);
+    guest_printf("run away on another thread %d returned %lu\n", run, returned);
+    return 0;
+}
+
 int main(void) {
     guest_printf("init ping %d\n", guest_fiber_initialize(&ping, "ping", ping_entry, 7, pingStack, ContextSize, 0, 0));
     guest_printf("init pong %d\n", guest_fiber_initialize(&pong, "pong", pong_entry, 2, pongStack, ContextSize, 0, 0));
@@ -64,6 +81,12 @@ int main(void) {
     guest_printf("self outside %x\n", (unsigned)guest_fiber_self(&self));
     guest_printf("finalize pong %x\n", (unsigned)guest_fiber_finalize(&pong));
     guest_printf("finalize ping %d\n", guest_fiber_finalize(&ping));
+    guest_printf("init away %d\n", guest_fiber_initialize(&away, "away", away_entry, 3, awayStack, ContextSize, 0, 0));
+    const int awayRun = guest_fiber_run(&away, 4, &returned);
+    guest_printf("run away %d returned %lu\n", awayRun, returned);
+    void* thread = 0;
+    guest_printf("create %d\n", guest_pthread_create(&thread, 0, resume_away, (void*)5, "away"));
+    guest_pthread_join(thread, 0);
     return 0;
 }
 

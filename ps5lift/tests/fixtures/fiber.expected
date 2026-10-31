@@ -15,3 +15,6 @@ run 0 returned 940
 self outside 80590005
 finalize pong 0
 finalize ping 0
+init away 0
+run away 0 returned 7
+create 0

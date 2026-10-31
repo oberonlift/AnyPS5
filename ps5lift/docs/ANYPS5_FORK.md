@@ -19,7 +19,7 @@ Only the user can settle these. Ask before starting the work that depends on one
 
 ## The patch set
 
-On 2026-10-30: 31 commits on upstream `ac551a1`, ending at the commit the superproject pins. The branch `aarch64-host`, locally and on the fork's remote, sits on an older upstream and is superseded.
+On 2026-10-30: 32 commits on upstream `ac551a1`, ending at the commit the superproject pins. The branch `aarch64-host`, locally and on the fork's remote, sits on an older upstream and is superseded.
 
 The submodule has no `upstream` remote. Fetch by URL, then list the patch set:
 
@@ -30,7 +30,7 @@ git -C 3rdparty/anyps5 log --reverse --format='%h %s' upstream/main..HEAD
 
 The patches fall in four groups, listed one by one under [upstream pull requests](#upstream-pull-requests):
 
-- **Building for a lifted guest on aarch64**, mostly behind `ANYPS5_GUEST_LIFTED`: the build switch, the guest FPU state and timestamp counter through `GuestCpu`, x87 `long double` converted at libc's boundaries, guest `va_list`s, unwinding, `dl_iterate_phdr`, fibers, and fixes for Clang.
+- **Building for a lifted guest on aarch64**, mostly behind `ANYPS5_GUEST_LIFTED`: the build switch, the guest FPU state and timestamp counter through `GuestCpu`, x87 `long double` converted at libc's boundaries, guest `va_list`s, unwinding, `dl_iterate_phdr`, fibers (which stop when resumed on another thread), and fixes for Clang.
 - **libkernel for lifted programs**: guest thread stacks of the requested size, thread objects in guest memory, `dlopen` of lifted modules, and module information for lifted images.
 - **A network gate**: the guest is offline unless `APS5_NETWORK=1`, and `APS5_NETWORK_ALLOW` and `APS5_NETWORK_DENY` limit the domains it may resolve.
 - **Fixes found on titles**, none specific to lifting: HTTP/2 (the redirect callback, asynchronous send and read, HTTP/1.x lookups) for the EOS SDK in two Unreal titles, 16-bit access to converted images, `sceNpGetSandboxInfo`, a GPU snapshot that overlaps a writable range, and helper functions that NVIDIA's driver may inline.
@@ -67,7 +67,7 @@ What runs today:
 What follows from that:
 
 - The lifted paths compile only when someone builds AnyPS5-lift, so upstream changes break them unseen. The 2026-10-30 rebase needed two new patches, `default-construct HostGainRamp implicitly` and `cast vtable entries to functions in one place`, for new upstream code that GCC accepts and Clang rejects.
-- 20 of the 31 patches change no test file. Most compile only in the lifted build, which AnyPS5-lift's tests cover indirectly. `allocate thread objects in guest memory` changes the x86 build and has no test.
+- 21 of the 32 patches change no test file. Most compile only in the lifted build, which AnyPS5-lift's tests cover indirectly. `allocate thread objects in guest memory` changes the x86 build and has no test.
 
 Work items, in order:
 
@@ -121,4 +121,4 @@ Only if upstream wants a lifted aarch64 target in its tree; ask in a discussion 
 | 16 | Unwinding and exception pointers | unwind guest frames from the lifted guest state; keep the host's exception pointers in lifted builds | 12 | The `host_exception_pointer` test runs on x86 too. |
 | 17 | Lifted threads | the rest of build for a lifted guest (libkernel); call a lifted thread entry as the native callback it is; run a lifted guest thread on the stack it asked for; allocate thread objects in guest memory | 11, 12 | Add the thread-object test from [tests and CI](#tests-and-ci). |
 | 18 | Lifted images and modules | iterate the lifted program's guest images in dl_iterate_phdr; find lifted guest images in sceKernelGetModuleInfoFromAddr; load modules that are part of a lifted program | 17 | Unblocks an Unreal title (module information). |
-| 19 | Fibers on aarch64 | switch fibers for a lifted guest on aarch64 | 17 | |
+| 19 | Fibers on aarch64 | switch fibers for a lifted guest on aarch64; stop a lifted fiber resumed on another thread | 17 | |
