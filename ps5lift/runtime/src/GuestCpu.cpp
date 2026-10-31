@@ -59,6 +59,12 @@ constexpr int DwarfRegisters[16] = {PS5LIFT_RAX, PS5LIFT_RDX, PS5LIFT_RCX, PS5LI
 constexpr int DwarfRsp = 7;
 constexpr int DwarfRip = 16;
 
+// The console's file names, as AnyPS5 resolves them, ignore the case of ASCII letters.
+bool SameName(const std::string_view left, const std::string_view right) {
+    const auto fold = [](const unsigned char value) { return value >= 'A' && value <= 'Z' ? value + ('a' - 'A') : value; };
+    return std::ranges::equal(left, right, [&](const unsigned char a, const unsigned char b) { return fold(a) == fold(b); });
+}
+
 // The layout of glibc's and FreeBSD's dl_phdr_info, which AnyPS5's libraries hand to dl_iterate_phdr callbacks.
 struct LoadedImage {
     std::uint64_t Address;
@@ -132,7 +138,8 @@ extern "C" std::uint64_t GuestCpuFindImage_nid_no_patch(const char* fileName) {
     const std::string_view wanted(fileName);
     for (std::uint64_t index = 1; index < ps5lift_program.ImageCount; ++index) {
         const std::string_view name(ps5lift_program.Images[index].Name);
-        if (name == wanted || (name.size() > wanted.size() && name.ends_with(wanted) && name[name.size() - wanted.size() - 1] == '/')) return index + 1;
+        if (name.size() < wanted.size() || !SameName(name.substr(name.size() - wanted.size()), wanted)) continue;
+        if (name.size() == wanted.size() || name[name.size() - wanted.size() - 1] == '/') return index + 1;
     }
     return 0;
 }
