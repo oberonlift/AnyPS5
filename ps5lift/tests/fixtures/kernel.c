@@ -227,6 +227,10 @@ int main(void) {
     const int absent = guest_dlsym(module, "kernel_module_absent", &missing);
     guest_printf("module loaded %d started %d, dlsym %d answer %ld, absent symbol %d\n", module > 0, started, found, answer ? ((long (*)(long))answer)(6) : -1,
                  absent != 0 && missing == 0);
+    const int recased = guest_load_start_module("/app0/LibKernelModule.SO", 0, 0, 0, 0, &started);
+    void* recased_answer = 0;
+    guest_printf("module found under another case %d, same answer %d\n", recased > 0,
+                 guest_dlsym(recased, "kernel_module_answer", &recased_answer) == 0 && recased_answer == answer);
 
     const unsigned long code = (unsigned long)&unwound_function;
     struct module_info module_info;
