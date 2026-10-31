@@ -97,16 +97,6 @@ None is open. The next candidates are under [Later](#later) and [From AnyPS5's A
 
 ## Later
 
-- **Handle unaligned ordered accesses after they fault.**
-  - Today `Load`, `Store` and `SplitOnAlignment` in Lifter.cpp test alignment before every ordered access.
-  - With FEAT_LSE2, an ordered access faults only when it crosses a 16-byte boundary, which compiled code rarely does. The kernel controls that tolerance (`SCTLR_EL1.nAA`). Before relying on it, confirm it on Linux and macOS with an unaligned `ldapr` inside a 16-byte block and one across a boundary.
-  - A `SIGBUS` handler beside the `SIGSEGV` one in NativeCall.cpp would decode `ldapr`, `ldapur`, `ldar`, `stlr` and `stlur` (2, 4 and 8 bytes), do the access plainly with a `dmb`, write the destination register and step past the instruction.
-  - That removes an `and` and a branch per access where LLVM cannot hoist the `and`. It also removes the second path through loop bodies, which is likely what stops LLVM from unrolling ordered loops.
-  - macOS reports alignment faults as `SIGBUS` too.
-  - The memory model does not change, but the handler carries its own risks:
-    - It has to reproduce each form exactly (width, sign and zero extension, `wzr`/`xzr`, the signed offsets of `ldapur` and `stlur`) inside a signal handler.
-    - An access that also faults for another reason, such as one into an unmapped page, must still reach the `SIGSEGV` path and guest exception delivery as it does today.
-  - Each crossing access then costs a signal instead of a branch, so code that crosses often, such as a loop over packed structures, becomes far slower. Count the faults in a run of EVO Player and of a title before making this the default.
 - **Merge adjacent ordered accesses.**
   - Two ordered accesses of the same kind to adjacent addresses with no instruction between them, such as `mov %eax,(%rdi); mov %edx,0x4(%rdi)`, can become one access of twice the width:
     - an observer of a merged store sees both stores or neither, and TSO allows both outcomes;
@@ -200,6 +190,10 @@ Landed on 2026-10-31, after AnyPS5's ARM64 compiler ([above](#from-anyps5s-arm64
 
 Each of these was considered for the ordering cost and rejected. Do not pick them up without new evidence.
 
+- **Handling unaligned ordered accesses after they fault** (tried on 2026-10-31).
+  - On the GB10, `ldapr` and `stlr` work at any alignment within a 16-byte block (FEAT_LSE2) and fault with `SIGBUS` only across one, so the lifter could drop the alignment test before every ordered access and a `SIGBUS` handler could do the crossing ones.
+  - EVO Player's ordered accesses cross a block all the time: about 15,000 a second under `strace` at its home screen, which plays a video, and more at full speed. A signal each costs microseconds, against the nanosecond of the branch it saves.
+  - It would pay only with a way to keep the test where accesses cross and drop it elsewhere, which needs a profile.
 - **Reusing a loaded or stored value across another load.**
   - Forwarding a store to a later load of the same address, or reusing a load for a repeated one, is safe only when no other load sits between them, and never across loop iterations, where it would hoist a spin loop's load as the old `rsp` rule let LLVM do ([Done](#done)).
   - With a load between them, TSO can require the newer value. Suppose this thread stores to `a` and then loads `b`, and another thread set `b` after it saw this thread's store and overwrote `a`. Then the reload of `a` must see the other thread's value.
