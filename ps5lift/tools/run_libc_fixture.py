@@ -20,7 +20,8 @@ KERNEL_IMPORTS = ["printf", "exit", "scePthreadCreate", "scePthreadJoin", "scePt
                   "scePthreadAttrInit", "scePthreadAttrDestroy", "scePthreadAttrSetstacksize", "scePthreadAttrGet", "scePthreadAttrGetstack", "scePthreadSelf",
                   "sceKernelInstallExceptionHandler", "sceKernelRemoveExceptionHandler", "sceKernelRaiseException",
                   "sceKernelLoadStartModule", "sceKernelDlsym", "sceKernelGetModuleInfoFromAddr", "sceKernelGetModuleInfoForUnwind"]
-FIBER_IMPORTS = ["printf", "exit", "_sceFiberInitializeImpl", "sceFiberFinalize", "sceFiberRun", "sceFiberSwitch", "sceFiberReturnToThread", "sceFiberGetSelf"]
+FIBER_IMPORTS = ["printf", "exit", "_sceFiberInitializeImpl", "sceFiberFinalize", "sceFiberRun", "sceFiberSwitch", "sceFiberReturnToThread", "sceFiberGetSelf",
+                 "scePthreadCreate", "scePthreadJoin"]
 LOG_LINE = re.compile(r"^\[[^\]\s]+:\d+ [^\]]+\] .*\n", re.MULTILINE)
 GUEST_LINK = ["-no-pie", f"-Wl,--image-base={GUEST_BASE:#x}", "-Wl,--dynamic-linker=/lib64/ld-linux-x86-64.so.2"]
 
@@ -92,7 +93,9 @@ def main():
     triple = host_triple()
     runner = runner_for(triple)
     expected = (FIXTURES / f"{args.fixture}.expected").read_text()
-    work = Path(tempfile.mkdtemp(prefix=f"ps5lift-{args.fixture}-"))
+    stop_file = FIXTURES / f"{args.fixture}.stop"
+    stop = stop_file.read_text().strip() if stop_file.exists() else None
+    work =Path(tempfile.mkdtemp(prefix=f"ps5lift-{args.fixture}-"))
     failures = 0
     try:
         bridges = work / "bridges.cpp"
@@ -110,9 +113,11 @@ def main():
             run([args.clangxx, f"--target={triple}", "-std=c++20", "-O1", f"-I{ROOT / 'runtime' / 'include'}", "-fuse-ld=lld", lifted, bridges, *host_sources,
                  *libraries, *runtime, f"-Wl,-rpath,{anyps5.libraries_directory}", "-latomic", "-pthread", "-ldl", "-o", program])
             result = subprocess.run([*runner, program], capture_output=True, text=True, timeout=600)
-            ok = result.returncode == 0 and compare(expected, LOG_LINE.sub("", result.stdout), label)
-            if result.returncode != 0:
-                sys.stderr.write(f"{label}: exit code {result.returncode}\n{result.stderr}")
+            ended = result.returncode == 0 if stop is None else result.returncode != 0 and stop in result.stderr
+            ok = ended and compare(expected, LOG_LINE.sub("", result.stdout), label)
+            if not ended:
+                expectation = "exit code 0" if stop is None else f"a stop with {stop!r}"
+                sys.stderr.write(f"{label}: exit code {result.returncode}, expected {expectation}\n{result.stderr}")
             print(f"{'PASS' if ok else 'FAIL'} {args.fixture} {label}: {report.strip()}")
             failures += not ok
     finally:

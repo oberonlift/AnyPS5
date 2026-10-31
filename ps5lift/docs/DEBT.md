@@ -22,7 +22,7 @@ A review of the whole tree in October 2026 found these. Each gives a wrong resul
 
 ### Runtime
 
-- A fiber resumed on another thread keeps running on the first thread's `Ps5LiftState`: [GuestCpu](../runtime/src/GuestCpu.cpp) restores its registers into the current thread's state, but each lifted and bridge frame on the fiber's stack holds the state it was entered with. A fiber's entry, a callback thunk, never returns, so the native thread that starts one counts a callback still running and keeps the guest's floating-point environment for its own code from then on. A state for each fiber, which the switch makes current, would fix both.
+- Resuming a suspended fiber on a thread other than the one that started it stops with `resuming a lifted fiber on another thread not implemented`. Each lifted and bridge frame on the fiber's stack holds the `Ps5LiftState` it was entered with, so the fiber would run on the first thread's state while that thread runs on it too; [GuestCpu](../runtime/src/GuestCpu.cpp) only restores the fiber's registers into the current thread's state. Fiber job systems resume a fiber on whichever worker thread is free, so titles with one stop here. A fiber's entry, a callback thunk, never returns, so the native thread that starts one counts a callback still running and keeps the guest's floating-point environment for its own code from then on. A state for each fiber, which the switch makes current, would fix both.
 
 ## Gaps
 
@@ -57,7 +57,7 @@ A review of the whole tree in October 2026 found these. Each gives a wrong resul
 
 - Every fixture is built for `znver2`, so the compiler encodes SSE with VEX, and the only legacy SSE forms tested are AES, `pclmulqdq`, SHA, MMX and a set of scalar arithmetic, comparison, rounding and conversion forms, which come from assembly. `vector.c` and `float.c` use AVX throughout, so covering the packed legacy forms needs SSE-only builds of their tests.
 - No test runs `--float fast`, `--preserve-flags` or `--emit-ir`, and no fixture splits an image into more than one part, so calls between the parts of one image are tested only by EVO Player.
-- Untested paths: division traps, jump tables sized by layout, fibers resumed on another thread, the generator's forwarded variadics and 128-bit stack arguments, and the runtime's reports of a guest `int`, a full callback pool, a `longjmp` through native code and a resume a frame has no point for.
+- Untested paths: division traps, jump tables sized by layout, the generator's forwarded variadics and 128-bit stack arguments, and the runtime's reports of a guest `int`, a full callback pool, a `longjmp` through native code and a resume a frame has no point for.
 - The TSO check in `threads.c` can only fail when the lifted code runs on aarch64 hardware.
 
 ## Cleanup
