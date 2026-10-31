@@ -27,6 +27,11 @@
 #include <unistd.h>
 #include <unordered_map>
 #include "prx/libc/include/specifics/linux/ElfTypes.hpp"
+#ifdef __APPLE__
+#include <climits>
+#include <cstdlib>
+#include <mach-o/dyld.h>
+#endif
 #endif
 
 extern "C" std::int32_t ModuleIdForImage_nid_no_patch(const void* native);
@@ -111,10 +116,20 @@ EhFrame::Tables FrameTables(const dl_phdr_info& image, std::uintptr_t header) {
 std::string ImageName(const dl_phdr_info& image) {
     std::string path = image.dlpi_name ? image.dlpi_name : "";
     if (path.empty()) {
+#ifdef __APPLE__
+        std::uint32_t size = 0;
+        _NSGetExecutablePath(nullptr, &size);
+        std::string executable(size, '\0');
+        char resolved[PATH_MAX];
+        if (_NSGetExecutablePath(executable.data(), &size) != 0 || !::realpath(executable.c_str(), resolved))
+            throw std::runtime_error("sceKernelGetModuleInfoFromAddr: cannot resolve the executable path");
+        path = resolved;
+#else
         char executable[4096];
         const auto length = ::readlink("/proc/self/exe", executable, sizeof(executable) - 1);
         if (length < 0) throw std::runtime_error("sceKernelGetModuleInfoFromAddr: cannot resolve the executable path");
         path.assign(executable, static_cast<std::size_t>(length));
+#endif
     }
     return ModuleName(path.substr(path.find_last_of('/') + 1));
 }
@@ -164,8 +179,10 @@ int FindImage(dl_phdr_info* image, std::size_t, void* data) {
 }
 
 int CollectGuestImage(dl_phdr_info* image, std::size_t, void* data) {
+#ifndef ANYPS5_GUEST_LIFTED
     const std::string_view name = image->dlpi_name ? image->dlpi_name : "";
     if (!name.empty() && !name.ends_with(".prx")) return 0;
+#endif
     for (std::uint16_t i = 0; i < image->dlpi_phnum; ++i) {
         const auto& header = image->dlpi_phdr[i];
         if (header.p_type != PT_LOAD) continue;
@@ -180,11 +197,15 @@ std::vector<GuestImage> GuestImages() {
     dl_iterate_phdr(CollectGuestImage, &addresses);
     std::vector<GuestImage> images;
     for (const auto address : addresses) {
+#ifdef ANYPS5_GUEST_LIFTED
+        images.push_back({reinterpret_cast<const void*>(address), address});
+#else
         Dl_info symbol{};
         link_map* native = nullptr;
         if (!dladdr1(reinterpret_cast<const void*>(address), &symbol, reinterpret_cast<void**>(&native), RTLD_DL_LINKMAP) || !native)
             throw std::runtime_error("sceKernelGetModuleList: no link map for a loaded image");
         images.push_back({native, address});
+#endif
     }
     return images;
 }
@@ -207,11 +228,17 @@ std::uint64_t GuestSegmentBytes() {
     return bytes;
 }
 
+#ifdef ANYPS5_GUEST_LIFTED
+bool SystemImage(const GuestImage&) {
+    return false;
+}
+#else
 bool SystemImage(const GuestImage& image) {
     const auto* name = static_cast<const link_map*>(image.native)->l_name;
     const std::string_view path = name ? name : "";
     return !path.empty() && !path.ends_with(GuestModuleSuffix);
 }
+#endif
 #else
 bool SectionNamed(const IMAGE_SECTION_HEADER& section, const char* name) {
     return std::strncmp(reinterpret_cast<const char*>(section.Name), name, IMAGE_SIZEOF_SHORT_NAME) == 0;
