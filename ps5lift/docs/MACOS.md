@@ -1,6 +1,6 @@
 # macOS
 
-A plan for running lifted programs natively on Apple Silicon Macs. Phases 1 and 2 are done; the rest is not built yet. The facts below were checked on 2026-10-29 on an M4 running macOS 27.2 with Xcode's toolchain and Homebrew's LLVM.
+A plan for running lifted programs natively on Apple Silicon Macs. Phases 1 to 3 are done; the rest is not built yet. The facts below were checked on 2026-10-29 on an M4 running macOS 27.2 with Xcode's toolchain and Homebrew's LLVM.
 
 ## Goal
 
@@ -73,9 +73,9 @@ Done on 2026-10-30. The thirteen fixtures pass natively on the M4 at `-O0` to `-
 
 The runtime is still a static library; building it as the dynamic library above moves to phase 4, where AnyPS5's libraries first link against it.
 
-### 3. The relinker's fixtures
+### 3. The relinker's fixtures (done)
 
-Build AnyPS5's relinker on the Mac (its relinker-only build already supports Apple Silicon) and run the `import` and `tls` fixtures, which the tests relink at 1008 GiB. Done when both pass.
+Done on 2026-10-30, with no changes: AnyPS5's relinker-only build compiles natively on the Mac, and the `import` and `tls` fixtures, relinked at 1008 GiB, pass in both memory models. ctest builds the relinker that way on the Mac and runs both (44 tests).
 
 ### 4. AnyPS5's libraries for a lifted guest on macOS
 

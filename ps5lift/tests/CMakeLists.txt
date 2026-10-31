@@ -33,9 +33,27 @@ function(ps5lift_fixture_tests prefix triple)
                     ${ARGN})
 endfunction()
 
+# Adds a test of each of AnyPS5's PS5-style fixtures, which the relinker relinks before ps5lift lifts them for a triple.
+function(ps5lift_ps5_fixture_tests relinker triple)
+    string(REGEX REPLACE "-.*" "" arch ${triple})
+    foreach(fixture import tls)
+        add_test(NAME ps5_${fixture}_${arch}
+                COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tools/run_ps5_fixture.py
+                        --ps5lift $<TARGET_FILE:ps5lift>
+                        --relinker ${relinker}
+                        --clang ${CMAKE_C_COMPILER}
+                        --clangxx ${CMAKE_CXX_COMPILER}
+                        --triple ${triple}
+                        --fixture ${fixture})
+    endforeach()
+endfunction()
+
+include(ExternalProject)
+
 if(NOT CMAKE_SYSTEM_NAME STREQUAL "Linux")
     # On another host the tests lift every fixture for both Linux targets without running the result, run the fixtures
-    # natively on macOS for arm64, and leave the tests that run AnyPS5's libraries to a Linux host. The guests build
+    # and AnyPS5's PS5-style ones natively on macOS for arm64, with a relinker-only build of AnyPS5, and leave the
+    # tests that run AnyPS5's libraries to a Linux host. The guests build
     # against an x86-64 Linux sysroot, since threads, callbacks and modules link its libraries: usr/x86_64-linux-gnu
     # and usr/lib/gcc-cross/x86_64-linux-gnu as Ubuntu's g++-x86-64-linux-gnu installs them, copied below one directory.
     set(PS5LIFT_X86_64_SYSROOT "" CACHE PATH "x86-64 Linux sysroot that the fixture guests build against")
@@ -49,6 +67,18 @@ if(NOT CMAKE_SYSTEM_NAME STREQUAL "Linux")
     endforeach()
     if(APPLE AND CMAKE_SYSTEM_PROCESSOR STREQUAL "arm64")
         ps5lift_fixture_tests(fixture arm64-apple-macosx --guest-sysroot ${PS5LIFT_X86_64_SYSROOT})
+        set(PS5LIFT_RELINKER_BUILD ${CMAKE_BINARY_DIR}/anyps5-relinker)
+        ExternalProject_Add(anyps5_relinker
+                SOURCE_DIR ${CMAKE_SOURCE_DIR}/3rdparty/anyps5
+                BINARY_DIR ${PS5LIFT_RELINKER_BUILD}
+                CMAKE_ARGS -G Ninja -DCMAKE_BUILD_TYPE=Release -DANYPS5_RELINKER_ONLY=ON
+                           -DCMAKE_C_COMPILER=${CMAKE_C_COMPILER} -DCMAKE_CXX_COMPILER=${CMAKE_CXX_COMPILER}
+                BUILD_COMMAND ${CMAKE_COMMAND} --build <BINARY_DIR> --target relinker
+                INSTALL_COMMAND ""
+                BUILD_ALWAYS ON
+                BUILD_BYPRODUCTS ${PS5LIFT_RELINKER_BUILD}/core/relinker/relinker
+                EXCLUDE_FROM_ALL OFF)
+        ps5lift_ps5_fixture_tests(${PS5LIFT_RELINKER_BUILD}/core/relinker/relinker arm64-apple-macosx)
     endif()
     return()
 endif()
@@ -68,8 +98,6 @@ endif()
 foreach(triple IN LISTS PS5LIFT_TEST_TRIPLES)
     ps5lift_fixture_tests(fixture ${triple})
 endforeach()
-
-include(ExternalProject)
 
 # AnyPS5's lifted libraries link against the runtime built for this host, as the tests' programs do.
 set(PS5LIFT_HOST_TRIPLE ${PS5LIFT_HOST_ARCH}-unknown-linux-gnu)
@@ -95,17 +123,7 @@ ExternalProject_Add(anyps5
         EXCLUDE_FROM_ALL OFF)
 
 foreach(triple IN LISTS PS5LIFT_TEST_TRIPLES)
-    string(REGEX REPLACE "-.*" "" arch ${triple})
-    foreach(fixture import tls)
-        add_test(NAME ps5_${fixture}_${arch}
-                COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tools/run_ps5_fixture.py
-                        --ps5lift $<TARGET_FILE:ps5lift>
-                        --relinker ${PS5LIFT_ANYPS5_BUILD}/core/relinker/relinker
-                        --clang ${CMAKE_C_COMPILER}
-                        --clangxx ${CMAKE_CXX_COMPILER}
-                        --triple ${triple}
-                        --fixture ${fixture})
-    endforeach()
+    ps5lift_ps5_fixture_tests(${PS5LIFT_ANYPS5_BUILD}/core/relinker/relinker ${triple})
 endforeach()
 
 execute_process(COMMAND ${Python3_EXECUTABLE} -c "import clang.cindex; clang.cindex.Index.create()"
