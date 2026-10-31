@@ -115,7 +115,6 @@ None is open. The next candidates are under [Later](#later) and [From AnyPS5's A
   - Nothing may sit between the two accesses: no other memory access, call or fence.
   - Another thread may read either half with a narrower access. That is the mixed-size part of the Arm memory model, so write the argument for it into DESIGN.md with the change.
   - Before implementing, count the adjacent pairs in a title's code the way the instruction-mix table was made.
-- **Pass fewer registers across calls.** See [store and reload only what a callee reads and writes](#store-and-reload-only-what-a-callee-reads-and-writes) below, which derives the registers from the code instead of assuming the SysV ABI.
 - **The [roadmap](DESIGN.md#roadmap)'s items:**
   - order only memory that another thread can reach;
   - recover prototypes so hot functions skip the state;
