@@ -24,7 +24,7 @@ Measured on 2026-10-30. The probe was lifted at 265ee08; the benchmark used the 
 | hash | 10.5 ms | 11.3 ms | 10.4 ms | 11.7 ms | 1.13× | 1.03× |
 | sort | 7.6 ms | 7.6 ms | 8.5 ms | 21.8 ms | 2.57× | 2.87× |
 
-Without ordering, lifted code is within about 20% of native. Ordering costs little where loads wait on each other (`chase`) and the most where stores dominate (`sort`). The kernels have no indirect calls, no frame pointers and no floating point, so items 1 and 2 below need kernels of their own before they can be timed.
+Without ordering, lifted code is within about 20% of native. Ordering costs little where loads wait on each other (`chase`) and the most where stores dominate (`sort`). The kernels have no indirect calls, no frame pointers and no floating point, so items 1 and 2 below need kernels of their own before they can be timed. Vector loads and stores wider than 64 bits are not ordered yet ([known gaps](DEBT.md)), so the TSO column understates what full TSO costs; ordering them will add to it.
 
 To run it: `python3 -B tools/bench.py --ps5lift <build>/lifter/ps5lift --clang /usr/lib/llvm-18/bin/clang --clangxx /usr/lib/llvm-18/bin/clang++`. It builds the runtime into `runtime-<triple>` beside the `ps5lift` build directory; in a checkout another agent is using, copy the binary to `/tmp/<dir>/build/lifter/` first so that build stays untouched.
 
@@ -109,18 +109,30 @@ The test was a C program for the host. It set the bit with `mrs`/`msr fpcr`, ran
 - **Measure:** first add a kernel to `tests/fixtures/bench.c` that makes indirect calls through a table of many functions, and record its baseline.
 - **Check:** `ctest`. The `basic`, `callbacks` and `modules` fixtures call through function pointers and so go through dispatch.
 
-### 2. Leave frame-pointer accesses unordered under TSO
+### 2. Leave a frame unordered only when its address does not escape
 
-- **Code:** `NeedsOrdering` in [Lifter.cpp](../lifter/src/Lifter.cpp) makes an access plain only when `operand.mem.base == ZYDIS_REGISTER_RSP`. `Push`, `Pop` and `CallGuest` already pass `ordered = false`.
-- **Change:** also make an access plain when its base is `rbp` and the function keeps a frame pointer.
-  - A function keeps one when its entry block starts with `push %rbp; mov %rsp,%rbp` and nothing else writes `rbp` except the restoring `pop %rbp` or `leave`.
-  - Compute this once per function. `FindUsedRegisters` already walks every instruction, and discovery has `ReachingDefinitions`.
-  - A function that uses `rbp` as a general register fails the test and keeps ordering.
-- **What must stay true:** a frame is private to its thread. The `rsp` rule already assumes this. State the new rule in DESIGN.md's memory-ordering section.
-- **Later:** registers that hold the address of a local, such as `lea -0x40(%rbp),%rax`, need dataflow and can follow.
+This item fixes a correctness hole in today's rule, then extends the rule to `rbp`.
+
+- **The hole:** `NeedsOrdering` in [Lifter.cpp](../lifter/src/Lifter.cpp) makes an access plain whenever `operand.mem.base == ZYDIS_REGISTER_RSP`, and `Push`, `Pop` and `CallGuest` pass `ordered = false`. That assumes a frame is private to its thread, which is false once a function hands out the address of a local. A job counter or completion flag on the waiting thread's stack is the usual case: workers update it through a pointer, and the owner reads it through `rsp`. x86 compiles `std::atomic` loads and release stores to a plain `mov`, so the owner's accesses lift unordered:
+  - its read of the flag is not ordered before its reads of what the workers wrote, so it can read their results before the flag says they are done;
+  - `pause` lifts to nothing, so a spin loop on a plain load contains nothing that writes memory, and LLVM may hoist the load out of the loop and spin forever.
+- **Change:** decide once per function whether its frame is private, and leave its frame accesses plain only when it is: through `rsp`, and through `rbp` when the function keeps a frame pointer. A function whose frame escapes keeps every `rsp` and `rbp` access ordered.
+  - A frame escapes when an instruction copies an address derived from `rsp` or `rbp` into memory or into a register other than `rsp` and the frame pointer. Examples are `lea 0x10(%rsp),%rdi`, `mov %rsp,%rax` and `push %rsp`. Stack adjustments (`sub`, `add` and `and` on `rsp`), `lea -0x10(%rbp),%rsp`, the prologue's `mov %rsp,%rbp`, and `leave` do not make it escape.
+  - Variadic functions take the address of their stack arguments with `lea` to build a `va_list`, so they escape, which is correct.
+  - `push`, `pop`, `call` and `ret` stay plain in every function. They touch saved registers and return addresses, which no pointer a function hands out may reach.
+  - A function keeps a frame pointer when its entry block starts with `push %rbp; mov %rsp,%rbp` and nothing else writes `rbp` except the restoring `pop %rbp` or `leave`. A function that uses `rbp` as a general register keeps its `rbp` accesses ordered.
+  - Compute both facts in one pass over the function. `FindUsedRegisters` already walks every instruction, and discovery has `ReachingDefinitions`.
+- **Gain:** escaping functions' `rsp` accesses become ordered, which costs a little. In private frames the `rbp` accesses, 19–24% of the titles' memory operands, become plain.
+- **What must stay true:** a frame whose address no instruction hands out is private to its thread. Replace the `rsp` sentence in DESIGN.md's memory-ordering section with this rule.
+- **Test first:** add a case to `tests/fixtures/threads.c`.
+  - A function passes the addresses of a local flag and a local data word to a new thread. That thread writes the data and then sets the flag with `__atomic_store_n(..., __ATOMIC_RELEASE)`.
+  - The function spins on the flag with `__atomic_load_n(..., __ATOMIC_ACQUIRE)` and then prints the data.
+  - Check with objdump that the guest addresses both locals through `rsp` or `rbp`.
+  - With today's rule, -O2 is expected to hang or print stale data. Confirm that the test fails before the change and passes after it.
+- **Later:** a register that holds the address of a local, as after `lea -0x40(%rbp),%rax`, can go plain only where dataflow proves the address never leaves the function: it is not stored to memory, passed to a call or returned, and not copied to a register that is. A mistake in that proof reopens the hole above.
 - **Check:**
-  - `ctest`.
-  - The ordered-instruction count of EVO Player's or a title's lifted code should drop by about the `rbp` share in the table above.
+  - `ctest`, including the new case.
+  - The ordered-instruction count of EVO Player's or a title's lifted code should drop by about the `rbp` share in the table above, less the frames that escape.
   - For a timing, build the benchmark guest with `-fno-omit-frame-pointer` as well.
 
 ### 3. Leave loads from read-only segments unordered
@@ -128,17 +140,30 @@ The test was a C program for the host. It set the bit with `mrs`/`msr fpcr`, ran
 - **Code:** `NeedsOrdering` in Lifter.cpp.
 - **Change:** an access through `rip` without an index or segment override has a known address, `_instruction->Next() + disp`. If the whole access lies in a segment without `PF_W` (`GuestSegment::Flags` in [GuestImage.hpp](../lifter/include/lifter/GuestImage.hpp)), no other thread can write it, so the load can be plain.
 - **Gain:** many of these are float constants loaded with `movss` or `movsd`. Today they take an `ldapr` into a general register and a move to the vector unit.
-- **What must stay true:** the guest does not make its read-only segments writable at run time. Write that assumption down where the rule goes.
+- **What must stay true:** the values in those segments never change, so reordering loads of them cannot be observed. That holds while the guest neither makes its read-only segments writable nor maps their pages a second time. Write that assumption down where the rule goes.
+- **Make it checked:** in lifted builds, AnyPS5's `sceKernelMprotect` and POSIX `mprotect` ([DirectMemory](../3rdparty/anyps5/core/libs/prx/libkernel/DirectMemory/)) should stop with an error when asked to make any part of a guest image's read-only segment writable. The images are found through `GuestCpuIterateImages`. A title that breaks the assumption then stops at that call instead of running with unordered loads.
 - **Check:** `ctest`, and the ordered-instruction count.
 
 ## Later
 
 - **Handle unaligned ordered accesses after they fault.**
   - Today `Load`, `Store` and `SplitOnAlignment` in Lifter.cpp test alignment before every ordered access.
-  - The GB10 (FEAT_LSE2) faults only on ordered accesses that cross a 16-byte boundary, which compiled code rarely makes.
+  - With FEAT_LSE2, an ordered access faults only when it crosses a 16-byte boundary, which compiled code rarely does. The kernel controls that tolerance (`SCTLR_EL1.nAA`). Before relying on it, confirm it on Linux and macOS with an unaligned `ldapr` inside a 16-byte block and one across a boundary.
   - A `SIGBUS` handler beside the `SIGSEGV` one in NativeCall.cpp would decode `ldapr`, `ldapur`, `ldar`, `stlr` and `stlur` (2, 4 and 8 bytes), do the access plainly with a `dmb`, write the destination register and step past the instruction.
   - That removes an `and` and a branch per access where LLVM cannot hoist the `and`. It also removes the second path through loop bodies, which is likely what stops LLVM from unrolling ordered loops.
   - macOS reports alignment faults as `SIGBUS` too.
+  - The memory model does not change, but the handler carries its own risks:
+    - It has to reproduce each form exactly (width, sign and zero extension, `wzr`/`xzr`, the signed offsets of `ldapur` and `stlur`) inside a signal handler.
+    - An access that also faults for another reason, such as one into an unmapped page, must still reach the `SIGSEGV` path and guest exception delivery as it does today.
+  - Each crossing access then costs a signal instead of a branch, so code that crosses often, such as a loop over packed structures, becomes far slower. Count the faults in a run of EVO Player and of a title before making this the default.
+- **Merge adjacent ordered accesses.**
+  - Two ordered accesses of the same kind to adjacent addresses with no instruction between them, such as `mov %eax,(%rdi); mov %edx,0x4(%rdi)`, can become one access of twice the width:
+    - an observer of a merged store sees both stores or neither, and TSO allows both outcomes;
+    - two loads read at one instant are ordered as TSO requires.
+  - Merge only when the merged access is naturally aligned. Test its alignment and, when the test fails, do the two original ordered accesses. The unaligned path of today's `Store`, a plain store after `DMB ISH`, is not enough for a merged store, since its halves could become visible in either order.
+  - Nothing may sit between the two accesses: no other memory access, call or fence.
+  - Another thread may read either half with a narrower access. That is the mixed-size part of the Arm memory model, so write the argument for it into DESIGN.md with the change.
+  - Before implementing, count the adjacent pairs in a title's code the way the instruction-mix table was made.
 - **Pass fewer registers across calls.**
   - Today `Flush`, `Reload` and `CallGuest` in Lifter.cpp store every register the function uses before a call and reload them all after.
   - The SysV ABI preserves no vector register. So store only `ymm0`–`ymm7` (the arguments) and reload only `ymm0`–`ymm1` (the results), and reload no caller-saved general register other than `rax`, `rdx` and `rsp`.
@@ -149,6 +174,23 @@ The test was a C program for the host. It set the bit with `mrs`/`msr fpcr`, ran
   - order only memory that another thread can reach;
   - recover prototypes so hot functions skip the state;
   - inline across parts. The probe's direct-call loop shows what inlining gains.
+
+## Ruled out
+
+Each of these was considered for the ordering cost and rejected. Do not pick them up without new evidence.
+
+- **Reusing a loaded or stored value across another load.**
+  - Forwarding a store to a later load of the same address, or reusing a load for a repeated one, is safe only when no other load sits between them, and never across loop iterations, where it is the hoisting hang of item 2.
+  - With a load between them, TSO can require the newer value. Suppose this thread stores to `a` and then loads `b`, and another thread set `b` after it saw this thread's store and overwrote `a`. Then the reload of `a` must see the other thread's value.
+  - The safe case is narrow and the gain small.
+- **Ordering switches per title or per function.** Other x86 translators for ARM let users weaken ordering for a program. A title that needs the ordering then fails rarely and unreproducibly, which the correctness rule at the top excludes.
+- **Leaving thread-local storage unordered.** TLS is private only by convention. A thread can hand out a pointer to its own variable, just as it can for a local in its frame.
+- **Apple's hardware TSO mode.**
+  - Apple's cores switch to x86 ordering with an undocumented bit (`ACTLR_EL1.TSOEN`) that only the kernel writes, and macOS sets it only for Rosetta processes. The GB10's cores have no such mode.
+  - Code lifted with `--memory relaxed` that runs on a thread with the bit set would be correctly ordered. The runtime starts every guest thread itself (`RunThread` in [Runtime.cpp](../runtime/src/Runtime.cpp)), so supporting the bit would be a small change if macOS ever exposed it.
+  - Today the only ways to set it are a third-party kernel extension that needs System Integrity Protection lowered, a Linux virtual machine (macOS 14.4 and later) or Asahi Linux. None of these can be asked of a user.
+  - The bit is undocumented, and Apple cuts Rosetta back from macOS 28, so it may not stay.
+  - At most, use the kernel extension once on a developer's Mac to measure what ordering costs on the M4.
 
 ## Before starting
 
