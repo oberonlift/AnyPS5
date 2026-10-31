@@ -35,11 +35,13 @@ def run(command, **kwargs):
 
 def runtime_link_arguments(ps5lift, triple, clang, clangxx):
     from build_runtime import build, directory_for, link_arguments
-    return link_arguments(*build(triple, directory_for(Path(ps5lift).resolve().parent.parent, triple), clang, clangxx, os.cpu_count()))
+    return link_arguments(triple, *build(triple, directory_for(Path(ps5lift).resolve().parent.parent, triple), clang, clangxx, os.cpu_count()))
 
 
 def host_triple():
     machine = platform.machine()
+    if platform.system() == "Darwin" and machine == "arm64":
+        return "arm64-apple-macosx"
     if machine in ("aarch64", "arm64"):
         return "aarch64-unknown-linux-gnu"
     if machine in ("x86_64", "AMD64"):
@@ -48,9 +50,9 @@ def host_triple():
 
 
 def runner_for(triple):
-    if triple.startswith(platform.machine()) or (triple.startswith("aarch64") and platform.machine() == "arm64"):
+    if triple == host_triple():
         return []
-    if triple.startswith("aarch64"):
+    if triple.startswith("aarch64") and platform.system() == "Linux":
         qemu = shutil.which("qemu-aarch64") or shutil.which("qemu-aarch64-static")
         if qemu is None:
             raise SystemExit("running aarch64 code on this host needs qemu-aarch64")
@@ -159,7 +161,7 @@ def main():
                     print(f"PASS {label}, lifted only: {report.strip()}")
                     continue
                 program = work / f"{guest.name}-{memory}"
-                run([args.clangxx, f"--target={args.triple}", "-std=c++20", "-O2", f"-I{ROOT / 'runtime' / 'include'}", FIXTURES / "host_bridge.cpp", lifted, *runtime_link_arguments(args.ps5lift, args.triple, args.clang, args.clangxx), "-fuse-ld=lld", "-pthread", "-o", program])
+                run([args.clangxx, f"--target={args.triple}", "-std=c++20", "-O2", f"-I{ROOT / 'runtime' / 'include'}", FIXTURES / "host_bridge.cpp", lifted, *runtime_link_arguments(args.ps5lift, args.triple, args.clang, args.clangxx), "-pthread", "-o", program])
                 try:
                     result = subprocess.run([*runner, program], capture_output=True, text=True, timeout=PROGRAM_TIMEOUT)
                 except subprocess.TimeoutExpired:

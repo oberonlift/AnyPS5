@@ -4,7 +4,11 @@
 #include <ps5lift/State.h>
 
 #include <signal.h>
+#if defined(__APPLE__)
+#include <sys/ucontext.h>
+#else
 #include <ucontext.h>
+#endif
 
 #include <cerrno>
 #include <cinttypes>
@@ -67,11 +71,20 @@ extern "C" void ps5lift_native_call(const std::uint64_t target, NativeRegisters*
 
 extern "C" void ps5lift_native_call_trampoline();
 
+#if defined(__APPLE__)
+#define PS5LIFT_ASM_SYMBOL(name) "_" #name
+#define PS5LIFT_ASM_FUNCTION(name) PS5LIFT_ASM_SYMBOL(name) ":\n"
+#define PS5LIFT_ASM_SIZE(name) ""
+#else
+#define PS5LIFT_ASM_SYMBOL(name) #name
+#define PS5LIFT_ASM_FUNCTION(name) ".type " #name ", %function\n" #name ":\n"
+#define PS5LIFT_ASM_SIZE(name) ".size " #name ", . - " #name "\n"
+#endif
+
 #if defined(__aarch64__)
 __asm__(".text\n"
         ".p2align 2\n"
-        ".type ps5lift_native_call_trampoline, %function\n"
-        "ps5lift_native_call_trampoline:\n"
+        PS5LIFT_ASM_FUNCTION(ps5lift_native_call_trampoline)
         "    .cfi_startproc\n"
         "    stp x29, x30, [sp, #-16]!\n"
         "    .cfi_def_cfa_offset 16\n"
@@ -90,7 +103,7 @@ __asm__(".text\n"
         "    stp q6, q7, [sp, #160]\n"
         "    mov x0, x16\n"
         "    mov x1, sp\n"
-        "    bl ps5lift_native_call\n"
+        "    bl " PS5LIFT_ASM_SYMBOL(ps5lift_native_call) "\n"
         "    ldp x0, x1, [sp, #0]\n"
         "    ldp q0, q1, [sp, #64]\n"
         "    mov sp, x29\n"
@@ -101,7 +114,7 @@ __asm__(".text\n"
         "    .cfi_restore x30\n"
         "    ret\n"
         "    .cfi_endproc\n"
-        ".size ps5lift_native_call_trampoline, . - ps5lift_native_call_trampoline\n");
+        PS5LIFT_ASM_SIZE(ps5lift_native_call_trampoline));
 #elif defined(__x86_64__)
 __asm__(".text\n"
         ".p2align 4\n"
@@ -152,7 +165,10 @@ namespace {
 
 void Redirect(const int signal, siginfo_t* const info, void* const context) {
     auto& machine = static_cast<ucontext_t*>(context)->uc_mcontext;
-#if defined(__aarch64__)
+#if defined(__APPLE__) && defined(__aarch64__)
+    auto& pc = machine->__ss.__pc;
+    auto& scratch = machine->__ss.__x[16];
+#elif defined(__aarch64__)
     auto& pc = machine.pc;
     auto& scratch = machine.regs[16];
 #elif defined(__x86_64__)

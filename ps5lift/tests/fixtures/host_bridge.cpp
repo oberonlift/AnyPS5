@@ -6,6 +6,11 @@
 #include <time.h>
 #include <unistd.h>
 
+#if defined(__APPLE__)
+#include <mach/mach.h>
+#include <mach/mach_vm.h>
+#endif
+
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -91,6 +96,30 @@ struct ThreadCall {
     long Result;
 };
 
+#if defined(__APPLE__)
+struct Region {
+    mach_vm_address_t Start;
+    mach_vm_size_t Size;
+    vm_prot_t Protection;
+};
+
+Region RegionAtOrAbove(const mach_vm_address_t address) {
+    Region region{address, 0, VM_PROT_NONE};
+    vm_region_basic_info_data_64_t info{};
+    mach_msg_type_number_t count = VM_REGION_BASIC_INFO_COUNT_64;
+    mach_port_t object = MACH_PORT_NULL;
+    if (mach_vm_region(mach_task_self(), &region.Start, &region.Size, VM_REGION_BASIC_INFO_64, reinterpret_cast<vm_region_info_t>(&info), &count, &object) != KERN_SUCCESS) std::abort();
+    region.Protection = info.protection;
+    return region;
+}
+
+bool GuardedBelow(const std::uint64_t address) {
+    const auto stack = RegionAtOrAbove(address);
+    if (stack.Start > address) std::abort();
+    const auto below = RegionAtOrAbove(stack.Start - 1);
+    return below.Start + below.Size == stack.Start && below.Protection == VM_PROT_NONE;
+}
+#else
 bool GuardedBelow(const std::uint64_t address) {
     std::FILE* maps = std::fopen("/proc/self/maps", "r");
     if (maps == nullptr) std::abort();
@@ -113,6 +142,7 @@ bool GuardedBelow(const std::uint64_t address) {
     std::fclose(maps);
     return guarded;
 }
+#endif
 
 }
 

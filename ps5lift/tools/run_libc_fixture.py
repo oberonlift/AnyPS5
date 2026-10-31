@@ -110,7 +110,7 @@ def main():
             lifted = work / f"{guest.name}.a"
             report = run([args.ps5lift, guest, "-o", lifted, "--triple", triple, *lift_flags, *lifter_target(triple, runner)]).stderr
             program = work / f"{guest.name}-lifted"
-            run([args.clangxx, f"--target={triple}", "-std=c++20", "-O1", f"-I{ROOT / 'runtime' / 'include'}", "-fuse-ld=lld", lifted, bridges, *host_sources,
+            run([args.clangxx, f"--target={triple}", "-std=c++20", "-O1", f"-I{ROOT / 'runtime' / 'include'}", lifted, bridges, *host_sources,
                  *libraries, *runtime, f"-Wl,-rpath,{anyps5.libraries_directory}", "-latomic", "-pthread", "-ldl", "-o", program])
             result = subprocess.run([*runner, program], capture_output=True, text=True, timeout=600)
             ended = result.returncode == 0 if stop is None else result.returncode != 0 and stop in result.stderr

@@ -73,7 +73,7 @@ def main():
     for test in tests:
         program = work / test
         libraries = [str(anyps5.library(name)) for name in TESTS[test]] + [str(anyps5.directory / archive) for archive in ARCHIVES.get(test, [])]
-        link = [args.clangxx, "-fuse-ld=lld", str(work / f"{test}.o"), str(stub), *libraries, *link_arguments(runtime), f"-Wl,-rpath,{anyps5.libraries_directory}",
+        link = [args.clangxx, str(work / f"{test}.o"), str(stub), *libraries, *link_arguments(triple, runtime), f"-Wl,-rpath,{anyps5.libraries_directory}",
                 "-latomic", "-pthread", "-ldl", "-o", str(program)]
         linked = subprocess.run(link, capture_output=True, text=True)
         if linked.returncode != 0:
