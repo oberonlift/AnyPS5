@@ -25,7 +25,7 @@ The probe was lifted on 2026-10-30, at d758281d61. The benchmark was measured on
 | sort | 7.6 ms | 7.6 ms | 8.5 ms | 21.7 ms | 2.55× | 2.88× |
 | dispatch | 18.2 ms | 16.6 ms | 35.7 ms | 39.1 ms | 1.10× | 2.35× |
 
-Without ordering, lifted code other than `dispatch` is within about 20% of native. Ordering costs little where loads wait on each other (`chase`) and the most where stores dominate (`sort`). `dispatch` makes 1,048,576 indirect calls through a table of 65,536 functions: one takes 34 ns lifted and 16 ns native, and besides the lookup the lifted call stores and reloads the state around `ps5lift_dispatch` (see the probe below). The kernels have no frame pointers and no floating point, so item 1 below needs a kernel of its own before it can be timed. Vector loads and stores wider than 64 bits are not ordered yet ([known gaps](DEBT.md)), so the TSO column understates what full TSO costs; ordering them will add to it.
+Without ordering, lifted code other than `dispatch` is within about 20% of native. Ordering costs little where loads wait on each other (`chase`) and the most where stores dominate (`sort`). `dispatch` makes 1,048,576 indirect calls through a table of 65,536 functions: one takes 34 ns lifted and 16 ns native, and besides the lookup the lifted call stores and reloads the state around `ps5lift_dispatch` (see the probe below). The kernels keep no frame pointers and use no floating point. Vector loads and stores wider than 64 bits are not ordered yet ([known gaps](DEBT.md)), so the TSO column understates what full TSO costs; ordering them will add to it.
 
 To run it: `python3 -B tools/bench.py --ps5lift <build>/lifter/ps5lift --clang /usr/lib/llvm-18/bin/clang --clangxx /usr/lib/llvm-18/bin/clang++`. It builds the runtime into `runtime-<triple>` beside the `ps5lift` build directory; in a checkout another agent is using, copy the binary to `/tmp/<dir>/build/lifter/` first so that build stays untouched.
 
@@ -59,7 +59,7 @@ Static counts from a linear sweep of each relinked executable's code segments wi
 | memory operands, scalar through `rsp` | 14.5% | 2.2% | 2.5% |
 | memory operands, scalar RIP-relative | under 2.1% | 5.4% | 7.5% |
 
-Both titles keep frame pointers and address their locals through `rbp`, so the TSO exemption for `rsp` covers little of their stack traffic.
+Both titles keep frame pointers and address their locals through `rbp`, so the TSO exemption for `rsp` covered little of their stack traffic until private frames took in `rbp` ([Done](#done)).
 
 How the counts were made: the relinked executables have no section headers, so `llvm-objdump -d` finds nothing. Instead, cut each `PT_LOAD` with flags `R E` out of `work/output/app.elf` and run `x86_64-linux-gnu-objdump -D -b binary -m i386:x86-64 --adjust-vma=<vaddr>` on it. Then classify each memory operand by its base register, skipping `lea`, `nop` and `prefetch`; operands whose instruction names an `xmm` or `ymm` register count as vector.
 
@@ -93,33 +93,7 @@ The test was a C program for the host. It set the bit with `mrs`/`msr fpcr`, ran
 
 ## Work items
 
-### 1. Leave a frame unordered only when its address does not escape
-
-This item fixes a correctness hole in today's rule, then extends the rule to `rbp`.
-
-- **The hole:** `NeedsOrdering` in [Lifter.cpp](../lifter/src/Lifter.cpp) makes an access plain whenever `operand.mem.base == ZYDIS_REGISTER_RSP`, and `Push`, `Pop` and `CallGuest` pass `ordered = false`. That assumes a frame is private to its thread, which is false once a function hands out the address of a local. A job counter or completion flag on the waiting thread's stack is the usual case: workers update it through a pointer, and the owner reads it through `rsp`. x86 compiles `std::atomic` loads and release stores to a plain `mov`, so the owner's accesses lift unordered:
-  - its read of the flag is not ordered before its reads of what the workers wrote, so it can read their results before the flag says they are done;
-  - `pause` lifts to nothing, so a spin loop on a plain load contains nothing that writes memory, and LLVM may hoist the load out of the loop and spin forever.
-- **Change:** decide once per function whether its frame is private, and leave its frame accesses plain only when it is: through `rsp`, and through `rbp` when the function keeps a frame pointer. A function whose frame escapes keeps every `rsp` and `rbp` access ordered.
-  - A frame escapes when an instruction copies an address derived from `rsp` or `rbp` into memory or into a register other than `rsp` and the frame pointer. Examples are `lea 0x10(%rsp),%rdi`, `mov %rsp,%rax` and `push %rsp`. Stack adjustments (`sub`, `add` and `and` on `rsp`), `lea -0x10(%rbp),%rsp`, the prologue's `mov %rsp,%rbp`, and `leave` do not make it escape.
-  - Variadic functions take the address of their stack arguments with `lea` to build a `va_list`, so they escape, which is correct.
-  - `push`, `pop`, `call` and `ret` stay plain in every function. They touch saved registers and return addresses, which no pointer a function hands out may reach.
-  - A function keeps a frame pointer when its entry block starts with `push %rbp; mov %rsp,%rbp` and nothing else writes `rbp` except the restoring `pop %rbp` or `leave`. A function that uses `rbp` as a general register keeps its `rbp` accesses ordered.
-  - Compute both facts in one pass over the function. `ScanInstructions` already walks every instruction, and discovery has `ReachingDefinitions`.
-- **Gain:** escaping functions' `rsp` accesses become ordered, which costs a little. In private frames the `rbp` accesses, 19–24% of the titles' memory operands, become plain.
-- **What must stay true:** a frame whose address no instruction hands out is private to its thread. Replace the `rsp` sentence in DESIGN.md's memory-ordering section with this rule.
-- **Test first:** add a case to `tests/fixtures/threads.c`.
-  - A function passes the addresses of a local flag and a local data word to a new thread. That thread writes the data and then sets the flag with `__atomic_store_n(..., __ATOMIC_RELEASE)`.
-  - The function spins on the flag with `__atomic_load_n(..., __ATOMIC_ACQUIRE)` and then prints the data.
-  - Check with objdump that the guest addresses both locals through `rsp` or `rbp`.
-  - With today's rule, -O2 is expected to hang or print stale data. Confirm that the test fails before the change and passes after it.
-- **Later:** a register that holds the address of a local, as after `lea -0x40(%rbp),%rax`, can go plain only where dataflow proves the address never leaves the function: it is not stored to memory, passed to a call or returned, and not copied to a register that is. A mistake in that proof reopens the hole above.
-- **Check:**
-  - `ctest`, including the new case.
-  - The ordered-instruction count of EVO Player's or a title's lifted code should drop by about the `rbp` share in the table above, less the frames that escape.
-  - For a timing, build the benchmark guest with `-fno-omit-frame-pointer` as well.
-
-### 2. Leave loads from read-only segments unordered
+### 1. Leave loads from read-only segments unordered
 
 - **Code:** `NeedsOrdering` in Lifter.cpp.
 - **Change:** an access through `rip` without an index or segment override has a known address, `_instruction->Next() + disp`. If the whole access lies in a segment without `PF_W` (`GuestSegment::Flags` in [GuestImage.hpp](../lifter/include/lifter/GuestImage.hpp)), no other thread can write it, so the load can be plain.
@@ -154,6 +128,10 @@ This item fixes a correctness hole in today's rule, then extends the rule to `rb
   - order only memory that another thread can reach;
   - recover prototypes so hot functions skip the state;
   - inline across parts. The probe's direct-call loop shows what inlining gains.
+- **Leave a local's address plain while it stays in the function.**
+  - A function that puts the address of a local in a register, as `lea -0x40(%rbp),%rax` does, orders its whole frame today.
+  - Its accesses could stay plain where dataflow proves the address never leaves the function: it is not stored to memory, passed to a call or returned, and not copied to a register that is.
+  - A mistake in that proof reopens the hole that private frames closed.
 
 ## From AnyPS5's ARM64 compiler
 
@@ -220,12 +198,16 @@ Landed on 2026-10-31. `Ps5Lift::LookupFunction` in [Runtime.cpp](../runtime/src/
 - For 507,412 functions, a large title's count, the build takes 7 ms and the table 16 MB at start-up, so building it at lift time instead would not pay for the larger executable.
 - A perfect hash would shrink the table to about 8 MB but not speed it up: at most half full, the table finds most functions in one cache line, where a perfect hash reads a displacement table first, and it still has to compare the stored address to reject one that starts no function.
 
+### Leave a frame unordered only when its address does not escape
+
+Landed on 2026-10-31. Accesses through `rsp` used to be plain in every function. A function that handed out the address of a local, such as a completion flag other threads set, then read it unordered, and LLVM could hoist the load out of a spin loop on it. `ScanInstructions` in [Lifter.cpp](../lifter/src/Lifter.cpp) now decides per function whether its frame is private (`HandsOutFrameAddress`), and whether it keeps a frame pointer (`KeepsFramePointer`). Only a private frame's accesses through `rsp`, and through `rbp` where the function keeps a frame pointer, are plain, so the titles' accesses through `rbp`, 19–24% of their memory operands, are plain wherever the frame is private. [DESIGN.md](DESIGN.md)'s memory-ordering section states the rule, and the stack message case in `tests/fixtures/threads.c` covers the hole.
+
 ## Ruled out
 
 Each of these was considered for the ordering cost and rejected. Do not pick them up without new evidence.
 
 - **Reusing a loaded or stored value across another load.**
-  - Forwarding a store to a later load of the same address, or reusing a load for a repeated one, is safe only when no other load sits between them, and never across loop iterations, where it is the hoisting hang of item 1.
+  - Forwarding a store to a later load of the same address, or reusing a load for a repeated one, is safe only when no other load sits between them, and never across loop iterations, where it would hoist a spin loop's load as the old `rsp` rule let LLVM do ([Done](#done)).
   - With a load between them, TSO can require the newer value. Suppose this thread stores to `a` and then loads `b`, and another thread set `b` after it saw this thread's store and overwrote `a`. Then the reload of `a` must see the other thread's value.
   - The safe case is narrow and the gain small.
 - **Ordering switches per title or per function.** Other x86 translators for ARM let users weaken ordering for a program. A title that needs the ordering then fails rarely and unreproducibly, which the correctness rule at the top excludes.
