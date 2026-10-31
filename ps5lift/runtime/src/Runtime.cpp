@@ -11,12 +11,14 @@
 #include <unistd.h>
 
 #include <algorithm>
+#include <bit>
 #include <cerrno>
 #include <cinttypes>
 #include <cstdarg>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <vector>
 
 #if defined(__x86_64__)
 #include <immintrin.h>
@@ -557,11 +559,55 @@ namespace {
 
 const Ps5LiftProgram* UsedProgram = nullptr;
 
+// The program's functions by guest address, for dispatch: open addressing with linear probing in a power-of-two table
+// at most half full, so a lookup reads one slot and rarely its neighbour. It is built when the executable hands the
+// program over, before any guest thread runs, and only read after that. An empty slot holds guest address 0, where no
+// function starts.
+class FunctionIndex {
+public:
+    void Build(const Ps5LiftFunctionEntry* functions, const std::uint64_t count) {
+        const auto size = std::bit_ceil(std::max<std::uint64_t>(2, count * 2));
+        _slots.assign(size, Ps5LiftFunctionEntry{});
+        _mask = size - 1;
+        _shift = 64 - std::countr_zero(size);
+        for (std::uint64_t i = 0; i < count; ++i) {
+            const auto& function = functions[i];
+            if (function.GuestAddress == 0) ps5lift_fail("the lifted program has a function at guest address 0");
+            auto slot = Home(function.GuestAddress);
+            for (; _slots[slot].GuestAddress != 0; slot = (slot + 1) & _mask) {
+                if (_slots[slot].GuestAddress == function.GuestAddress) ps5lift_fail("the lifted program lists the function at 0x%" PRIx64 " twice", function.GuestAddress);
+            }
+            _slots[slot] = function;
+        }
+    }
+
+    Ps5LiftFunction Find(const std::uint64_t address) const {
+        for (auto slot = Home(address);; slot = (slot + 1) & _mask) {
+            const auto& entry = _slots[slot];
+            if (entry.GuestAddress == address) return entry.Host;
+            if (entry.GuestAddress == 0) return nullptr;
+        }
+    }
+
+private:
+    std::uint64_t Home(const std::uint64_t address) const {
+        return (address * 0x9e3779b97f4a7c15ull) >> _shift;
+    }
+
+    std::vector<Ps5LiftFunctionEntry> _slots;
+    std::uint64_t _mask = 0;
+    int _shift = 0;
+};
+
+FunctionIndex FunctionsByAddress;
+
 }
 
 extern "C" void ps5lift_use_program(const Ps5LiftProgram* program) {
-    if (UsedProgram != nullptr && UsedProgram != program) ps5lift_fail("the executable handed the runtime a second lifted program");
+    if (UsedProgram == program) return;
+    if (UsedProgram != nullptr) ps5lift_fail("the executable handed the runtime a second lifted program");
     UsedProgram = program;
+    FunctionsByAddress.Build(program->Functions, program->FunctionCount);
 }
 
 const Ps5LiftProgram& Ps5Lift::Program() {
@@ -570,12 +616,8 @@ const Ps5LiftProgram& Ps5Lift::Program() {
 }
 
 Ps5LiftFunction Ps5Lift::LookupFunction(const std::uint64_t address) {
-    const auto& program = Ps5Lift::Program();
-    const auto* begin = program.Functions;
-    const auto* end = begin + program.FunctionCount;
-    const auto* found = std::lower_bound(begin, end, address, [](const Ps5LiftFunctionEntry& entry, const std::uint64_t target) { return entry.GuestAddress < target; });
-    if (found == end || found->GuestAddress != address) return nullptr;
-    return found->Host;
+    Ps5Lift::Program();
+    return FunctionsByAddress.Find(address);
 }
 
 extern "C" void ps5lift_run_main(void) {
