@@ -318,6 +318,7 @@ void GuestImage::Relocate(const Resolver& resolve) {
     auto nextImport = AlignUp(_mappedEnd, ImportAlignment);
     std::map<std::string, std::uint64_t> importByName;
     for (const auto& relocation : _relocations) {
+        _relocatedAddresses.push_back(relocation.Offset);
         std::uint64_t value = relocation.Value;
         if (relocation.Type == RelocationTlsModule || relocation.Type == RelocationTlsOffset || relocation.Type == RelocationThreadPointerOffset) {
             if (_tls.Module == 0) throw std::runtime_error("TLS relocation at 0x" + Hex(relocation.Offset) + " in " + _path + ", which has no TLS segment");
@@ -350,6 +351,7 @@ void GuestImage::Relocate(const Resolver& resolve) {
         if (IsExecutable(value)) _codePointers.insert(value);
     }
     _relocations.clear();
+    std::sort(_relocatedAddresses.begin(), _relocatedAddresses.end());
 }
 
 const std::string& GuestImage::Path() const {
@@ -449,11 +451,18 @@ bool GuestImage::IsExecutable(const std::uint64_t address) const {
     return !CodeAt(address).empty();
 }
 
-bool GuestImage::IsReadOnly(const std::uint64_t address, const unsigned size) const {
+bool GuestImage::IsReadOnly(const std::uint64_t address, const std::uint64_t size) const {
     for (const auto& segment : _segments) {
         if (address >= segment.Address && Within(address - segment.Address, size, segment.MemorySize)) return !segment.IsWritable();
     }
     return false;
+}
+
+// Whether a relocation writes any of the bytes from address to address + size; each writes eight.
+bool GuestImage::Relocates(const std::uint64_t address, const std::uint64_t size) const {
+    constexpr std::uint64_t Written = 8;
+    const auto first = std::lower_bound(_relocatedAddresses.begin(), _relocatedAddresses.end(), address < Written ? 0 : address - Written + 1);
+    return first != _relocatedAddresses.end() && *first < address + size;
 }
 
 const std::map<std::uint64_t, std::string>& GuestImage::FunctionSymbols() const {

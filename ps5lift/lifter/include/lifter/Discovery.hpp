@@ -39,6 +39,7 @@ struct FunctionFlow {
     std::set<std::uint64_t> Leaders;
     std::map<std::uint64_t, std::vector<std::uint64_t>> JumpTables;
     std::set<std::uint64_t> UnguardedJumpTables;
+    std::set<std::uint64_t> ClosedJumpTables;
     std::set<std::uint64_t> ResumePoints;
 };
 

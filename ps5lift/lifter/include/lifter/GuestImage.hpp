@@ -75,7 +75,8 @@ public:
     std::span<const std::uint8_t> CodeAt(std::uint64_t address) const;
     std::optional<std::uint64_t> ReadData(std::uint64_t address, unsigned size) const;
     bool IsExecutable(std::uint64_t address) const;
-    bool IsReadOnly(std::uint64_t address, unsigned size) const;
+    bool IsReadOnly(std::uint64_t address, std::uint64_t size) const;
+    bool Relocates(std::uint64_t address, std::uint64_t size) const;
     const std::map<std::uint64_t, std::string>& FunctionSymbols() const;
     const std::map<std::uint64_t, std::string>& Imports() const;
     std::optional<std::uint64_t> ImportAt(std::uint64_t slot) const;
@@ -92,6 +93,7 @@ private:
     std::set<std::string> _indirectFunctions;
     std::set<std::uint64_t> _functionExports;
     std::vector<GuestRelocation> _relocations;
+    std::vector<std::uint64_t> _relocatedAddresses;
     std::uint64_t _mappedEnd = 0;
     std::uint64_t _loadBias = 0;
     GuestArray _programHeaders;
