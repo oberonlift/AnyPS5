@@ -298,26 +298,20 @@ extern "C" void ps5lift_apply_mxcsr(Ps5LiftState* state) {
     if (!GuestEnvironmentLive()) return;
     const auto mxcsr = state->Mxcsr;
 #if defined(__aarch64__)
+    // FPCR.AH would flush inputs and outputs apart, as DAZ and FTZ do, but it also makes FNEG and FABS leave a NaN
+    // as it is, and LLVM builds constants with them: the double sign mask 0x7fffffffffffffff as the negation of
+    // all-ones, 0x7fc00000 as the negation of 0xffc00000. Code from LLVM, the lifted program and the host's libraries
+    // alike, would compute with the wrong masks, so FZ stands for both.
     constexpr std::uint32_t MxcsrDenormalsAreZero = 1u << 6;
     constexpr std::uint32_t MxcsrFlushToZero = 1u << 15;
-    constexpr std::uint64_t AlternateHandling = 1u << 1;
-    constexpr std::uint64_t FlushInputs = 1u << 0;
     constexpr std::uint64_t FlushToZero = 1u << 24;
     constexpr std::uint64_t RoundingShift = 22;
-    constexpr unsigned long HwcapAfp = 1ul << 20;
-    static const bool alternate = (getauxval(AT_HWCAP2) & HwcapAfp) != 0;
     static constexpr std::uint64_t Rounding[4] = {0, 2, 1, 3};
     std::uint64_t fpcr = 0;
     __asm__ volatile("mrs %0, fpcr" : "=r"(fpcr));
-    fpcr &= ~(FlushInputs | AlternateHandling | FlushToZero | (std::uint64_t{3} << RoundingShift));
+    fpcr &= ~(FlushToZero | (std::uint64_t{3} << RoundingShift));
     fpcr |= Rounding[(mxcsr >> 13) & 3] << RoundingShift;
-    if (alternate) {
-        fpcr |= AlternateHandling;
-        if (mxcsr & MxcsrDenormalsAreZero) fpcr |= FlushInputs;
-        if (mxcsr & MxcsrFlushToZero) fpcr |= FlushToZero;
-    } else if (mxcsr & (MxcsrDenormalsAreZero | MxcsrFlushToZero)) {
-        fpcr |= FlushToZero;
-    }
+    if (mxcsr & (MxcsrDenormalsAreZero | MxcsrFlushToZero)) fpcr |= FlushToZero;
     __asm__ volatile("msr fpcr, %0" : : "r"(fpcr));
 #elif defined(__x86_64__)
     _mm_setcsr((mxcsr & ~MxcsrExceptions) | 0x1f80u);

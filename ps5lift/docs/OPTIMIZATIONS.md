@@ -24,7 +24,7 @@ Measured on 2026-10-30. The probe was lifted at 265ee08; the benchmark used the 
 | hash | 10.5 ms | 11.3 ms | 10.4 ms | 11.7 ms | 1.13× | 1.03× |
 | sort | 7.6 ms | 7.6 ms | 8.5 ms | 21.8 ms | 2.57× | 2.87× |
 
-Without ordering, lifted code is within about 20% of native. Ordering costs little where loads wait on each other (`chase`) and the most where stores dominate (`sort`). The kernels have no indirect calls, no frame pointers and no floating point, so items 1, 2 and 4 below need kernels of their own before they can be timed.
+Without ordering, lifted code is within about 20% of native. Ordering costs little where loads wait on each other (`chase`) and the most where stores dominate (`sort`). The kernels have no indirect calls, no frame pointers and no floating point, so items 1 and 2 below need kernels of their own before they can be timed.
 
 To run it: `python3 -B tools/bench.py --ps5lift <build>/lifter/ps5lift --clang /usr/lib/llvm-18/bin/clang --clangxx /usr/lib/llvm-18/bin/clang++`. It builds the runtime into `runtime-<triple>` beside the `ps5lift` build directory; in a checkout another agent is using, copy the binary to `/tmp/<dir>/build/lifter/` first so that build stays untouched.
 
@@ -66,7 +66,7 @@ For an ordering change, a better before-and-after check than timing is the numbe
 
 ### `FPCR.AH` on the GB10
 
-The runtime sets `FPCR.AH` on hosts with FEAT_AFP (the function that reads `HwcapAfp` in [Runtime.cpp](../runtime/src/Runtime.cpp)). The GB10 has the feature on all 20 cores, and so does the Apple M4. A test on the GB10 ran each operation with the bit off and on and compared the results with x86's rules as [the design](DESIGN.md#floating-point) states them:
+The runtime set `FPCR.AH` on hosts with FEAT_AFP until it turned out that the bit also stops `FNEG` and `FABS` from changing a NaN, which breaks the constants LLVM 23 builds with `FNEG` ([floating point](DESIGN.md#floating-point)); it leaves the bit clear now, so letting the hardware follow x86's NaN rules is not an option. The GB10 has the feature on all 20 cores, and so does the Apple M4. A test on the GB10 ran each operation with the bit off and on and compared the results with x86's rules as [the design](DESIGN.md#floating-point) states them:
 
 | Operation | AH=0 | AH=1 | x86 |
 |---|---|---|---|
@@ -130,30 +130,6 @@ The test was a C program for the host. It set the bit with `mrs`/`msr fpcr`, ran
 - **Gain:** many of these are float constants loaded with `movss` or `movsd`. Today they take an `ldapr` into a general register and a move to the vector unit.
 - **What must stay true:** the guest does not make its read-only segments writable at run time. Write that assumption down where the rule goes.
 - **Check:** `ctest`, and the ordered-instruction count.
-
-### 4. Let the hardware follow x86's NaN rules
-
-- **Code:** in Lifter.cpp, `NanResult`, `Quiet`, `Arithmetic` (min and max), `FusedMultiplyAdd` and `DenormalsAreZero`. In Runtime.cpp, the FPCR setup and `RequireHostFeatures`.
-- **Cost now:** 8 to 12 instructions per floating-point operation under `--float exact`.
-- **Why the handling cannot simply go:** with `FPCR.AH` set, the GB10 returns x86's results for operands in the guest's order, and an x86-64 target does so by nature. But LLVM treats NaN payloads as unspecified and rewrites operations in ways that change them:
-  - InstCombine orders the operands of commutative operations by complexity, and casts rank below other instructions. Lifted vector code is full of bitcasts, so `fadd`, `fmul` and the multiplicands of `fma` do get swapped. That changes the result when both operands are NaN.
-  - It folds `fsub x, 0.0` to `x`, which leaves a signalling NaN unquieted.
-  - It turns `fsub -0.0, x` into `fneg x`, which can flip a NaN's sign.
-  - Code generation may commute operands as well.
-- **Options, cheapest first:**
-  - (a) Guard only the guest's first operand, as `select(isnan(first), quiet(first), r)`. That's about 3 instructions. It covers swapped operands and identity folds whose constant is the second operand, but not the `fneg` case.
-  - (b) Also quiet a NaN result, for about 6 instructions.
-  - (c) Hide the operations from the optimizer until code generation: constrained intrinsics, or calls to a pseudo-function replaced just before codegen. This is exact, but costs optimizations.
-
-  Pick one only after a probe with two NaN operands in each order, at `-O0` to `-O3`.
-- **Min and max:**
-  - With `AH` set, `fmax` and `fmin` already match x86, so they could use the target intrinsics if LLVM does not treat those as commutative.
-  - Their DAZ handling, which loads MXCSR from the state for every operand, can go only if `FPCR.FIZ` flushes their inputs. The test above did not check that.
-- **Hosts without FEAT_AFP:** either `RequireHostFeatures` demands the feature, as it demands AES and PMULL, or the lifter keeps today's lowering behind an option. The lifter cannot see the run-time host.
-- **Check:**
-  - `ctest`, especially `tests/fixtures/float.c`. It feeds quiet and signalling NaNs and compares the results with an Intel CPU's at `-O0` to `-O3` (`float-O*.expected`).
-  - The `vector` and `avx` fixtures.
-  - The dot-product probe's instruction count.
 
 ## Later
 
