@@ -8,6 +8,15 @@ Rules:
 - Another agent may be rebasing the submodule. Check `git -C 3rdparty/anyps5 status` and its `HEAD` before touching it, and commit with explicit paths.
 - Commits in both repositories are authored as `Claude <noreply@anthropic.com>`.
 
+## Open decisions
+
+Only the user can settle these. Ask before starting the work that depends on one.
+
+1. **Whether [phase 2](#phase-2-the-lifted-target) goes upstream.** Unless ps5lift is public, upstream can only compile the lifted paths. Phase 1 does not depend on this.
+2. **Whether to name titles upstream.** An `Unblocks:` line gives a title ID and a public Game bring-up discussion, posted from the account that opens the pull request. Without it, phase 1's title fixes go up with `Unblocks: none` and stand on their tests.
+3. **The `Claude-Session:` trailers** on twelve patches: remove them or keep them, before the patches go anywhere new (a new remote, an upstream pull request).
+4. **Which x86-64 Linux machine** runs upstream's build and tests, and the titles phase 1 names, for the `Tested:` lines.
+
 ## The patch set
 
 On 2026-10-30: 30 commits on upstream `ac551a1`, on the branch `aarch64-host-rebase`, which the superproject pins. The branch `aarch64-host`, locally and on the fork's remote, sits on an older upstream and is superseded.
@@ -26,7 +35,7 @@ The patches fall in four groups, listed one by one under [upstream pull requests
 - **A network gate**: the guest is offline unless `APS5_NETWORK=1`, and `APS5_NETWORK_ALLOW` and `APS5_NETWORK_DENY` limit the domains it may resolve.
 - **Fixes found on titles**, none specific to lifting: HTTP/2 (the redirect callback, asynchronous send and read, HTTP/1.x lookups) for the EOS SDK in two Unreal titles, 16-bit access to converted images, `sceNpGetSandboxInfo`, and a GPU snapshot that overlaps a writable range.
 
-Twelve patches carry a `Claude-Session:` trailer, a link to a claude.ai session. Before the patches go anywhere new (a new remote, an upstream pull request), ask the user whether to remove the trailers.
+Twelve patches carry a `Claude-Session:` trailer, a link to a claude.ai session; see [open decisions](#open-decisions).
 
 ## What the patch set costs an x86 build
 
@@ -74,7 +83,7 @@ A proposed split; nothing has been sent. Upstream's [contribution rules](https:/
 - An author may have 1 open pull request until one is merged, then 20, and no limit once 20 are merged. The first one has to be small and easy to merge.
 - A title fix names the title ID and its Game bring-up discussion (`Unblocks:`).
 - AGC, shader recompiler and VideoOut changes list every GPU the GPU tests ran on, and run the focused tests on `main` and on the branch with the Vulkan validation layer. A change to shader instruction semantics says where the semantics come from.
-- `Tested:` gives the OS and the title or homebrew. These patches were tested on aarch64 under ps5lift. A fix that is not specific to lifting also needs upstream's x86 build and tests, and the title where one is named, on an x86-64 Linux machine; ask the user which machine.
+- `Tested:` gives the OS and the title or homebrew. These patches were tested on aarch64 under ps5lift. A fix that is not specific to lifting also needs upstream's x86 build and tests, and the title where one is named, on an x86-64 Linux machine ([open decisions](#open-decisions)).
 - `AI-assisted: yes`.
 - Each test finishes within 30 s on the CI runners.
 
@@ -98,7 +107,7 @@ Each applies to the x86 build too, and each one merged shrinks the patch set.
 
 ### Phase 2: the lifted target
 
-Only if upstream wants a lifted aarch64 target in its tree; ask in a discussion before the first of these. Upstream already carries another target that does not run guest code natively, Emscripten, with its own code paths and workflow, and `GuestLongDouble.hpp` already had a branch for a `long double` that is not x87. Unless ps5lift is public, upstream can only compile these paths, so this phase waits on the user's decision about that.
+Only if upstream wants a lifted aarch64 target in its tree; ask in a discussion before the first of these. Upstream already carries another target that does not run guest code natively, Emscripten, with its own code paths and workflow, and `GuestLongDouble.hpp` already had a branch for a `long double` that is not x87. This phase waits on the first of the [open decisions](#open-decisions).
 
 | # | Pull request | Patches | Depends on | Notes |
 |---|---|---|---|---|
