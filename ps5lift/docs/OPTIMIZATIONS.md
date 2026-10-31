@@ -121,7 +121,7 @@ This item fixes a correctness hole in today's rule, then extends the rule to `rb
   - Variadic functions take the address of their stack arguments with `lea` to build a `va_list`, so they escape, which is correct.
   - `push`, `pop`, `call` and `ret` stay plain in every function. They touch saved registers and return addresses, which no pointer a function hands out may reach.
   - A function keeps a frame pointer when its entry block starts with `push %rbp; mov %rsp,%rbp` and nothing else writes `rbp` except the restoring `pop %rbp` or `leave`. A function that uses `rbp` as a general register keeps its `rbp` accesses ordered.
-  - Compute both facts in one pass over the function. `FindUsedRegisters` already walks every instruction, and discovery has `ReachingDefinitions`.
+  - Compute both facts in one pass over the function. `ScanInstructions` already walks every instruction, and discovery has `ReachingDefinitions`.
 - **Gain:** escaping functions' `rsp` accesses become ordered, which costs a little. In private frames the `rbp` accesses, 19–24% of the titles' memory operands, become plain.
 - **What must stay true:** a frame whose address no instruction hands out is private to its thread. Replace the `rsp` sentence in DESIGN.md's memory-ordering section with this rule.
 - **Test first:** add a case to `tests/fixtures/threads.c`.
@@ -143,6 +143,7 @@ This item fixes a correctness hole in today's rule, then extends the rule to `rb
 - **What must stay true:** the values in those segments never change, so reordering loads of them cannot be observed. That holds while the guest neither makes its read-only segments writable nor maps their pages a second time. Write that assumption down where the rule goes.
 - **Make it checked:** in lifted builds, AnyPS5's `sceKernelMprotect` and POSIX `mprotect` ([DirectMemory](../3rdparty/anyps5/core/libs/prx/libkernel/DirectMemory/)) should stop with an error when asked to make any part of a guest image's read-only segment writable. The images are found through `GuestCpuIterateImages`. A title that breaks the assumption then stops at that call instead of running with unordered loads.
 - **Check:** `ctest`, and the ordered-instruction count.
+- **Also:** the same facts can drop a jump table's fallback. A recovered table lifts as a `switch` that falls back to dispatch. When the table lies wholly in a segment without `PF_W`, no relocation overlaps it and its bound comes from a recognised guard, every target is known, so the fallback is unreachable. AnyPS5's ARM64 compiler ([below](#from-anyps5s-arm64-compiler)) skips re-validating targets under the same three conditions.
 
 ## Later
 
@@ -164,16 +165,66 @@ This item fixes a correctness hole in today's rule, then extends the rule to `rb
   - Nothing may sit between the two accesses: no other memory access, call or fence.
   - Another thread may read either half with a narrower access. That is the mixed-size part of the Arm memory model, so write the argument for it into DESIGN.md with the change.
   - Before implementing, count the adjacent pairs in a title's code the way the instruction-mix table was made.
-- **Pass fewer registers across calls.**
-  - Today `Flush`, `Reload` and `CallGuest` in Lifter.cpp store every register the function uses before a call and reload them all after.
-  - The SysV ABI preserves no vector register. So store only `ymm0`–`ymm7` (the arguments) and reload only `ymm0`–`ymm1` (the results), and reload no caller-saved general register other than `rax`, `rdx` and `rsp`.
-  - Keep storing the callee-saved registers, because the unwinder restores a landing pad's registers from the values its callees pushed.
-  - Hand-written assembly with its own conventions breaks this, and FFmpeg has some, so gate it behind a switch like `--preserve-flags`.
-  - Handlers that `sceKernelRaiseException` delivers read the registers as of the last call, so they would see stale vector registers.
+- **Pass fewer registers across calls.** See [store and reload only what a callee reads and writes](#store-and-reload-only-what-a-callee-reads-and-writes) below, which derives the registers from the code instead of assuming the SysV ABI.
 - **The [roadmap](DESIGN.md#roadmap)'s items:**
   - order only memory that another thread can reach;
   - recover prototypes so hot functions skip the state;
   - inline across parts. The probe's direct-call loop shows what inlining gains.
+
+## From AnyPS5's ARM64 compiler
+
+The draft pull request [boykopovar/AnyPS5#5021](https://github.com/boykopovar/AnyPS5/pull/5021) compiles PS5 x86-64 code to ARM64 ahead of time, as `ps5lift` does, but only for programs that come with a reviewed contract of their own. These are its optimizations that could carry over, read from its code at commit `151294f`; its [known gaps](https://github.com/yabanana/AnyPS5/blob/151294f979ab00aaff2f702314425caf61a72790/docs/dev/debt/aot.md) describe each one in full. None has been measured here, so none is a work item yet.
+
+### Store and reload only what a callee reads and writes
+
+- **Theirs:** [guest_value_leaves.py](https://github.com/yabanana/AnyPS5/blob/151294f979ab00aaff2f702314425caf61a72790/core/aot/guest_value_leaves.py) takes each function's register writes from its code, closes them over known direct calls, and after a direct call reloads only those. Calls they cannot see into reload everything.
+- **Ours today:** `CallGuest` in Lifter.cpp runs `Flush` before every guest call and `Reload` after it, storing and loading every register the calling function names.
+- **Change:**
+  - For each function, compute the registers it may read before writing them and the registers it may write, from the walk `ScanInstructions` already makes. Close both sets over direct calls and tail calls; iterate to a fixpoint so recursion converges.
+  - A function that makes an indirect call or jump, calls an import or calls a runtime helper that reads the whole state (`ps5lift_dispatch`, `ps5lift_resolve`) reads and writes everything.
+  - Before a direct call, store only the callee's read set; after it, reload only its write set.
+- **Why derive it:** an ABI-based version (store only the argument registers, reload only the results) breaks hand-written assembly with its own conventions, which FFmpeg has, so it would need a switch. Sets taken from the code assume no convention.
+- **What must stay true:** wherever the runtime reads the state, the registers there are current. That holds at imports, where the unwinder starts from the state at `__cxa_throw`, and at dispatch, because a callee that reaches either counts as reading everything. A callee that pushes a callee-saved register reads it, so the values the unwinder restores for a landing pad are still stored.
+- **Weakens:** handlers that `sceKernelRaiseException` delivers already read the registers as of the last call; registers that callers did not store become older still.
+- **Measure:** the number of state stores and loads around direct calls in a title's IR (`--emit-ir`), before and after.
+- **Check:** `ctest`, in particular the `exceptions`, `setjmp` and `callbacks` fixtures.
+
+### Give leaf functions a native calling convention
+
+- **Theirs:** for a leaf function (no calls, no indirect jumps, no runtime helpers, no vector registers, and no stack changes beyond an exact `push %rbp; mov %rsp,%rbp` … `pop %rbp`) that reads at most six general registers and writes at most two, they compile a native core that takes the register values as arguments and returns its results. The guest still sees its stack written as on the console: the return address and the saved `rbp`. The state-based entry stays for callers through dispatch.
+- **For us:** a direct call inside a part is already inlined when the callee is small (see the probe), so the gain is on calls between parts. A part holds about 50,000 instructions and a title over 600,000 functions, so most calls cross parts. This is a narrow first step toward the roadmap's "recover prototypes so hot functions skip the state", and an alternative to inlining across parts.
+- **Change:** emit the core as a hidden function `guest_<address>_core` that takes and returns `i64` values, and make `guest_<address>` a wrapper that loads the arguments from the state, calls the core and stores the results. A direct caller in another part calls the core with its cached registers.
+- **What must stay true:** the return address and saved `rbp` still go into guest memory, since unwinders and stack walkers read them. The input set must be exact: a register the leaf reads but the core does not receive is a wrong value, not a missing one.
+- **Measure first:** how many direct calls between parts in EVO Player and a title reach a leaf that qualifies.
+
+### Run unordered until the process shares memory
+
+- **Theirs:** with "memory epochs", every function is compiled twice, unordered and ordered. The program starts in the unordered version and switches for good when its thread crosses a boundary that publishes guest memory: creating a thread, a shared or file-backed mapping, registering a signal handler, or calling a library function not known to keep guest memory private. A frame suspended in the unordered version continues in the ordered version when its call returns.
+- **For us:**
+  - While no other thread exists, nothing can observe the order of a thread's accesses, so unordered code is correct. This is not the per-title switch [ruled out](#ruled-out) below: it weakens nothing another thread could see.
+  - AnyPS5's own threads read guest memory too (AGC command buffers, audio, VideoOut), so every import that may start or wake one must publish. Treat every import as publishing except a list known to touch only the calling thread.
+  - The switch can reuse the resume points. `CallGuest` already loads `Unwinding` after every guest call; a "shared" flag beside it lets one load test both. The ordered twin then needs an entry for each return address of the unordered one, as for a landing pad. The switch happens only on a guest thread inside a call, never from another thread in the middle of a function.
+- **Cost:** lifted code, lift time and lift memory double, and a title already takes 11 minutes and 13 GB.
+- **Measure first:** how much of a run happens before the first publishing call. PS5 titles start threads early, so the gain may be start-up alone. Count instructions or time until the first `scePthreadCreate` in EVO Player and in a title.
+
+### Store and reload less around imports
+
+- **Theirs:** eleven allocation, memory, string and pthread functions are called directly in the native ABI once a run-time check confirms the import resolves to the expected implementation, and only the registers the call writes are written back ([guest_provider_calls.py](https://github.com/yabanana/AnyPS5/blob/151294f979ab00aaff2f702314425caf61a72790/core/aot/guest_provider_calls.py)). `pthread_getspecific` results are cached while the key's generation is current, and a completed `pthread_once` costs one acquire load.
+- **For us:**
+  - The bridges already call AnyPS5 directly. The cost is the full `Flush` and `Reload` around every import.
+  - Unlike guest code, a bridge follows the SysV ABI by construction: it reads the argument registers it takes and the stack, and writes only its result registers. `generate_bridges.py` knows both sets from the prototype, so it can emit them per NID for `ps5lift` to read. Before the call, store only the arguments; after it, reload only the results and `rsp`.
+  - Keep the full flush for imports that unwind, jump or raise (`__cxa_throw`, the `GUEST_STATE_EXPORTS` in `generate_bridges.py`, `sceKernelRaiseException`), for bridges that take a function pointer, whose callbacks run guest code on the same state, and for implementations that read the guest state through `GuestCpu*`.
+  - Lowering `memcpy`, `memset` and `strlen` imports to LLVM intrinsics would let LLVM optimize around them. Titles often bring their own libc as a guest module, as EVO Player does, and there these are guest functions rather than imports. Count how often each import runs before choosing any.
+- **Check:** `ctest`, in particular `libc`, `exceptions`, `callbacks` and `setjmp`.
+
+### Profile-guided optimization and LTO
+
+- **Theirs:** their builder can instrument a build, run it, merge the profiles with `llvm-profdata merge` and rebuild with them, and can link with LTO. A profile build records the profile's hash and checks its inputs for changes.
+- **For us:**
+  - `Codegen.cpp` runs `buildPerModuleDefaultPipeline(O2)` on each part. `llvm::PGOOptions` on the `PassBuilder` adds instrumentation or profile use, and the lifted program links compiler-rt's profile runtime to write the profile at exit. Function names (`guest_<address>`) stay the same between lifts of the same input, so a profile carries over; key it by the input's hash.
+  - The larger win is likely a variant of our own: count the targets of each `ps5lift_dispatch` site in an instrumented run, and lift a hot site as `target == hot ? guest_hot(state) : dispatch`. LLVM's indirect-call promotion cannot do this, since the target travels in the state rather than as a function pointer. The titles have 190,000–300,000 indirect call sites (see the instruction mix).
+  - ThinLTO over the parts is one way to inline across parts, the roadmap item.
+- **Caveat:** a profile covers only what the training run reached, EVO Player's or a title's screens today; everything else gets no profile.
 
 ## Ruled out
 
