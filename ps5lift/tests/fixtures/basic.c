@@ -121,6 +121,7 @@ i64 copy_address_taken_by_lea(void);
 i64 (*select_address_taken_by_lea(i64 pick))(void);
 i64 tail_pass_address_taken_by_lea(void);
 void store_address_past_jump(i64 (**slot)(void));
+void store_address_after_call_and_branch(i64 (**slot)(void));
 
 __attribute__((noinline)) i64 call_function_pointer(i64 (*function)(void)) {
     return function();
@@ -278,7 +279,8 @@ __asm__(".text\n"
    memory, one passed to a call, one stored only after a run of other instructions, as a constructor that fills in
    an object's fields before its callback's, one called after a NOP whose operand names the register, one returned, as
    a state machine's state returns the next, one pushed as a stack argument, one copied to an argument register, one
-   picked by a conditional move, one passed to a tail call and one stored past a jump within its function. */
+   picked by a conditional move, one passed to a tail call, one stored past a jump within its function and one kept in a
+   callee-saved register across a call and stored past a conditional jump. */
 __asm__(".text\n"
         "stored_through_lea:\n"
         "    mov $77, %eax\n"
@@ -381,6 +383,27 @@ __asm__(".text\n"
         "1:  mov %rax, (%rdi)\n"
         "    ret\n"
         ".size store_address_past_jump, .-store_address_past_jump\n"
+        "stored_after_call_through_lea:\n"
+        "    mov $87, %eax\n"
+        "    ret\n"
+        ".globl store_address_after_call_and_branch\n"
+        ".type store_address_after_call_and_branch, @function\n"
+        "store_address_after_call_and_branch:\n"
+        "    push %rbx\n"
+        "    push %r13\n"
+        "    sub $8, %rsp\n"
+        "    mov %rdi, %rbx\n"
+        "    lea stored_after_call_through_lea(%rip), %r13\n"
+        "    xor %edi, %edi\n"
+        "    call next_after_jump\n"
+        "    cmp $7, %rax\n"
+        "    jne 1f\n"
+        "    mov %r13, (%rbx)\n"
+        "1:  add $8, %rsp\n"
+        "    pop %r13\n"
+        "    pop %rbx\n"
+        "    ret\n"
+        ".size store_address_after_call_and_branch, .-store_address_after_call_and_branch\n"
         ".globl store_address_taken_by_lea\n"
         ".type store_address_taken_by_lea, @function\n"
         "store_address_taken_by_lea:\n"
@@ -1046,6 +1069,8 @@ int main(void) {
     line("function passed to a tail call", tail_pass_address_taken_by_lea());
     store_address_past_jump(&stored);
     line("function stored past a jump", call_function_pointer(stored));
+    store_address_after_call_and_branch(&stored);
+    line("function kept across a call and stored past a branch", call_function_pointer(stored));
     zen2_integer();
     unaligned_accesses();
     locked_forms();

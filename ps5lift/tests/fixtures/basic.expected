@@ -55,6 +55,7 @@ function copied through lea = 83
 function picked by a conditional move = 84
 function passed to a tail call = 85
 function stored past a jump = 86
+function kept across a call and stored past a branch = 87
 bswap 64 = 0xefcdab8967452301
 bswap 32 = 0x0000000067452301
 movbe load 64 = 0xefcdab8967452301

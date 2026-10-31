@@ -356,55 +356,80 @@ bool Overwrites(const Instruction& instruction, const ZydisRegister reg) {
 
 // Position-independent code takes a function's address with a RIP-relative lea, which needs no relocation. Code also
 // keeps strings and tables among its instructions and takes their addresses the same way, so an address counts as a
-// function's only if the code stores it, pushes it, branches to it, passes it to a call or a tail call or returns it
-// before it reads memory through it. The registers that hold it are followed for as long as one does, however many other
-// instructions come first and across the jumps within the function: a constructor can fill in dozens of an object's
-// fields before it stores a callback taken at its start, and a move, or a conditional move that picks one of two
-// callbacks, copies the address to another register. A NOP's memory operand reads nothing, so the padding that aligns a
-// loop after the lea does not count as a read.
+// function's only if the code stores it, pushes it, branches to it, passes it to a call or a tail call or returns it, and
+// no path from the lea reads memory through it first. The registers that hold it are followed for as long as one does,
+// however many other instructions come first, along both ways of a conditional jump and across the jumps within the
+// function: a constructor can fill in dozens of an object's fields before it stores a callback taken at its start, and
+// a move, or a conditional move that picks one of two callbacks, copies the address to another register. A call the
+// address is not passed to ends only the registers it may clobber, so one kept in a callee-saved register is followed
+// past it. A NOP's memory operand reads nothing, so the padding that aligns a loop after the lea does not count as a read.
 std::optional<std::uint64_t> TakenFunctionAddress(const GuestImage& image, const GuestFunction& function, const Instruction& lea) {
     const auto address = RipRelativeAddress(lea);
     if (!address || !image.IsExecutable(*address)) return std::nullopt;
-    std::set<ZydisRegister> holders{Enclosing(lea.Operands[0].reg.value)};
-    const auto holds = [&](const ZydisDecodedOperand& operand) { return operand.type == ZYDIS_OPERAND_TYPE_REGISTER && holders.contains(Enclosing(operand.reg.value)); };
-    const auto passed = [&] { return std::ranges::any_of(holders, PassesArgument); };
-    std::set<std::uint64_t> visited;
-    auto next = function.Instructions.find(lea.Next());
-    while (next != function.Instructions.end() && visited.insert(next->first).second) {
-        const auto& instruction = next->second;
-        const auto mnemonic = instruction.Info.mnemonic;
-        next = function.Instructions.find(instruction.Next());
-        if (mnemonic == ZYDIS_MNEMONIC_NOP) continue;
-        for (std::uint8_t i = 0; i < instruction.Info.operand_count_visible; ++i) {
-            const auto& operand = instruction.Operands[i];
-            if (operand.type == ZYDIS_OPERAND_TYPE_MEMORY && (holders.contains(Enclosing(operand.mem.base)) || holders.contains(Enclosing(operand.mem.index)))) return std::nullopt;
-        }
-        const auto& target = instruction.Operands[0];
-        const auto& source = instruction.Operands[1];
-        if ((mnemonic == ZYDIS_MNEMONIC_CALL || mnemonic == ZYDIS_MNEMONIC_JMP) && holds(target)) return address;
-        if (mnemonic == ZYDIS_MNEMONIC_CALL) return passed() ? address : std::nullopt;
-        if (mnemonic == ZYDIS_MNEMONIC_RET) return holders.contains(ZYDIS_REGISTER_RAX) ? address : std::nullopt;
-        if (mnemonic == ZYDIS_MNEMONIC_PUSH && holds(target)) return address;
-        if (mnemonic == ZYDIS_MNEMONIC_MOV && target.type == ZYDIS_OPERAND_TYPE_MEMORY && holds(source)) return address;
-        if (mnemonic == ZYDIS_MNEMONIC_JMP) {
-            const auto destination = DirectTarget(instruction);
-            if (!destination) return std::nullopt;
-            if (function.Instructions.contains(*destination)) {
-                next = function.Instructions.find(*destination);
+    using Holders = std::set<ZydisRegister>;
+    std::set<std::pair<std::uint64_t, Holders>> visited;
+    std::vector<std::pair<std::uint64_t, Holders>> pending{{lea.Next(), {Enclosing(lea.Operands[0].reg.value)}}};
+    bool used = false;
+    while (!pending.empty()) {
+        auto path = std::move(pending.back());
+        pending.pop_back();
+        auto& holders = path.second;
+        const auto holds = [&](const ZydisDecodedOperand& operand) { return operand.type == ZYDIS_OPERAND_TYPE_REGISTER && holders.contains(Enclosing(operand.reg.value)); };
+        const auto passed = [&] { return std::ranges::any_of(holders, PassesArgument); };
+        auto next = function.Instructions.find(path.first);
+        while (next != function.Instructions.end() && visited.emplace(next->first, holders).second) {
+            const auto& instruction = next->second;
+            const auto mnemonic = instruction.Info.mnemonic;
+            next = function.Instructions.find(instruction.Next());
+            if (mnemonic == ZYDIS_MNEMONIC_NOP) continue;
+            for (std::uint8_t i = 0; i < instruction.Info.operand_count_visible; ++i) {
+                const auto& operand = instruction.Operands[i];
+                if (operand.type == ZYDIS_OPERAND_TYPE_MEMORY && (holders.contains(Enclosing(operand.mem.base)) || holders.contains(Enclosing(operand.mem.index)))) return std::nullopt;
+            }
+            const auto& target = instruction.Operands[0];
+            const auto& source = instruction.Operands[1];
+            const bool stored = mnemonic == ZYDIS_MNEMONIC_MOV && target.type == ZYDIS_OPERAND_TYPE_MEMORY && holds(source);
+            if (((mnemonic == ZYDIS_MNEMONIC_CALL || mnemonic == ZYDIS_MNEMONIC_JMP || mnemonic == ZYDIS_MNEMONIC_PUSH) && holds(target)) || stored) {
+                used = true;
+                break;
+            }
+            if (mnemonic == ZYDIS_MNEMONIC_CALL) {
+                if (passed()) {
+                    used = true;
+                    break;
+                }
+                std::erase_if(holders, ClobberedByCall);
+                if (holders.empty()) break;
                 continue;
             }
-            return passed() ? address : std::nullopt;
+            if (mnemonic == ZYDIS_MNEMONIC_RET) {
+                used = used || holders.contains(ZYDIS_REGISTER_RAX);
+                break;
+            }
+            if (mnemonic == ZYDIS_MNEMONIC_JMP) {
+                const auto destination = DirectTarget(instruction);
+                if (destination && function.Instructions.contains(*destination)) {
+                    next = function.Instructions.find(*destination);
+                    continue;
+                }
+                used = used || (destination && passed());
+                break;
+            }
+            if (EndsFlow(instruction)) break;
+            if (IsConditionalJump(mnemonic)) {
+                if (const auto destination = DirectTarget(instruction); destination && function.Instructions.contains(*destination)) pending.emplace_back(*destination, holders);
+                continue;
+            }
+            const bool copies = mnemonic == ZYDIS_MNEMONIC_MOV || instruction.Info.meta.category == ZYDIS_CATEGORY_CMOV;
+            if (copies && target.type == ZYDIS_OPERAND_TYPE_REGISTER && target.size == 64 && holds(source)) {
+                holders.insert(Enclosing(target.reg.value));
+                continue;
+            }
+            std::erase_if(holders, [&](const ZydisRegister reg) { return Overwrites(instruction, reg); });
+            if (holders.empty()) break;
         }
-        if (EndsFlow(instruction) || IsConditionalJump(mnemonic)) return std::nullopt;
-        const bool copies = mnemonic == ZYDIS_MNEMONIC_MOV || instruction.Info.meta.category == ZYDIS_CATEGORY_CMOV;
-        if (copies && target.type == ZYDIS_OPERAND_TYPE_REGISTER && target.size == 64 && holds(source)) {
-            holders.insert(Enclosing(target.reg.value));
-            continue;
-        }
-        std::erase_if(holders, [&](const ZydisRegister reg) { return Overwrites(instruction, reg); });
-        if (holders.empty()) return std::nullopt;
     }
-    return std::nullopt;
+    return used ? address : std::nullopt;
 }
 
 Instruction DecodeReached(const GuestImage& image, const Decoder& decoder, const std::uint64_t entry, const std::uint64_t address, const std::uint64_t start, const std::uint64_t from) {
