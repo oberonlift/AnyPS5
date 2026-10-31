@@ -76,9 +76,6 @@ if(NOT CMAKE_SYSTEM_NAME STREQUAL "Linux")
     # search paths.
     set(PS5LIFT_LIBCLANG_ARGUMENTS --libclang ${LLVM_LIBRARY_DIR}/libclang.dylib)
     set(PS5LIFT_LIBCLANG_ENVIRONMENT PYTHONPATH=${LLVM_LIBRARY_DIR}/python${Python3_VERSION_MAJOR}.${Python3_VERSION_MINOR}/site-packages)
-    # AnyPS5's GPU driver does not build on macOS yet (phase 5 of docs/MACOS.md), so the Mac builds only the
-    # libraries the tests load.
-    set(PS5LIFT_ANYPS5_TARGETS libc libkernel libSceFiber libScePosixForWebKit libSceHttp2 libSceNpManager libSceNet libSceSsl libSceNetCtl relinker)
 else()
     if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(aarch64|arm64)$")
         set(PS5LIFT_HOST_ARCH aarch64)
@@ -96,7 +93,6 @@ else()
     set(PS5LIFT_GUEST_ARGUMENTS)
     set(PS5LIFT_LIBCLANG_ARGUMENTS)
     set(PS5LIFT_LIBCLANG_ENVIRONMENT)
-    set(PS5LIFT_ANYPS5_TARGETS libs relinker)
 endif()
 
 foreach(triple IN LISTS PS5LIFT_TEST_TRIPLES)
@@ -119,7 +115,7 @@ ExternalProject_Add(anyps5
         CMAKE_ARGS -G Ninja -DCMAKE_BUILD_TYPE=Release -DANYPS5_GUEST_LIFTED=ON -DBUILD_TESTING=ON -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
                    -DCMAKE_C_COMPILER=${CMAKE_C_COMPILER} -DCMAKE_CXX_COMPILER=${CMAKE_CXX_COMPILER}
                    -DANYPS5_LIFTED_RUNTIME=${PS5LIFT_HOST_RUNTIME}
-        BUILD_COMMAND ${CMAKE_COMMAND} --build <BINARY_DIR> --target ${PS5LIFT_ANYPS5_TARGETS}
+        BUILD_COMMAND ${CMAKE_COMMAND} --build <BINARY_DIR> --target libs relinker
         INSTALL_COMMAND ""
         BUILD_ALWAYS ON
         BUILD_BYPRODUCTS ${PS5LIFT_ANYPS5_BUILD}/core/relinker/relinker

@@ -1,10 +1,12 @@
 import json
 import platform
 import shlex
-import struct
+import sys
 from pathlib import Path
 
 ANYPS5 = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ANYPS5 / "tools"))
+import import_audit
 LIBS = ANYPS5 / "core" / "libs"
 # What a program that links AnyPS5's libraries links from the host besides them; macOS's libSystem holds libatomic and libdl.
 HOST_LIBRARIES = ["-pthread"] if platform.system() == "Darwin" else ["-pthread", "-latomic", "-ldl"]
@@ -27,23 +29,7 @@ class Build:
         return path
 
     def library_exports(self, name):
-        data = self.library(name).read_bytes()
-        if data[:4] == MACH_O_MAGIC:
-            return mach_o_exports(data, self.library(name))
-        offset, = struct.unpack_from("<Q", data, 0x28)
-        size, count = struct.unpack_from("<HH", data, 0x3a)
-        sections = [struct.unpack_from("<IIQQQQIIQQ", data, offset + index * size) for index in range(count)]
-        for _, kind, _, _, symbols, length, link, _, _, _ in sections:
-            if kind != 11:
-                continue
-            strings = sections[link][4]
-            names = set()
-            for symbol in range(symbols + 24, symbols + length, 24):
-                name, info, _, section = struct.unpack_from("<IBBH", data, symbol)
-                if section != 0 and info >> 4 != 0:
-                    names.add(data[strings + name:data.index(b"\0", strings + name)].decode())
-            return names
-        raise SystemExit(f"{self.library(name)} has no dynamic symbol table")
+        return import_audit.read_exports(self.library(name))
 
     def library_sources(self, name):
         target = f"/CMakeFiles/{name}.dir/"
@@ -58,32 +44,6 @@ class Build:
         if len(entries) != 1:
             raise SystemExit(f"AnyPS5's build compiles {path} {len(entries)} times, expected once")
         return entries[0]
-
-
-MACH_O_MAGIC = struct.pack("<I", 0xfeedfacf)
-LC_SYMTAB = 0x2
-N_EXT = 0x01
-N_TYPE = 0x0e
-N_SECT = 0x0e
-
-
-def mach_o_exports(data, path):
-    # The defined external symbols of a 64-bit Mach-O library, whose C names carry a leading underscore.
-    commands, = struct.unpack_from("<I", data, 16)
-    offset = 32
-    for _ in range(commands):
-        command, size = struct.unpack_from("<II", data, offset)
-        if command == LC_SYMTAB:
-            symbols, count, strings, _ = struct.unpack_from("<IIII", data, offset + 8)
-            names = set()
-            for index in range(count):
-                name, kind, _, _, _ = struct.unpack_from("<IBBHQ", data, symbols + 16 * index)
-                if kind & N_EXT and kind & N_TYPE == N_SECT:
-                    text = data[strings + name:data.index(b"\0", strings + name)].decode()
-                    names.add(text[1:] if text.startswith("_") else text)
-            return names
-        offset += size
-    raise SystemExit(f"{path} has no symbol table")
 
 
 def is_test(path):

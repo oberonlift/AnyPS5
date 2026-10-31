@@ -5,7 +5,9 @@ import collections
 import concurrent.futures
 import hashlib
 import os
+import platform
 import re
+import subprocess
 import sys
 from pathlib import Path
 
@@ -481,6 +483,13 @@ def resource_directory(libclang):
     return versions[0]
 
 
+def host_sdk():
+    # Apple's compiler driver adds the SDK xcrun names, so AnyPS5's compile commands leave it out and libclang needs it.
+    if platform.system() != "Darwin":
+        return []
+    return ["-isysroot", subprocess.run(["xcrun", "--show-sdk-path"], capture_output=True, text=True, check=True).stdout.strip()]
+
+
 def main():
     parser = argparse.ArgumentParser(description="Generate SysV-to-native import bridges for AnyPS5 libraries")
     parser.add_argument("library", nargs="+", help="AnyPS5 library targets, such as libc; for a NID that several export, the first one's export gets the bridge")
@@ -491,11 +500,12 @@ def main():
     parser.add_argument("--jobs", type=int, default=os.cpu_count())
     args = parser.parse_args()
 
-    initializer, initargs, extra = None, (), []
+    initializer, initargs, extra = None, (), host_sdk()
     if args.libclang is not None:
         if not args.libclang.is_file():
             parser.error(f"--libclang: {args.libclang} does not exist")
-        initializer, initargs, extra = use_libclang, (str(args.libclang),), ["-resource-dir", str(resource_directory(args.libclang))]
+        initializer, initargs = use_libclang, (str(args.libclang),)
+        extra += ["-resource-dir", str(resource_directory(args.libclang))]
     pool = concurrent.futures.ProcessPoolExecutor(args.jobs, initializer=initializer, initargs=initargs)
     exports, data, unsupported, parse_errors = {}, {}, {}, []
     build = Build(args.anyps5_build)
