@@ -43,7 +43,7 @@ bool EndsFlow(const Instruction& instruction) {
 
 using Predecessors = std::map<std::uint64_t, std::set<std::uint64_t>>;
 
-Predecessors PredecessorsOf(const GuestFunction& function) {
+Predecessors PredecessorsOf(const DecodedFunction& function) {
     Predecessors predecessors;
     for (const auto& [address, instruction] : function.Instructions) {
         const auto mnemonic = instruction.Info.mnemonic;
@@ -56,7 +56,7 @@ Predecessors PredecessorsOf(const GuestFunction& function) {
     return predecessors;
 }
 
-const Instruction* UniquePredecessor(const GuestFunction& function, const Predecessors& predecessors, const std::uint64_t address) {
+const Instruction* UniquePredecessor(const DecodedFunction& function, const Predecessors& predecessors, const std::uint64_t address) {
     const auto found = predecessors.find(address);
     if (address == function.Entry || found == predecessors.end() || found->second.size() != 1) return nullptr;
     return &function.Instructions.at(*found->second.begin());
@@ -89,7 +89,7 @@ bool WritesRegister(const Instruction& instruction, const ZydisRegister reg) {
     return false;
 }
 
-std::optional<std::uint64_t> BranchBound(const GuestFunction& function, const Instruction& compare) {
+std::optional<std::uint64_t> BranchBound(const DecodedFunction& function, const Instruction& compare) {
     const auto branch = function.Instructions.find(compare.Next());
     if (branch == function.Instructions.end()) return std::nullopt;
     const auto value = compare.Operands[1].imm.value.u;
@@ -117,7 +117,7 @@ std::optional<ZydisDecodedOperand> ZeroExtendedFrom(const Instruction& instructi
 
 // The instructions that set a register on the paths to an address, if one does on every path. A path from the entry,
 // from code without a known predecessor, or through a call that need not preserve the register has none.
-std::optional<std::vector<const Instruction*>> ReachingDefinitions(const GuestFunction& function, const Predecessors& predecessors, const std::uint64_t address,
+std::optional<std::vector<const Instruction*>> ReachingDefinitions(const DecodedFunction& function, const Predecessors& predecessors, const std::uint64_t address,
                                                                    const ZydisRegister reg) {
     std::vector<const Instruction*> definitions;
     std::set<std::uint64_t> visited{address};
@@ -142,7 +142,7 @@ std::optional<std::vector<const Instruction*>> ReachingDefinitions(const GuestFu
     return definitions;
 }
 
-const Instruction* SingleDefinition(const GuestFunction& function, const Predecessors& predecessors, const std::uint64_t address, const ZydisRegister reg) {
+const Instruction* SingleDefinition(const DecodedFunction& function, const Predecessors& predecessors, const std::uint64_t address, const ZydisRegister reg) {
     const auto definitions = ReachingDefinitions(function, predecessors, address, reg);
     return definitions && definitions->size() == 1 ? definitions->front() : nullptr;
 }
@@ -163,7 +163,7 @@ std::optional<ZydisRegister> CopiedRegister(const Instruction& instruction) {
 // The address a register holds at an instruction, if every definition that reaches it loads the same RIP-relative
 // address or copies a register that does: the compiler may set the register again, or keep it in another, on a path
 // that reuses it.
-std::optional<std::uint64_t> RipRelativeValue(const GuestFunction& function, const Predecessors& predecessors, const std::uint64_t address, const ZydisRegister reg) {
+std::optional<std::uint64_t> RipRelativeValue(const DecodedFunction& function, const Predecessors& predecessors, const std::uint64_t address, const ZydisRegister reg) {
     std::optional<std::uint64_t> value;
     std::set<std::pair<std::uint64_t, ZydisRegister>> visited;
     std::vector<std::pair<std::uint64_t, ZydisRegister>> pending{{address, reg}};
@@ -187,7 +187,7 @@ std::optional<std::uint64_t> RipRelativeValue(const GuestFunction& function, con
     return value;
 }
 
-std::optional<std::uint64_t> TableBound(const GuestFunction& function, const Predecessors& predecessors, const std::uint64_t jump, ZydisRegister index) {
+std::optional<std::uint64_t> TableBound(const DecodedFunction& function, const Predecessors& predecessors, const std::uint64_t jump, ZydisRegister index) {
     struct Compared {
         ZydisRegister Register;
         std::uint64_t Bound;
@@ -231,7 +231,7 @@ struct TableShape {
     std::uint64_t BoundFrom;
 };
 
-std::optional<TableShape> MatchTable(const GuestFunction& function, const Predecessors& predecessors, const Instruction& jump) {
+std::optional<TableShape> MatchTable(const DecodedFunction& function, const Predecessors& predecessors, const Instruction& jump) {
     const auto& target = jump.Operands[0];
     if (target.type != ZYDIS_OPERAND_TYPE_REGISTER) return std::nullopt;
     // The scheduler may move other instructions between the load of an entry, the addition of the base and the jump.
@@ -287,7 +287,7 @@ struct RecoveredTable {
 
 // A table's targets lie in the code between the function starts around its jump, which is the function's own code
 // unless the function jumped into code another one starts, as functions sharing a tail do.
-RecoveredTable RecoverJumpTable(const GuestImage& image, const GuestFunction& function, const Predecessors& predecessors, const Instruction& jump,
+RecoveredTable RecoverJumpTable(const GuestImage& image, const DecodedFunction& function, const Predecessors& predecessors, const Instruction& jump,
                                 const std::set<std::uint64_t>& starts, const std::set<std::uint64_t>& references) {
     constexpr std::uint64_t MaximumEntries = 4096;
     const auto shape = MatchTable(function, predecessors, jump);
@@ -369,7 +369,7 @@ bool Overwrites(const Instruction& instruction, const ZydisRegister reg) {
 // register that takes it in a lane holds it too, as when two pointers are paired to be stored at once. A call the
 // address is not passed to ends only the registers it may clobber, so one kept in a callee-saved register is followed
 // past it. A NOP's memory operand reads nothing, so the padding that aligns a loop after the lea does not count as a read.
-std::optional<std::uint64_t> TakenFunctionAddress(const GuestImage& image, const GuestFunction& function, const Instruction& lea) {
+std::optional<std::uint64_t> TakenFunctionAddress(const GuestImage& image, const DecodedFunction& function, const Instruction& lea) {
     const auto address = RipRelativeAddress(lea);
     if (!address || !image.IsExecutable(*address)) return std::nullopt;
     using Holders = std::set<ZydisRegister>;
@@ -455,15 +455,18 @@ Instruction DecodeReached(const GuestImage& image, const Decoder& decoder, const
 
 GuestFunction DiscoverFunction(const GuestImage& image, const Decoder& decoder, const std::set<std::uint64_t>& references, const std::uint64_t entry, const std::set<std::uint64_t>& starts,
                                std::set<std::uint64_t>& reachedStarts) {
-    GuestFunction function;
-    function.Entry = entry;
+    GuestFunction discovered;
+    discovered.Entry = entry;
     const auto symbol = image.FunctionSymbols().find(entry);
-    function.Name = symbol != image.FunctionSymbols().end() ? symbol->second : "sub_" + Hex(entry);
+    discovered.Name = symbol != image.FunctionSymbols().end() ? symbol->second : "sub_" + Hex(entry);
     if (const auto import = image.Imports().find(entry); import != image.Imports().end()) {
-        function.Import = import->second;
-        function.Name = import->second;
-        return function;
+        discovered.Import = import->second;
+        discovered.Name = import->second;
+        return discovered;
     }
+
+    DecodedFunction function;
+    function.Entry = entry;
 
     function.Leaders.insert(entry);
     std::deque<std::pair<std::uint64_t, std::uint64_t>> pending{{entry, entry}};
@@ -547,16 +550,19 @@ GuestFunction DiscoverFunction(const GuestImage& image, const Decoder& decoder, 
         if (RecoverJumpTable(image, function, predecessors, function.Instructions.at(jump), starts, references).Targets != targets)
             throw std::runtime_error("The jump table of the jump at 0x" + Hex(jump) + " in the function at 0x" + Hex(entry) + " reads differently once the code it leads to is known");
     }
-    return function;
+    discovered.Code.reserve(function.Instructions.size());
+    for (const auto& [address, instruction] : function.Instructions) discovered.Code.push_back({address, instruction.Info.length});
+    static_cast<FunctionFlow&>(discovered) = std::move(function);
+    return discovered;
 }
 
 // Whether one of these new starts can change how the function decodes. Its code stops where another function starts,
 // and a jump table ends at the starts around its jump, so only a start within the span of its instructions and table
 // targets matters.
 bool SpansAny(const GuestFunction& function, const std::set<std::uint64_t>& added) {
-    if (function.Instructions.empty()) return false;
-    auto low = function.Instructions.begin()->first;
-    auto high = function.Instructions.rbegin()->second.Next();
+    if (function.Code.empty()) return false;
+    auto low = function.Code.front().Address;
+    auto high = function.Code.back().Next();
     for (const auto& [jump, targets] : function.JumpTables) {
         for (const auto target : targets) {
             low = std::min(low, target);
@@ -574,9 +580,9 @@ constexpr std::uint64_t FunctionAlignment = 16;
 std::vector<std::pair<std::uint64_t, std::uint64_t>> CoveredCode(const std::map<std::uint64_t, GuestFunction>& functions) {
     std::vector<std::pair<std::uint64_t, std::uint64_t>> ranges;
     for (const auto& [entry, function] : functions) {
-        for (const auto& [address, instruction] : function.Instructions) {
-            if (!ranges.empty() && ranges.back().second == address) ranges.back().second = instruction.Next();
-            else ranges.emplace_back(address, instruction.Next());
+        for (const auto& span : function.Code) {
+            if (!ranges.empty() && ranges.back().second == span.Address) ranges.back().second = span.Next();
+            else ranges.emplace_back(span.Address, span.Next());
         }
     }
     std::sort(ranges.begin(), ranges.end());
@@ -625,6 +631,10 @@ std::set<std::uint64_t> PaddedStarts(const GuestImage& image, const Decoder& dec
 
 std::uint64_t Instruction::Next() const {
     return Address + Info.length;
+}
+
+std::uint64_t InstructionSpan::Next() const {
+    return Address + Length;
 }
 
 Decoder::Decoder() {
@@ -776,6 +786,19 @@ std::map<std::uint64_t, GuestFunction> DiscoverFunctions(const GuestImage& image
         if (added.empty()) return functions;
         starts.insert(added.begin(), added.end());
     }
+}
+
+DecodedFunction Decode(const GuestImage& image, const GuestFunction& function) {
+    const Decoder decoder;
+    DecodedFunction decoded;
+    static_cast<FunctionFlow&>(decoded) = function;
+    for (const auto& span : function.Code) {
+        auto instruction = decoder.Decode(image, span.Address);
+        if (instruction.Info.length != span.Length)
+            throw std::logic_error("The instruction at 0x" + Hex(span.Address) + " in the function at 0x" + Hex(function.Entry) + " decodes to another length than discovery found");
+        decoded.Instructions.emplace_hint(decoded.Instructions.end(), span.Address, std::move(instruction));
+    }
+    return decoded;
 }
 
 }

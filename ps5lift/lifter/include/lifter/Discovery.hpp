@@ -25,15 +25,34 @@ struct Instruction {
     std::uint64_t Next() const;
 };
 
-struct GuestFunction {
-    std::uint64_t Entry;
-    std::string Name;
-    std::optional<std::string> Import;
-    std::map<std::uint64_t, Instruction> Instructions;
+// Where one of a function's instructions lies; its bytes stay in the image.
+struct InstructionSpan {
+    std::uint64_t Address;
+    std::uint8_t Length;
+
+    std::uint64_t Next() const;
+};
+
+// What discovery learns about a function's control flow.
+struct FunctionFlow {
+    std::uint64_t Entry = 0;
     std::set<std::uint64_t> Leaders;
     std::map<std::uint64_t, std::vector<std::uint64_t>> JumpTables;
     std::set<std::uint64_t> UnguardedJumpTables;
     std::set<std::uint64_t> ResumePoints;
+};
+
+// A discovered function as every function is kept: its instructions only by where they lie, since a decoded instruction
+// takes some 1.1 KiB and a large title has tens of millions of them.
+struct GuestFunction : FunctionFlow {
+    std::string Name;
+    std::optional<std::string> Import;
+    std::vector<InstructionSpan> Code;
+};
+
+// One function with its instructions decoded, while discovery or the lifter works on it.
+struct DecodedFunction : FunctionFlow {
+    std::map<std::uint64_t, Instruction> Instructions;
 };
 
 class Decoder {
@@ -58,6 +77,7 @@ std::optional<std::string> JumpBufferFunction(const std::string& import);
 bool ReturnsTwice(const std::string& import);
 
 std::map<std::uint64_t, GuestFunction> DiscoverFunctions(const GuestImage& image);
+DecodedFunction Decode(const GuestImage& image, const GuestFunction& function);
 
 }
 

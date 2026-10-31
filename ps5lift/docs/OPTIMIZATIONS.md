@@ -6,7 +6,7 @@ Rules for every item:
 
 - Correctness comes first. `ctest` passes with both memory models and every fixture, and EVO Player still reaches its home screen.
 - Lifted code runs only on Linux, so timings come from the GB10. The Mac can lift and read the generated code.
-- Lifting a title takes about 20 minutes and up to 65 GB, so iterate on EVO Player or the probe below, and lift a title once for the final number.
+- Lifting a title takes about 11 minutes and 13 GB on the GB10, so iterate on EVO Player or the probe below, and lift a title once for the final number.
 
 ## Baseline
 

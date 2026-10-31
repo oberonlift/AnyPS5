@@ -19,7 +19,7 @@ namespace {
 constexpr std::size_t InstructionsPerPart = 50000;
 
 std::size_t Weight(const GuestFunction& function) {
-    return std::max<std::size_t>(1, function.Instructions.size());
+    return std::max<std::size_t>(1, function.Code.size());
 }
 
 struct Part {
