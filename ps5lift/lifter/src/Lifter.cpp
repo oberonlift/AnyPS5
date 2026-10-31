@@ -2513,8 +2513,12 @@ private:
         return _module.Options().Float == FloatModel::Exact;
     }
 
+    // LLVM lets an operation that produces a NaN produce any NaN, so it may drop a select that only picks another one:
+    // LLVM 23 turns isnan(sqrt(x)) into x < 0 and then a select between a NaN and sqrt(x) on it into sqrt(x). The fence
+    // keeps the host's result opaque to such folds, at no cost in code.
     llvm::Value* NanResult(llvm::Value* result, std::initializer_list<llvm::Value*> sources) {
         if (!ExactFloat()) return result;
+        result = _builder.CreateUnaryIntrinsic(llvm::Intrinsic::arithmetic_fence, result);
         llvm::Value* value = _builder.CreateSelect(IsNan(result), DefaultNan(result->getType()), result);
         std::vector<llvm::Value*> ordered(sources);
         for (auto it = ordered.rbegin(); it != ordered.rend(); ++it) value = _builder.CreateSelect(IsNan(*it), Quiet(*it), value);
