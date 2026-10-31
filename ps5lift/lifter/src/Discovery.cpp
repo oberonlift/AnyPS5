@@ -345,6 +345,11 @@ bool PassesArgument(const ZydisRegister reg) {
     }
 }
 
+bool IsVectorRegister(const ZydisRegister reg) {
+    const auto type = ZydisRegisterGetClass(reg);
+    return type == ZYDIS_REGCLASS_XMM || type == ZYDIS_REGCLASS_YMM || type == ZYDIS_REGCLASS_ZMM;
+}
+
 // Whether the instruction always replaces the register's value; a conditional move may keep it.
 bool Overwrites(const Instruction& instruction, const ZydisRegister reg) {
     for (std::uint8_t i = 0; i < instruction.Info.operand_count; ++i) {
@@ -360,7 +365,8 @@ bool Overwrites(const Instruction& instruction, const ZydisRegister reg) {
 // no path from the lea reads memory through it first. The registers that hold it are followed for as long as one does,
 // however many other instructions come first, along both ways of a conditional jump and across the jumps within the
 // function: a constructor can fill in dozens of an object's fields before it stores a callback taken at its start, and
-// a move, or a conditional move that picks one of two callbacks, copies the address to another register. A call the
+// a move, or a conditional move that picks one of two callbacks, copies the address to another register, and a vector
+// register that takes it in a lane holds it too, as when two pointers are paired to be stored at once. A call the
 // address is not passed to ends only the registers it may clobber, so one kept in a callee-saved register is followed
 // past it. A NOP's memory operand reads nothing, so the padding that aligns a loop after the lea does not count as a read.
 std::optional<std::uint64_t> TakenFunctionAddress(const GuestImage& image, const GuestFunction& function, const Instruction& lea) {
@@ -388,7 +394,9 @@ std::optional<std::uint64_t> TakenFunctionAddress(const GuestImage& image, const
             }
             const auto& target = instruction.Operands[0];
             const auto& source = instruction.Operands[1];
-            const bool stored = mnemonic == ZYDIS_MNEMONIC_MOV && target.type == ZYDIS_OPERAND_TYPE_MEMORY && holds(source);
+            bool readsHolder = false;
+            for (std::uint8_t i = 1; i < instruction.Info.operand_count_visible; ++i) readsHolder = readsHolder || holds(instruction.Operands[i]);
+            const bool stored = target.type == ZYDIS_OPERAND_TYPE_MEMORY && (target.actions & ZYDIS_OPERAND_ACTION_MASK_WRITE) && readsHolder;
             if (((mnemonic == ZYDIS_MNEMONIC_CALL || mnemonic == ZYDIS_MNEMONIC_JMP || mnemonic == ZYDIS_MNEMONIC_PUSH) && holds(target)) || stored) {
                 used = true;
                 break;
@@ -422,6 +430,10 @@ std::optional<std::uint64_t> TakenFunctionAddress(const GuestImage& image, const
             }
             const bool copies = mnemonic == ZYDIS_MNEMONIC_MOV || instruction.Info.meta.category == ZYDIS_CATEGORY_CMOV;
             if (copies && target.type == ZYDIS_OPERAND_TYPE_REGISTER && target.size == 64 && holds(source)) {
+                holders.insert(Enclosing(target.reg.value));
+                continue;
+            }
+            if (target.type == ZYDIS_OPERAND_TYPE_REGISTER && IsVectorRegister(target.reg.value) && readsHolder) {
                 holders.insert(Enclosing(target.reg.value));
                 continue;
             }
