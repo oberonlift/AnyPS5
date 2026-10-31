@@ -3,7 +3,7 @@ import shlex
 import struct
 from pathlib import Path
 
-ANYPS5 = Path(__file__).resolve().parent.parent / "3rdparty" / "anyps5"
+ANYPS5 = Path(__file__).resolve().parents[2]
 LIBS = ANYPS5 / "core" / "libs"
 DEPENDENCY_OPTIONS = {"-o", "-MF", "-MT", "-MQ"}
 

@@ -10,7 +10,7 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-SOFTFLOAT = ROOT / "3rdparty" / "softfloat"
+SOFTFLOAT = ROOT.parent / "3rdparty" / "softfloat"
 RUNTIME_SOURCES = ["runtime/src/Runtime.cpp", "runtime/src/GuestCpu.cpp", "runtime/src/X87.cpp", "runtime/src/Jump.cpp", "runtime/src/Cpuid.cpp", "runtime/src/StringCompare.cpp", "runtime/src/NativeCall.cpp"]
 MAIN_SOURCE = "runtime/src/Main.cpp"
 SOFTFLOAT_FLAGS = [
@@ -20,7 +20,7 @@ SOFTFLOAT_FLAGS = [
 
 
 def softfloat_sources():
-    return [ROOT / line.strip() for line in (ROOT / "runtime" / "softfloat_sources.txt").read_text().splitlines() if line.strip()]
+    return [ROOT.parent / line.strip() for line in (ROOT / "runtime" / "softfloat_sources.txt").read_text().splitlines() if line.strip()]
 
 
 def directory_for(build_root, triple):
