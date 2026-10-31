@@ -83,5 +83,5 @@ long host_call_eight(long (*function)(long, long, long, long, long, long, long, 
 }
 
 long host_call_recorded(const struct RecordedCalls* calls, long base) {
-    return calls->integers(base, base + 1, base + 2, base + 3, base + 4, base + 5, base + 6, base + 7) + (long)(calls->mixed(1.5, base, 0.25) * 1000.0);
+    return calls->integers(base, base + 1, base + 2, base + 3, base + 4, base + 5, base + 6, base + 7) + (long)(calls->mixed(1.5, base, 0.25) * 1000.0) + calls->unaligned(base, 3);
 }

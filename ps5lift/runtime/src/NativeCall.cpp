@@ -13,10 +13,11 @@
 
 // Native code calls a guest function through a plain pointer when it reads one from guest memory, such as a callback
 // in a structure the guest filled in. Guest code is mapped without execute permission, so the call faults on its first
-// instruction; the handler sends it to the trampoline with the guest address in a scratch register that no call
-// preserves. The trampoline saves the host's argument registers, runs the lifted function with them as the SysV ones,
-// and returns its results the same way. The integer arguments the host passes beyond the sixth in registers go on the
-// guest stack; arguments the host passes on its stack, and records returned through memory, do not cross.
+// instruction with SIGSEGV, or with SIGBUS on aarch64 when the function's address is not a multiple of four, which no
+// branch there can reach; the handler sends it to the trampoline with the guest address in a scratch register that no
+// call preserves. The trampoline saves the host's argument registers, runs the lifted function with them as the SysV
+// ones, and returns its results the same way. The integer arguments the host passes beyond the sixth in registers go on
+// the guest stack; arguments the host passes on its stack, and records returned through memory, do not cross.
 
 namespace {
 
@@ -31,7 +32,8 @@ constexpr int GuestIntegerArguments = 6;
 constexpr int GuestVectorArguments = 8;
 constexpr int StackedIntegerArguments = 2;
 
-struct sigaction Previous;
+struct sigaction PreviousSegv;
+struct sigaction PreviousBus;
 
 bool InsideGuestImage(const std::uint64_t address) {
     for (std::uint64_t image = 0; image < ps5lift_program.ImageCount; ++image) {
@@ -163,15 +165,16 @@ void Redirect(const int signal, siginfo_t* const info, void* const context) {
         pc = reinterpret_cast<std::uint64_t>(&ps5lift_native_call_trampoline);
         return;
     }
-    if ((Previous.sa_flags & SA_SIGINFO) != 0) return Previous.sa_sigaction(signal, info, context);
-    if (Previous.sa_handler == SIG_DFL || Previous.sa_handler == SIG_IGN) {
+    const auto& previous = signal == SIGBUS ? PreviousBus : PreviousSegv;
+    if ((previous.sa_flags & SA_SIGINFO) != 0) return previous.sa_sigaction(signal, info, context);
+    if (previous.sa_handler == SIG_DFL || previous.sa_handler == SIG_IGN) {
         struct sigaction fallback {};
         fallback.sa_handler = SIG_DFL;
         sigemptyset(&fallback.sa_mask);
         sigaction(signal, &fallback, nullptr);
         return;
     }
-    Previous.sa_handler(signal);
+    previous.sa_handler(signal);
 }
 
 }
@@ -183,7 +186,7 @@ void InstallNativeCalls() {
     action.sa_sigaction = Redirect;
     action.sa_flags = SA_SIGINFO;
     sigemptyset(&action.sa_mask);
-    if (sigaction(SIGSEGV, &action, &Previous) != 0) ps5lift_fail("cannot install the handler for native calls into guest code: %s", std::strerror(errno));
+    if (sigaction(SIGSEGV, &action, &PreviousSegv) != 0 || sigaction(SIGBUS, &action, &PreviousBus) != 0) ps5lift_fail("cannot install the handler for native calls into guest code: %s", std::strerror(errno));
 }
 
 }
