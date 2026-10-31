@@ -336,7 +336,7 @@ private:
 
 class FunctionLifter {
 public:
-    FunctionLifter(ModuleLifter& module, const GuestFunction& function)
+    FunctionLifter(ModuleLifter& module, const DecodedFunction& function)
         : _module(module), _function(function), _host(module.Guest(function.Entry)), _builder(module.Context()) {}
 
     void Lift() {
@@ -391,7 +391,7 @@ public:
 
 private:
     ModuleLifter& _module;
-    const GuestFunction& _function;
+    const DecodedFunction& _function;
     llvm::Function* _host;
     llvm::IRBuilder<> _builder;
     llvm::Value* _state = nullptr;
@@ -3752,7 +3752,7 @@ private:
 };
 
 void ModuleLifter::LiftFunction(const GuestFunction& function) {
-    FunctionLifter(*this, function).Lift();
+    FunctionLifter(*this, Decode(_image, function)).Lift();
 }
 
 }
