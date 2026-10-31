@@ -1346,20 +1346,39 @@ DrawInputCopy CopyDrawInput(const Context& context, Recorder* recorder, std::uin
     return copy;
 }
 
+struct ZeroPaddedInput {
+    VkDevice device = VK_NULL_HANDLE;
+    std::uint64_t address = 0;
+    std::size_t bytes = 0;
+    std::vector<std::byte> contents;
+    std::shared_ptr<Buffer> buffer;
+};
+
 DrawInputCopy CopyZeroPaddedDrawInput(const Context& context, std::uint64_t address, std::size_t bytes, std::size_t validBytes, std::size_t stride) {
     Require(validBytes <= bytes, "the valid bytes of a vertex fetch exceed the fetch");
     GuestMemory::FlushGpuWrites(address, bytes);
-    DrawInputCopy copy;
-    copy.buffer = std::make_shared<Buffer>(context, bytes, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT);
-    const auto span = copy.buffer->Bytes();
     auto readable = validBytes;
     if (stride != 0 && !GuestMemory::Accessible(reinterpret_cast<const void*>(address), validBytes)) {
         const auto ranges = GuestMemory::CommittedRanges(address, validBytes);
         const std::size_t prefix = !ranges.empty() && ranges.front().first == address ? static_cast<std::size_t>(ranges.front().second - address) : 0;
         if (validBytes - prefix < stride) readable = prefix;
     }
-    GuestMemory::Read(address, span.subspan(0, readable), 1);
+    constexpr std::size_t CachedInputs = 64;
+    thread_local auto& cached = *new std::array<ZeroPaddedInput, CachedInputs>();
+    thread_local std::vector<std::byte> contents;
+    contents.resize(readable);
+    GuestMemory::Read(address, std::span<std::byte>(contents), 1);
+    auto& entry = cached[((address >> 4u) ^ bytes) % CachedInputs];
+    DrawInputCopy copy;
+    if (entry.buffer != nullptr && entry.device == context.device && entry.address == address && entry.bytes == bytes && entry.contents == contents) {
+        copy.buffer = entry.buffer;
+        return copy;
+    }
+    copy.buffer = std::make_shared<Buffer>(context, bytes, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT);
+    const auto span = copy.buffer->Bytes();
+    std::copy(contents.begin(), contents.end(), span.begin());
     std::fill(span.begin() + static_cast<std::ptrdiff_t>(readable), span.end(), std::byte{0});
+    entry = ZeroPaddedInput{context.device, address, bytes, contents, copy.buffer};
     return copy;
 }
 
