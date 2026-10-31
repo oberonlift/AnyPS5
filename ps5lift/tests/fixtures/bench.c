@@ -32,7 +32,9 @@ enum {
     RecordCount = BENCH_SCALE << 12,
     TableBits = 16,
     TableSize = 1 << TableBits,
-    SortCount = BENCH_SCALE << 12
+    SortCount = BENCH_SCALE << 12,
+    DispatchCount = 1 << 16,
+    DispatchCalls = BENCH_SCALE << 16
 };
 
 struct Record {
@@ -185,6 +187,30 @@ __attribute__((noinline)) static u64 bench_sort(void) {
     return sum;
 }
 
+/* DispatchCount functions, each called only through a table, so a lifted call to one goes through the runtime's
+   dispatch, which looks the guest address up among every function of the program. HEX4 names them 0000 to ffff. */
+#define HEX1(apply, p) apply(p##0) apply(p##1) apply(p##2) apply(p##3) apply(p##4) apply(p##5) apply(p##6) apply(p##7) apply(p##8) apply(p##9) apply(p##a) apply(p##b) apply(p##c) apply(p##d) apply(p##e) apply(p##f)
+#define HEX2(apply, p) HEX1(apply, p##0) HEX1(apply, p##1) HEX1(apply, p##2) HEX1(apply, p##3) HEX1(apply, p##4) HEX1(apply, p##5) HEX1(apply, p##6) HEX1(apply, p##7) \
+    HEX1(apply, p##8) HEX1(apply, p##9) HEX1(apply, p##a) HEX1(apply, p##b) HEX1(apply, p##c) HEX1(apply, p##d) HEX1(apply, p##e) HEX1(apply, p##f)
+#define HEX3(apply, p) HEX2(apply, p##0) HEX2(apply, p##1) HEX2(apply, p##2) HEX2(apply, p##3) HEX2(apply, p##4) HEX2(apply, p##5) HEX2(apply, p##6) HEX2(apply, p##7) \
+    HEX2(apply, p##8) HEX2(apply, p##9) HEX2(apply, p##a) HEX2(apply, p##b) HEX2(apply, p##c) HEX2(apply, p##d) HEX2(apply, p##e) HEX2(apply, p##f)
+#define HEX4(apply) HEX3(apply, 0) HEX3(apply, 1) HEX3(apply, 2) HEX3(apply, 3) HEX3(apply, 4) HEX3(apply, 5) HEX3(apply, 6) HEX3(apply, 7) \
+    HEX3(apply, 8) HEX3(apply, 9) HEX3(apply, a) HEX3(apply, b) HEX3(apply, c) HEX3(apply, d) HEX3(apply, e) HEX3(apply, f)
+#define DISPATCH_TARGET(id) static u64 dispatch_##id(u64 value) { return value * 0x9e3779b97f4a7c15ul + 0x##id; }
+#define DISPATCH_ENTRY(id) dispatch_##id,
+HEX4(DISPATCH_TARGET)
+static u64 (*const dispatch_targets[DispatchCount])(u64) = {HEX4(DISPATCH_ENTRY)};
+
+__attribute__((noinline)) static u64 bench_dispatch(void) {
+    u64 value = 1;
+    u64 index = 0x2545f4914f6cdd1dul;
+    for (u32 i = 0; i < DispatchCalls; ++i) {
+        index = index * 6364136223846793005ul + 1442695040888963407ul;
+        value = dispatch_targets[(index >> 48) & (DispatchCount - 1)](value);
+    }
+    return value;
+}
+
 static void run(const char* name, u64 (*kernel)(void)) {
     u64 begin = host_ticks();
     u64 checksum = kernel();
@@ -197,6 +223,7 @@ int main(void) {
     run("copy", bench_copy);
     run("hash", bench_hash);
     run("sort", bench_sort);
+    run("dispatch", bench_dispatch);
     return 0;
 }
 
