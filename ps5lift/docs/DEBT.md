@@ -7,6 +7,7 @@ A review of the whole tree in October 2026 found these. Each gives a wrong resul
 ### Lifter
 
 - A divide error (a zero divisor or a quotient wider than the operand) stops the program with its address, as `ud2` and `int3` do; a guest exception handler does not see it.
+- Under `--memory tso`, accesses through `rsp` are plain in every function ([Lifter.cpp](../lifter/src/Lifter.cpp), `NeedsOrdering`), including functions that hand out the address of a local. Suppose another thread updates such a local through a pointer, as with a job counter or completion flag on the waiting thread's stack, which x86 reads and writes with a plain `mov` even for `std::atomic`. Then the owner's read of it is not ordered before its later reads, so it can see the other thread's results before the flag says they are ready. A spin loop on it can also hang: `pause` lifts to nothing, so LLVM may hoist the load out of the loop. [Optimizations](OPTIMIZATIONS.md), item 2, orders the frames that escape.
 
 ### x87
 
