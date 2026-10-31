@@ -19,7 +19,7 @@ Only the user can settle these. Ask before starting the work that depends on one
 
 ## The patch set
 
-On 2026-10-31: 40 commits on upstream `ac551a1`, ending at the commit the superproject pins. The branch `aarch64-host`, locally and on the fork's remote, sits on an older upstream and is superseded.
+On 2026-10-31: 45 commits on upstream `ac551a1`, ending at the commit the superproject pins. The branch `aarch64-host`, locally and on the fork's remote, sits on an older upstream and is superseded.
 
 The submodule has no `upstream` remote. Fetch by URL, then list the patch set:
 
@@ -30,7 +30,7 @@ git -C 3rdparty/anyps5 log --reverse --format='%h %s' upstream/main..HEAD
 
 The patches fall in four groups, listed one by one under [upstream pull requests](#upstream-pull-requests):
 
-- **Building for a lifted guest on aarch64 Linux and macOS**, mostly behind `ANYPS5_GUEST_LIFTED`: the build switch and the libraries' link to ps5lift's runtime, the guest FPU state and timestamp counter through `GuestCpu`, x87 `long double` converted at libc's boundaries and then kept exactly in a class whose arithmetic runs on the runtime's x87, guest `va_list`s, unwinding, `dl_iterate_phdr`, fibers (which stop when resumed on another thread), libkernel's macOS calls, and fixes for Clang and for upstream's macOS build (the write watch tests, the host thread's stack, a numeric host's canonical name), and the formatting tests' x87 digits checked only where the host's `long double` holds them.
+- **Building for a lifted guest on aarch64 Linux and macOS**, mostly behind `ANYPS5_GUEST_LIFTED`: the build switch and the libraries' link to ps5lift's runtime, the guest FPU state and timestamp counter through `GuestCpu`, x87 `long double` converted at libc's boundaries and then kept exactly in a class whose arithmetic runs on the runtime's x87, guest `va_list`s, unwinding, `dl_iterate_phdr`, fibers (which stop when resumed on another thread), libkernel's macOS calls, the GPU driver on macOS through host-pointer imports, patched libraries signed again on arm64, and fixes for Clang and for upstream's macOS build (the write watch tests, the host thread's stack, a numeric host's canonical name, Mach-O libraries in the import audit), and the formatting tests' x87 digits checked only where the host's `long double` holds them.
 - **libkernel for lifted programs**: guest thread stacks of the requested size, thread objects in guest memory, `dlopen` of lifted modules, and module information and module lists for lifted images, which the runtime's image list holds.
 - **A network policy**: `APS5_NETWORK=0` takes the guest offline, and `APS5_NETWORK_ALLOW` and `APS5_NETWORK_DENY` limit the domains it may resolve. Networking stays on by default, as upstream has it.
 - **Fixes found on titles**, none specific to lifting: HTTP/2 (the redirect callback, asynchronous send and read, HTTP/1.x lookups) for the EOS SDK in two Unreal titles, 16-bit access to converted images, `sceNpGetSandboxInfo`, a GPU snapshot that overlaps a writable range, and helper functions that NVIDIA's driver may inline.
@@ -56,6 +56,8 @@ Read from the diffs on 2026-10-30 and 2026-10-31, not measured. Most patches com
 | the HTTP/2 patches, 16-bit converted images, sceNpGetSandboxInfo | Paths that threw or were refused before. |
 | the Clang fixes | Compile time only. |
 | name a numeric host as its own canonical name | With `AI_CANONNAME`, a numeric node's first result names the node itself, as glibc's already did; one or two `inet_pton` calls per such lookup. |
+| build the GPU driver on macOS | None on Linux and Windows: the dma-buf imports build on Linux, where they always ran. |
+| read Mach-O libraries in the import audit | None: a third reader, for images that start with Mach-O's magic. |
 | query the host thread's stack in one place | On Windows the AGC driver's guest memory check asks `GetCurrentThreadStackLimits` on every call instead of once per thread, as the other checks did. |
 | register the write watch fault tests once; build the libraries for a lifted guest on macOS | None on Linux and Windows. On macOS, where upstream `main` no longer compiles libkernel (`st_atim`, `sched_getcpu`, `RUSAGE_THREAD`), libkernel takes macOS calls for those and for pipes, `fsync`, `statfs`, directory descriptors, shared memory and direct memory, and the libraries' tests configure. |
 
@@ -71,7 +73,7 @@ What runs today:
 What follows from that:
 
 - The lifted paths compile only when someone builds AnyPS5-lift, so upstream changes break them unseen. The 2026-10-30 rebase needed two new patches, `default-construct HostGainRamp implicitly` and `cast vtable entries to functions in one place`, for new upstream code that GCC accepts and Clang rejects.
-- 27 of the 40 patches change no test file. Most compile only in the lifted build, which AnyPS5-lift's tests cover indirectly. `allocate thread objects in guest memory` changes the x86 build and has no test.
+- 31 of the 45 patches change no test file. Most compile only in the lifted build, which AnyPS5-lift's tests cover indirectly. `allocate thread objects in guest memory` changes the x86 build and has no test.
 
 Work items, in order:
 
@@ -112,6 +114,7 @@ Each applies to the x86 build too, and each one merged shrinks the patch set.
 | 10 | Write watch tests on macOS | register the write watch fault tests once | none | Upstream's CI does not build that directory, which only macOS builds. |
 | 11 | The host thread's stack | query the host thread's stack in one place | none | No change on Linux; on Windows see [the x86 cost](#what-the-patch-set-costs-an-x86-build). Its macOS branch is what upstream's macOS build lacked. |
 | 12 | Numeric canonical names | name a numeric host as its own canonical name | none | Upstream's macOS build has the same `getaddrinfo`. |
+| 13 | Mach-O import audit | read Mach-O libraries in the import audit | none | Upstream's macOS build makes Mach-O libraries too. |
 
 ### Phase 2: the lifted target
 
@@ -119,13 +122,13 @@ Only if upstream wants a lifted aarch64 target in its tree; ask in a discussion 
 
 | # | Pull request | Patches | Depends on | Notes |
 |---|---|---|---|---|
-| 13 | Portable CPU helpers | reach the guest FPU state through GuestCpu; use portable timestamp and spin pause; spin and diff guest memory portably; take the FFmpeg package for the target's architecture; the `ReadTsc` part of build for a lifted guest (libkernel) | none | No change on x86, so it can also go in phase 1 as a refactor. Split `ReadTsc` out of the libkernel patch. |
-| 14 | The build switch and its CI | add ANYPS5_GUEST_LIFTED to build the libraries for ps5lift; link lifted libraries against the ps5lift runtime | 13 | Add a workflow that builds the libraries with Clang and `ANYPS5_GUEST_LIFTED` on an arm64 runner. |
-| 15 | Guest long double | convert guest long double at its boundaries; keep the guest's long double exactly in lifted builds | 14 | Needs the runtime's `GuestCpuExtended*` entry points. |
-| 16 | Guest va_lists | read guest va_lists portably in lifted builds; start err and warn va_lists with APS5_VA_BEGIN | 15 | Uses `GuestLongDoubleRound` from 15. |
-| 17 | x86-only libc helpers | build the x86-only helpers portably for a lifted guest | 14 | |
-| 18 | Unwinding and exception pointers | unwind guest frames from the lifted guest state; keep the host's exception pointers in lifted builds | 14 | The `host_exception_pointer` test runs on x86 too. |
-| 19 | Lifted threads | the rest of build for a lifted guest (libkernel); call a lifted thread entry as the native callback it is; run a lifted guest thread on the stack it asked for; allocate thread objects in guest memory | 13, 14 | Add the thread-object test from [tests and CI](#tests-and-ci). |
-| 20 | Lifted images and modules | iterate the lifted program's guest images in dl_iterate_phdr; find lifted guest images in sceKernelGetModuleInfoFromAddr; load modules that are part of a lifted program; find a lifted guest's images through the runtime | 19 | Unblocks an Unreal title (module information). |
-| 21 | Fibers on aarch64 | switch fibers for a lifted guest on aarch64; stop a lifted fiber resumed on another thread | 19 | |
-| 22 | Lifted macOS | build the libraries for a lifted guest on macOS; check x87 long double digits only where the host holds them | 11, 19, 20 | Split out libkernel's macOS calls, which upstream's own macOS build needs, as a phase 1 pull request. |
+| 14 | Portable CPU helpers | reach the guest FPU state through GuestCpu; use portable timestamp and spin pause; spin and diff guest memory portably; take the FFmpeg package for the target's architecture; the `ReadTsc` part of build for a lifted guest (libkernel) | none | No change on x86, so it can also go in phase 1 as a refactor. Split `ReadTsc` out of the libkernel patch. |
+| 15 | The build switch and its CI | add ANYPS5_GUEST_LIFTED to build the libraries for ps5lift; link lifted libraries against the ps5lift runtime | 14 | Add a workflow that builds the libraries with Clang and `ANYPS5_GUEST_LIFTED` on an arm64 runner. |
+| 16 | Guest long double | convert guest long double at its boundaries; keep the guest's long double exactly in lifted builds | 15 | Needs the runtime's `GuestCpuExtended*` entry points. |
+| 17 | Guest va_lists | read guest va_lists portably in lifted builds; start err and warn va_lists with APS5_VA_BEGIN | 16 | Uses `GuestLongDoubleRound` from 16. |
+| 18 | x86-only libc helpers | build the x86-only helpers portably for a lifted guest | 15 | |
+| 19 | Unwinding and exception pointers | unwind guest frames from the lifted guest state; keep the host's exception pointers in lifted builds | 15 | The `host_exception_pointer` test runs on x86 too. |
+| 20 | Lifted threads | the rest of build for a lifted guest (libkernel); call a lifted thread entry as the native callback it is; run a lifted guest thread on the stack it asked for; allocate thread objects in guest memory | 14, 15 | Add the thread-object test from [tests and CI](#tests-and-ci). |
+| 21 | Lifted images and modules | iterate the lifted program's guest images in dl_iterate_phdr; find lifted guest images in sceKernelGetModuleInfoFromAddr; load modules that are part of a lifted program; find a lifted guest's images through the runtime | 20 | Unblocks an Unreal title (module information). |
+| 22 | Fibers on aarch64 | switch fibers for a lifted guest on aarch64; stop a lifted fiber resumed on another thread | 20 | |
+| 23 | Lifted macOS | build the libraries for a lifted guest on macOS; check x87 long double digits only where the host holds them; build the GPU driver on macOS; sign the NID-patched libraries again on arm64 macOS; patch NIDs on hosts that do not sign their libraries; map without replacing through mach_vm_allocate on macOS | 11, 20, 21 | Split out libkernel's macOS calls, which upstream's own macOS build needs, as a phase 1 pull request. Squash the NID patch fix into the signing patch it fixes. |
