@@ -196,7 +196,12 @@ Ps5LiftFunction ps5lift_resolve(uint64_t target);
 void ps5lift_apply_mxcsr(Ps5LiftState* state);
 uint32_t ps5lift_read_mxcsr(Ps5LiftState* state);
 uint32_t ps5lift_x87(Ps5LiftState* state, uint32_t operation, uint32_t format, uint64_t address, uint32_t index);
-void ps5lift_extended_arithmetic(Ps5LiftState* state, uint32_t operation, const void* left, const void* right, void* result);
+// x87 operations on 80-bit values in memory rather than on the guest's register stack, rounding and raising exceptions
+// as the guest's control and status words say: an arithmetic operation, PS5LIFT_X87_SQUARE_ROOT or PS5LIFT_X87_ROUND
+// (whose right operand is ignored), and loads and stores of any x87 memory format.
+void ps5lift_extended_operation(Ps5LiftState* state, uint32_t operation, const void* left, const void* right, void* result);
+void ps5lift_extended_load(Ps5LiftState* state, uint32_t format, const void* source, void* result);
+void ps5lift_extended_store(Ps5LiftState* state, uint32_t format, const void* value, void* destination);
 // A host long double holds every x87 value where it is x87's own format or IEEE binary128; on macOS for arm64 it is a
 // double.
 #if LDBL_MANT_DIG == 64 || LDBL_MANT_DIG == 113

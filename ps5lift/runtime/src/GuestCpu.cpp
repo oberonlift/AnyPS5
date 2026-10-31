@@ -56,6 +56,48 @@ extern "C" void GuestCpuStoreExtended_nid_no_patch(const long double* host, void
 }
 #endif
 
+extern "C" void GuestCpuExtendedAdd_nid_no_patch(const void* left, const void* right, void* result) {
+    ps5lift_extended_operation(ps5lift_current_state(), PS5LIFT_X87_ADD, left, right, result);
+}
+
+extern "C" void GuestCpuExtendedSubtract_nid_no_patch(const void* left, const void* right, void* result) {
+    ps5lift_extended_operation(ps5lift_current_state(), PS5LIFT_X87_SUBTRACT, left, right, result);
+}
+
+extern "C" void GuestCpuExtendedMultiply_nid_no_patch(const void* left, const void* right, void* result) {
+    ps5lift_extended_operation(ps5lift_current_state(), PS5LIFT_X87_MULTIPLY, left, right, result);
+}
+
+extern "C" void GuestCpuExtendedDivide_nid_no_patch(const void* left, const void* right, void* result) {
+    ps5lift_extended_operation(ps5lift_current_state(), PS5LIFT_X87_DIVIDE, left, right, result);
+}
+
+extern "C" void GuestCpuExtendedSquareRoot_nid_no_patch(const void* value, void* result) {
+    ps5lift_extended_operation(ps5lift_current_state(), PS5LIFT_X87_SQUARE_ROOT, value, value, result);
+}
+
+extern "C" void GuestCpuExtendedRoundToIntegral_nid_no_patch(const void* value, void* result) {
+    ps5lift_extended_operation(ps5lift_current_state(), PS5LIFT_X87_ROUND, value, value, result);
+}
+
+extern "C" double GuestCpuExtendedToDouble_nid_no_patch(const void* value) {
+    double result;
+    ps5lift_extended_store(ps5lift_current_state(), PS5LIFT_X87_FLOAT64, value, &result);
+    return result;
+}
+
+extern "C" float GuestCpuExtendedToFloat_nid_no_patch(const void* value) {
+    float result;
+    ps5lift_extended_store(ps5lift_current_state(), PS5LIFT_X87_FLOAT32, value, &result);
+    return result;
+}
+
+extern "C" std::int64_t GuestCpuExtendedToInt64_nid_no_patch(const void* value) {
+    std::int64_t result;
+    ps5lift_extended_store(ps5lift_current_state(), PS5LIFT_X87_INTEGER64 | PS5LIFT_X87_TRUNCATE, value, &result);
+    return result;
+}
+
 namespace {
 
 constexpr int DwarfRegisters[16] = {PS5LIFT_RAX, PS5LIFT_RDX, PS5LIFT_RCX, PS5LIFT_RBX, PS5LIFT_RSI, PS5LIFT_RDI, PS5LIFT_RBP, PS5LIFT_RSP,

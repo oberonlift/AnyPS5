@@ -81,12 +81,24 @@ foreach(triple IN LISTS PS5LIFT_TEST_TRIPLES)
 endforeach()
 
 include(ExternalProject)
+
+# AnyPS5's lifted libraries link against the runtime built for this host, as the tests' programs do.
+set(PS5LIFT_HOST_TRIPLE ${PS5LIFT_HOST_ARCH}-unknown-linux-gnu)
+set(PS5LIFT_HOST_RUNTIME ${CMAKE_BINARY_DIR}/runtime-${PS5LIFT_HOST_TRIPLE}/libps5lift_runtime.so)
+add_custom_target(ps5lift_host_runtime
+        COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tools/build_runtime.py --triple ${PS5LIFT_HOST_TRIPLE}
+                --output ${CMAKE_BINARY_DIR}/runtime-${PS5LIFT_HOST_TRIPLE} --clang ${CMAKE_C_COMPILER} --clangxx ${CMAKE_CXX_COMPILER}
+        BYPRODUCTS ${PS5LIFT_HOST_RUNTIME}
+        VERBATIM)
+
 set(PS5LIFT_ANYPS5_BUILD ${CMAKE_BINARY_DIR}/anyps5)
 ExternalProject_Add(anyps5
         SOURCE_DIR ${CMAKE_SOURCE_DIR}/3rdparty/anyps5
         BINARY_DIR ${PS5LIFT_ANYPS5_BUILD}
+        DEPENDS ps5lift_host_runtime
         CMAKE_ARGS -G Ninja -DCMAKE_BUILD_TYPE=Release -DANYPS5_GUEST_LIFTED=ON -DBUILD_TESTING=ON -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
                    -DCMAKE_C_COMPILER=${CMAKE_C_COMPILER} -DCMAKE_CXX_COMPILER=${CMAKE_CXX_COMPILER}
+                   -DANYPS5_LIFTED_RUNTIME=${PS5LIFT_HOST_RUNTIME}
         BUILD_COMMAND ${CMAKE_COMMAND} --build <BINARY_DIR> --target libs relinker
         INSTALL_COMMAND ""
         BUILD_ALWAYS ON
