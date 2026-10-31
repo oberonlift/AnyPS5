@@ -328,6 +328,15 @@ extFloat80_t Arithmetic(const std::uint32_t operation, const extFloat80_t left, 
     }
 }
 
+extFloat80_t Compute(Fpu& fpu, const std::uint32_t operation, const extFloat80_t left, const extFloat80_t right) {
+    fpu.Operands(left, right);
+    switch (operation) {
+    case PS5LIFT_X87_SQUARE_ROOT: return WithRoundUp(fpu, [&] { return extF80_sqrt(left); });
+    case PS5LIFT_X87_ROUND: return WithRoundUp(fpu, [&] { return extF80_roundToInt(left, softfloat_roundingMode, true); });
+    default: return WithRoundUp(fpu, [&] { return Arithmetic(operation, left, right); });
+    }
+}
+
 std::uint32_t Compare(const extFloat80_t left, const extFloat80_t right, const bool unordered) {
     const bool nan = IsNan(left) || IsNan(right);
     if (nan) {
@@ -550,8 +559,7 @@ extern "C" std::uint32_t ps5lift_x87(Ps5LiftState* state, const std::uint32_t op
         const auto destination = memory ? 0u : (format & PS5LIFT_X87_TO_REGISTER) ? index : 0u;
         const auto left = fpu.Get(destination);
         const auto right = memory ? LoadMemory(fpu, format, address) : fpu.Get(destination == 0 ? index : 0);
-        fpu.Operands(left, right);
-        fpu.Set(destination, WithRoundUp(fpu, [&] { return Arithmetic(operation, left, right); }));
+        fpu.Set(destination, Compute(fpu, operation, left, right));
         if (!memory && (format & PS5LIFT_X87_TO_REGISTER) && (format & PS5LIFT_X87_POP)) fpu.Pop();
         return 0;
     }
@@ -598,18 +606,11 @@ extern "C" std::uint32_t ps5lift_x87(Ps5LiftState* state, const std::uint32_t op
         fpu.Set(0, value);
         return 0;
     }
-    case PS5LIFT_X87_SQUARE_ROOT: {
-        fpu.ClearRoundedUp();
-        const auto value = fpu.Get(0);
-        fpu.Operands(value, value);
-        fpu.Set(0, WithRoundUp(fpu, [&] { return extF80_sqrt(value); }));
-        return 0;
-    }
+    case PS5LIFT_X87_SQUARE_ROOT:
     case PS5LIFT_X87_ROUND: {
         fpu.ClearRoundedUp();
         const auto value = fpu.Get(0);
-        fpu.Operands(value, value);
-        fpu.Set(0, WithRoundUp(fpu, [&] { return extF80_roundToInt(value, softfloat_roundingMode, true); }));
+        fpu.Set(0, Compute(fpu, operation, value, value));
         return 0;
     }
     case PS5LIFT_X87_SCALE: {
@@ -712,13 +713,24 @@ extern "C" std::uint32_t ps5lift_x87(Ps5LiftState* state, const std::uint32_t op
     }
 }
 
-extern "C" void ps5lift_extended_arithmetic(Ps5LiftState* state, const std::uint32_t operation, const void* left, const void* right, void* result) {
+extern "C" void ps5lift_extended_operation(Ps5LiftState* state, const std::uint32_t operation, const void* left, const void* right, void* result) {
     Fpu fpu(state);
     fpu.ClearRoundedUp();
     const auto first = LoadMemory(fpu, PS5LIFT_X87_FLOAT80, reinterpret_cast<std::uint64_t>(left));
     const auto second = LoadMemory(fpu, PS5LIFT_X87_FLOAT80, reinterpret_cast<std::uint64_t>(right));
-    fpu.Operands(first, second);
-    StoreMemory(fpu, PS5LIFT_X87_FLOAT80, reinterpret_cast<std::uint64_t>(result), WithRoundUp(fpu, [&] { return Arithmetic(operation, first, second); }));
+    StoreMemory(fpu, PS5LIFT_X87_FLOAT80, reinterpret_cast<std::uint64_t>(result), Compute(fpu, operation, first, second));
+}
+
+extern "C" void ps5lift_extended_load(Ps5LiftState* state, const std::uint32_t format, const void* source, void* result) {
+    Fpu fpu(state);
+    fpu.ClearRoundedUp();
+    StoreMemory(fpu, PS5LIFT_X87_FLOAT80, reinterpret_cast<std::uint64_t>(result), LoadMemory(fpu, format, reinterpret_cast<std::uint64_t>(source)));
+}
+
+extern "C" void ps5lift_extended_store(Ps5LiftState* state, const std::uint32_t format, const void* value, void* destination) {
+    Fpu fpu(state);
+    fpu.ClearRoundedUp();
+    StoreMemory(fpu, format, reinterpret_cast<std::uint64_t>(destination), LoadMemory(fpu, PS5LIFT_X87_FLOAT80, reinterpret_cast<std::uint64_t>(value)));
 }
 
 #if LDBL_MANT_DIG == 113

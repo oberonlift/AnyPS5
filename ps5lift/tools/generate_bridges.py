@@ -28,6 +28,11 @@ INTEGER_KINDS = {
     K.CHAR_S, K.SCHAR, K.WCHAR, K.SHORT, K.INT, K.LONG, K.LONGLONG,
 }
 FLOAT_KINDS = {K.FLOAT, K.DOUBLE}
+# A lifted AnyPS5 libc keeps the guest's long double, x87's 80 bits, in this class, which crosses a bridge as long
+# double does: in a 16-byte stack slot, and back on the x87 stack. Bridges declare it as the runtime's own type for the
+# guest's long double, which is laid out and passed the same way.
+GUEST_LONG_DOUBLE = "LibcDetail::GuestLongDouble"
+BRIDGE_LONG_DOUBLE = "Ps5Lift::Bridge::LongDouble"
 POINTER_KINDS = {K.POINTER, K.LVALUEREFERENCE, K.RVALUEREFERENCE}
 FUNCTION_KINDS = {K.FUNCTIONPROTO, K.FUNCTIONNOPROTO}
 
@@ -186,6 +191,8 @@ def classify(type_, role):
         return ("pointer", "void*")
     if kind == K.LONGDOUBLE:
         return ("extended", "long double")
+    if kind == K.RECORD and canonical.spelling == GUEST_LONG_DOUBLE:
+        return ("extended", BRIDGE_LONG_DOUBLE)
     if kind in (K.INCOMPLETEARRAY, K.CONSTANTARRAY) and role == "parameter":
         return ("pointer", "void*")
     if kind == K.RECORD:
@@ -245,7 +252,7 @@ def describe(cursor, symbol):
                 stack += (argument_record.size + 7) // 8
         elif parameter_class == "extended":
             stack += stack % 2
-            access = f"HostExtended(state, {stack})"
+            access = f"HostExtended(state, {stack})" if spelling == "long double" else f"Extended<{spelling}>(state, {stack})"
             stack += 2
         elif parameter_class == "integer128":
             if integers + 2 <= 6:
@@ -439,7 +446,7 @@ def emit(exports, data, library_name):
         if export["variadic"] and not export.get("forward"):
             integers, floats, stack = export["variadic"]
             lines.append(f"        VariadicArguments variadic(state, {integers}, {floats}, {stack});")
-        if return_class == "extended" or any(access.startswith("HostExtended(") for _, access in export["parameters"]):
+        if return_spelling == "long double" or any(access.startswith("HostExtended(") for _, access in export["parameters"]):
             lines.append("        const ExtendedScope scope(state);")
         if return_class == "void":
             lines.append(f"        {call};")

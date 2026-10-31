@@ -130,18 +130,15 @@ private:
 };
 
 // The guest's long double, in x87's 80-bit format. No host type but an x86 long double holds it, so arithmetic on it runs
-// through the runtime's x87 and rounds as the guest's control word says.
-class LongDouble {
+// through the runtime's x87 and rounds as the guest's control word says. A library's own 16-byte, 16-aligned, trivially
+// copyable type for the same bits is laid out and passed the same way, so bridges declare its functions with this one.
+class alignas(16) LongDouble {
 public:
     LongDouble() = default;
 
-    explicit LongDouble(const void* extended) { std::memcpy(_bytes, extended, 10); }
-
-    const void* Bytes() const { return _bytes; }
-
     friend LongDouble operator/(const LongDouble& dividend, const LongDouble& divisor) {
         LongDouble quotient;
-        ps5lift_extended_arithmetic(ps5lift_current_state(), PS5LIFT_X87_DIVIDE, dividend._bytes, divisor._bytes, quotient._bytes);
+        ps5lift_extended_operation(ps5lift_current_state(), PS5LIFT_X87_DIVIDE, dividend._bytes, divisor._bytes, quotient._bytes);
         return quotient;
     }
 
@@ -153,12 +150,19 @@ inline const void* ExtendedSlot(const Ps5LiftState* state, const int slot) {
     return reinterpret_cast<const void*>(state->Gpr[PS5LIFT_RSP] + 8 + 8 * static_cast<std::uint64_t>(slot));
 }
 
-inline LongDouble Extended(const Ps5LiftState* state, const int slot) {
-    return LongDouble(ExtendedSlot(state, slot));
+// A guest long double argument as a type that holds its 80 bits in 16 bytes, the runtime's LongDouble or a library's own.
+template <typename T = LongDouble>
+T Extended(const Ps5LiftState* state, const int slot) {
+    static_assert(sizeof(T) == 16 && std::is_trivially_copyable_v<T>, "a guest long double is 16 bytes holding x87's 80 bits");
+    T value{};
+    std::memcpy(&value, ExtendedSlot(state, slot), 10);
+    return value;
 }
 
-inline void ReturnExtended(Ps5LiftState* state, const LongDouble& value) {
-    ps5lift_x87(state, PS5LIFT_X87_LOAD, PS5LIFT_X87_FLOAT80, reinterpret_cast<std::uint64_t>(value.Bytes()), 0);
+template <typename T>
+void ReturnExtended(Ps5LiftState* state, const T& value) {
+    static_assert(sizeof(T) == 16 && std::is_trivially_copyable_v<T>, "a guest long double is 16 bytes holding x87's 80 bits");
+    ps5lift_x87(state, PS5LIFT_X87_LOAD, PS5LIFT_X87_FLOAT80, reinterpret_cast<std::uint64_t>(&value), 0);
 }
 
 #ifdef PS5LIFT_HOST_LONG_DOUBLE_HOLDS_EXTENDED
