@@ -8,3 +8,4 @@ bit locked counter remainder = 0
 carried counter / steps = 8
 carried counter remainder = 0
 message ordering violations = 0
+stack message ordering violations = 0

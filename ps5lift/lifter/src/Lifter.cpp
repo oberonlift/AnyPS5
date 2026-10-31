@@ -92,6 +92,18 @@ bool AssignsStackPointer(const Instruction& instruction) {
     return false;
 }
 
+bool IsRegister(const ZydisDecodedOperand& operand, const ZydisRegister reg) {
+    return operand.type == ZYDIS_OPERAND_TYPE_REGISTER && operand.reg.value == reg;
+}
+
+bool WritesGpr(const Instruction& instruction, const int gpr) {
+    for (unsigned i = 0; i < instruction.Info.operand_count; ++i) {
+        const auto& operand = instruction.Operands[i];
+        if (operand.type == ZYDIS_OPERAND_TYPE_REGISTER && GprIndex(operand.reg.value) == gpr && (operand.actions & ZYDIS_OPERAND_ACTION_MASK_WRITE) != 0) return true;
+    }
+    return false;
+}
+
 enum class Condition {
     O, NO, B, AE, E, NE, BE, A, S, NS, P, NP, L, GE, LE, G
 };
@@ -403,6 +415,8 @@ private:
     std::array<bool, VectorCount> _usedVectors{};
     bool _usesFlags = false;
     bool _assignsStackPointer = false;
+    bool _framePointer = false;
+    bool _frameEscapes = false;
     std::map<std::uint64_t, llvm::BasicBlock*> _blocks;
     const Instruction* _instruction = nullptr;
     llvm::Value* _entryRsp = nullptr;
@@ -441,7 +455,9 @@ private:
 
     void ScanInstructions() {
         _usedGprs[PS5LIFT_RSP] = true;
+        _framePointer = KeepsFramePointer();
         for (const auto& [address, instruction] : _function.Instructions) {
+            if (HandsOutFrameAddress(instruction)) _frameEscapes = true;
             const auto mnemonic = instruction.Info.mnemonic;
             if (mnemonic == ZYDIS_MNEMONIC_VZEROUPPER || mnemonic == ZYDIS_MNEMONIC_VZEROALL) _usedVectors.fill(true);
             const auto* flags = instruction.Info.cpu_flags;
@@ -456,6 +472,53 @@ private:
                 }
             }
         }
+    }
+
+    // Whether the function keeps a frame pointer: it starts with push %rbp; mov %rsp,%rbp, and nothing else writes rbp
+    // but a pop %rbp or leave that restores the caller's.
+    bool KeepsFramePointer() const {
+        const auto& instructions = _function.Instructions;
+        const auto push = instructions.find(_function.Entry);
+        if (push == instructions.end() || push->second.Info.mnemonic != ZYDIS_MNEMONIC_PUSH || !IsRegister(push->second.Operands[0], ZYDIS_REGISTER_RBP)) return false;
+        const auto move = instructions.find(push->second.Next());
+        if (move == instructions.end() || move->second.Info.mnemonic != ZYDIS_MNEMONIC_MOV || !IsRegister(move->second.Operands[0], ZYDIS_REGISTER_RBP) || !IsRegister(move->second.Operands[1], ZYDIS_REGISTER_RSP)) return false;
+        for (const auto& [address, instruction] : instructions) {
+            const auto mnemonic = instruction.Info.mnemonic;
+            const bool restores = mnemonic == ZYDIS_MNEMONIC_LEAVE || (mnemonic == ZYDIS_MNEMONIC_POP && IsRegister(instruction.Operands[0], ZYDIS_REGISTER_RBP));
+            if (address != move->first && !restores && WritesGpr(instruction, PS5LIFT_RBP)) return false;
+        }
+        return true;
+    }
+
+    bool IsFrameRegister(const ZydisRegister reg) const {
+        const auto gpr = GprIndex(reg);
+        return gpr == PS5LIFT_RSP || (_framePointer && gpr == PS5LIFT_RBP);
+    }
+
+    // Whether the instruction hands out an address in the function's frame: it copies rsp, or rbp when that is the frame
+    // pointer, or an address computed from them, into memory or another register. Adjusting rsp and setting up or
+    // tearing down the frame pointer keep such addresses in those two registers, and the entry's push %rbp saves the
+    // caller's frame pointer. enter hands one out, since it copies rsp into an rbp the function does not keep as its
+    // frame pointer.
+    bool HandsOutFrameAddress(const Instruction& instruction) const {
+        const auto& info = instruction.Info;
+        if (info.mnemonic == ZYDIS_MNEMONIC_ENTER) return true;
+        if (_framePointer && instruction.Address == _function.Entry) return false;
+        bool reads = false;
+        for (unsigned i = 0; i < info.operand_count_visible; ++i) {
+            const auto& operand = instruction.Operands[i];
+            if (operand.type == ZYDIS_OPERAND_TYPE_REGISTER && IsFrameRegister(operand.reg.value) && (operand.actions & ZYDIS_OPERAND_ACTION_MASK_READ) != 0) reads = true;
+            if (info.mnemonic == ZYDIS_MNEMONIC_LEA && operand.type == ZYDIS_OPERAND_TYPE_MEMORY && (IsFrameRegister(operand.mem.base) || IsFrameRegister(operand.mem.index))) reads = true;
+        }
+        if (!reads) return false;
+        for (unsigned i = 0; i < info.operand_count; ++i) {
+            const auto& operand = instruction.Operands[i];
+            if ((operand.actions & ZYDIS_OPERAND_ACTION_MASK_WRITE) == 0) continue;
+            if (operand.type == ZYDIS_OPERAND_TYPE_MEMORY) return true;
+            const auto reg = operand.reg.value;
+            if (operand.type == ZYDIS_OPERAND_TYPE_REGISTER && !IsFrameRegister(reg) && (GprIndex(reg) >= 0 || VectorIndex(reg) >= 0 || MmxIndex(reg) >= 0)) return true;
+        }
+        return false;
     }
 
     bool CrossesCalls(const int flag) const {
@@ -603,7 +666,14 @@ private:
 
     bool NeedsOrdering(const ZydisDecodedOperand& operand, const unsigned bits) const {
         if (_module.Options().Memory != MemoryModel::Tso || bits > 64) return false;
-        return operand.mem.base != ZYDIS_REGISTER_RSP;
+        return !InPrivateFrame(operand);
+    }
+
+    // Whether a memory operand lies in the function's frame, through rsp or the frame pointer, where no other thread can
+    // reach it because no instruction of the function hands out an address in it.
+    bool InPrivateFrame(const ZydisDecodedOperand& operand) const {
+        if (_frameEscapes || operand.mem.segment == ZYDIS_REGISTER_FS || operand.mem.segment == ZYDIS_REGISTER_GS) return false;
+        return IsFrameRegister(operand.mem.base);
     }
 
     llvm::Value* Load(llvm::Value* address, const unsigned bits, const bool ordered) {
@@ -3142,7 +3212,7 @@ private:
     // The runtime reads and writes an x87 memory operand with memcpy, so under TSO the call is fenced on both sides.
     llvm::Value* CallX87(const std::uint32_t operation, const std::uint32_t format, llvm::Value* address, const std::uint32_t index) {
         const auto* memory = address ? X87Memory() : nullptr;
-        const bool ordered = memory != nullptr && _module.Options().Memory == MemoryModel::Tso && memory->mem.base != ZYDIS_REGISTER_RSP;
+        const bool ordered = memory != nullptr && _module.Options().Memory == MemoryModel::Tso && !InPrivateFrame(*memory);
         if (ordered) _builder.CreateFence(llvm::AtomicOrdering::SequentiallyConsistent);
         auto callee = _module.Runtime("ps5lift_x87", llvm::FunctionType::get(_builder.getInt32Ty(), {_module.Pointer(), _builder.getInt32Ty(), _builder.getInt32Ty(), I64(), _builder.getInt32Ty()}, false));
         auto* result = _builder.CreateCall(callee, {_state, _builder.getInt32(operation), _builder.getInt32(format), address ? address : _builder.getInt64(0), _builder.getInt32(index)});

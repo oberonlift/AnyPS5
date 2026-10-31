@@ -132,6 +132,33 @@ __attribute__((noinline)) static i64 message_reader(i64 argument) {
     return violations;
 }
 
+struct stack_message {
+    u64 data;
+    u64 flag;
+};
+
+__attribute__((noinline)) static i64 stack_message_writer(i64 argument) {
+    struct stack_message* message = (struct stack_message*)argument;
+    for (u64 i = 1; i <= Messages; ++i) {
+        __atomic_store_n(&message->data, i, __ATOMIC_RELAXED);
+        __atomic_store_n(&message->flag, i, __ATOMIC_RELEASE);
+    }
+    return 0;
+}
+
+__attribute__((noinline)) static i64 stack_message_reader(void) {
+    struct stack_message message = {0, 0};
+    unsigned long writer = host_thread_create(stack_message_writer, (i64)&message);
+    i64 violations = 0;
+    u64 flag = 0;
+    while (flag < Messages) {
+        flag = __atomic_load_n(&message.flag, __ATOMIC_ACQUIRE);
+        if (__atomic_load_n(&message.data, __ATOMIC_RELAXED) < flag) ++violations;
+    }
+    host_thread_join(writer);
+    return violations;
+}
+
 int main(void) {
     unsigned long threads[Threads];
     for (int i = 0; i < Threads; ++i) threads[i] = host_thread_create(tls_worker, i + 1);
@@ -160,6 +187,7 @@ int main(void) {
     unsigned long writer = host_thread_create(message_writer, 0);
     host_thread_join(writer);
     line("message ordering violations", (u64)host_thread_join(reader));
+    line("stack message ordering violations", (u64)stack_message_reader());
     return 0;
 }
 
