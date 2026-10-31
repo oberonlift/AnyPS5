@@ -20,6 +20,7 @@ int guest_pthread_join(void* thread, void** result) __asm__(NID_scePthreadJoin);
 enum { ContextSize = 64 << 10, Rounds = 5 };
 
 static Fiber ping, pong, away;
+static int created;
 static _Alignas(16) unsigned char pingStack[ContextSize];
 static _Alignas(16) unsigned char pongStack[ContextSize];
 static _Alignas(16) unsigned char awayStack[ContextSize];
@@ -65,6 +66,8 @@ static void away_entry(unsigned long argOnInitialize, unsigned long argOnRun) {
 }
 
 static void* resume_away(void* argument) {
+    while (!__atomic_load_n(&created, __ATOMIC_ACQUIRE)) {
+    }
     unsigned long returned = 0;
     const int run = guest_fiber_run(&away, (unsigned long)argument, &returned);
     guest_printf("run away on another thread %d returned %lu\n", run, returned);
@@ -86,6 +89,7 @@ int main(void) {
     guest_printf("run away %d returned %lu\n", awayRun, returned);
     void* thread = 0;
     guest_printf("create %d\n", guest_pthread_create(&thread, 0, resume_away, (void*)5, "away"));
+    __atomic_store_n(&created, 1, __ATOMIC_RELEASE);
     guest_pthread_join(thread, 0);
     return 0;
 }
