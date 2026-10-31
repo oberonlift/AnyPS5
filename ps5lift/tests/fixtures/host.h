@@ -16,6 +16,7 @@ long host_call_eight(long (*function)(long, long, long, long, long, long, long, 
 struct RecordedCalls {
     long (*integers)(long, long, long, long, long, long, long, long);
     double (*mixed)(double, long, double);
+    long (*unaligned)(long, long);
 };
 long host_call_recorded(const struct RecordedCalls* calls, long base);
 long double host_extended(long a, long b, long c, long d, long e, long f, long g, long double x, long double y);

@@ -116,6 +116,18 @@ static double mixed(double a, long b, double c) {
     return a * (double)b + c;
 }
 
+/* x86 code may start anywhere, so native code can call a guest function at an address an aarch64 branch cannot reach. */
+long unaligned(long a, long b);
+__asm__(".text\n"
+        ".p2align 4\n"
+        "    nop\n"
+        ".globl unaligned\n"
+        ".type unaligned, @function\n"
+        "unaligned:\n"
+        "    lea (%rdi,%rsi,2), %rax\n"
+        "    ret\n"
+        ".size unaligned, . - unaligned\n");
+
 int main(void) {
     struct Item items[12];
     for (int i = 0; i < 12; ++i) {
@@ -134,7 +146,7 @@ int main(void) {
     line("on thread", host_on_thread(on_thread, 23));
     line("main thread value", thread_value);
     line("eight arguments", host_call_eight(eight));
-    const struct RecordedCalls recorded = {eight, mixed};
+    const struct RecordedCalls recorded = {eight, mixed, unaligned};
     line("native calls through a record", host_call_recorded(&recorded, 10));
     line("native thread keeps its floating-point environment", host_thread_keeps_environment(round_up_on_thread, 5));
     line("callback rounds up on a native thread", rounded_up > rounded_nearest);
