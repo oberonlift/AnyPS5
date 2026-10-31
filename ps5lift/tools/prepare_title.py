@@ -7,7 +7,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from run_fixture import GUEST_BASE, ROOT
 
-sys.path.insert(0, str(ROOT / "3rdparty" / "anyps5" / "tools"))
+sys.path.insert(0, str(ROOT.parent / "tools"))
 import audit_dump
 import import_audit
 

@@ -1,4 +1,4 @@
-# anyps5-lift
+# ps5lift
 
 A static recompiler for PS5 executables. `ps5lift` lifts guest x86-64 code to LLVM IR and compiles it to native code for the host, so a title can run on aarch64 Linux machines such as the NVIDIA DGX Spark (GB10) without an x86 emulator. The system libraries come from [AnyPS5](https://github.com/boykopovar/anyps5), which is a submodule; its ELF reader and `.eh_frame` scanner are the lifter's frontend.
 
@@ -6,27 +6,31 @@ Status: **milestone 2 in progress**. Guest code built for Zen 2, including SSE, 
 
 ## Build
 
-Requirements: CMake 3.22+, Ninja, Clang and LLD, LLVM 18 or newer with development files (`llvm-18-dev libzstd-dev zlib1g-dev` on Ubuntu 24.04 / DGX OS), Python 3. The build also builds AnyPS5 for a lifted guest, which has [its own requirements](3rdparty/anyps5/docs/dev/BUILD.md#requirements), among them SDL's X11, Wayland and audio development files. The bridge generator, and with it the tests, needs the libclang Python bindings (`python3-clang-18`); without them, configure with `-DBUILD_TESTING=OFF`.
+Requirements: CMake 3.22+, Ninja, Clang and LLD, LLVM 18 or newer with development files (`llvm-18-dev libzstd-dev zlib1g-dev` on Ubuntu 24.04 / DGX OS), Python 3. The build also builds AnyPS5 for a lifted guest, which has [its own requirements](../docs/dev/BUILD.md#requirements), among them SDL's X11, Wayland and audio development files. The bridge generator, and with it the tests, needs the libclang Python bindings (`python3-clang-18`); without them, configure with `-DBUILD_TESTING=OFF`.
+
+ps5lift lives in [oberonlift/AnyPS5](https://github.com/oberonlift/AnyPS5), a fork of AnyPS5 whose patches build AnyPS5's libraries for a lifted guest; the tests build that tree around it. From the repository's root:
 
 ```sh
 git submodule update --init --recursive
+cd ps5lift
 cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ -DLLVM_DIR=/usr/lib/llvm-18/lib/cmake/llvm
 ninja -C build
 ctest --test-dir build --output-on-failure
 ```
 
-When the tests run lifted code natively they lift it for the host CPU (`--cpu native`), since the `neoverse-v2` default uses SVE, which CPUs such as Apple's do not have; `run_fixture.py --cpu` lifts for another CPU. On an aarch64 host the test lifts the fixture and runs it natively; building the x86-64 guests there needs an x86-64 cross toolchain and libraries (`g++-x86-64-linux-gnu` on Ubuntu). On an x86-64 host it also runs it natively and, when `qemu-aarch64` and an aarch64 sysroot are installed (`qemu-user g++-aarch64-linux-gnu`), lifts it for aarch64 and runs it under qemu. The AnyPS5 submodule points at the `aarch64-host` branch of [oberonlift/AnyPS5](https://github.com/oberonlift/AnyPS5), which carries the changes that build AnyPS5's libraries for a lifted guest on top of upstream. AnyPS5 is built for the host, so the tests that use its libraries run for the host's architecture only. The libc tests reserve the PS5 user address range, about 1 TiB of address space, so they fail under a `ulimit -v` limit.
+When the tests run lifted code natively they lift it for the host CPU (`--cpu native`), since the `neoverse-v2` default uses SVE, which CPUs such as Apple's do not have; `run_fixture.py --cpu` lifts for another CPU. On an aarch64 host the test lifts the fixture and runs it natively; building the x86-64 guests there needs an x86-64 cross toolchain and libraries (`g++-x86-64-linux-gnu` on Ubuntu). On an x86-64 host it also runs it natively and, when `qemu-aarch64` and an aarch64 sysroot are installed (`qemu-user g++-aarch64-linux-gnu`), lifts it for aarch64 and runs it under qemu. AnyPS5 is built for the host, so the tests that use its libraries run for the host's architecture only. The libc tests reserve the PS5 user address range, about 1 TiB of address space, so they fail under a `ulimit -v` limit.
 
 On an Apple Silicon Mac `ps5lift` builds and lifts for Linux, but what it lifts still runs on Linux only ([the macOS plan](docs/MACOS.md)). Xcode's command-line tools and Homebrew's `llvm` and `lld` are the toolchain. The tests lift every fixture for aarch64 and x86-64 Linux without running the result, and leave out AnyPS5's build and the tests that use its libraries. The x86-64 guests that use threads or libc build against an x86-64 Linux sysroot: a directory holding `usr/x86_64-linux-gnu` and `usr/lib/gcc-cross/x86_64-linux-gnu` as Ubuntu's `g++-x86-64-linux-gnu` installs them, copied from such a machine.
 
 ```sh
-git submodule update --init 3rdparty/anyps5 && git submodule update --init --recursive 3rdparty/zydis
+git submodule update --init --recursive 3rdparty/zydis 3rdparty/softfloat
+cd ps5lift
 cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DLLVM_DIR=$(brew --prefix llvm)/lib/cmake/llvm -DPS5LIFT_X86_64_SYSROOT=<sysroot>
 ninja -C build
 ctest --test-dir build --output-on-failure
 ```
 
-`tools/build_runtime.py` builds the runtime and [Berkeley SoftFloat](https://github.com/ucb-bar/berkeley-softfloat-3) (a submodule, for x87) into a static library per target; the tests build and cache it in `build/runtime-<arch>`.
+`tools/build_runtime.py` builds the runtime and [Berkeley SoftFloat](https://github.com/ucb-bar/berkeley-softfloat-3) (a submodule, for x87) into a shared library per target, and the program's `main` into an archive; the tests build and cache them in `build/runtime-<arch>`.
 
 ## Use
 
@@ -41,15 +45,15 @@ build/lifter/ps5lift work/output/app.elf -o guest.a --cpu native
 python3 tools/generate_bridges.py libc libkernel --anyps5-build build/anyps5 -o bridges.cpp
 python3 tools/build_runtime.py --triple aarch64-unknown-linux-gnu --output build/runtime-aarch64-unknown-linux-gnu
 L=build/anyps5/core/libs/libs/unpatched
-clang++ -O2 -Iruntime/include guest.a bridges.cpp $L/libc.prx $L/libkernel.prx -Wl,-rpath,$PWD/$L \
-    -Wl,--undefined-glob='GuestCpu*_nid_no_patch' -Wl,--export-dynamic-symbol='GuestCpu*_nid_no_patch' \
-    build/runtime-aarch64-unknown-linux-gnu/libps5lift_runtime.a build/runtime-aarch64-unknown-linux-gnu/libps5lift_main.a -fuse-ld=lld -latomic -pthread -ldl -o guest
+R=build/runtime-aarch64-unknown-linux-gnu
+clang++ -O2 -Iruntime/include guest.a bridges.cpp $L/libc.prx $L/libkernel.prx $R/libps5lift_main.a $R/libps5lift_runtime.so \
+    -Wl,-rpath,$PWD/$L -Wl,-rpath,$PWD/$R -fuse-ld=lld -latomic -pthread -ldl -o guest
 ./guest
 ```
 
-AnyPS5's libraries call the runtime's `GuestCpu` functions, so the program links all of them and exports them, including when only a library's own dependency needs them.
+The runtime is a shared library, which AnyPS5's libraries link too, so they reach its `GuestCpu` functions; the program's `main`, from `libps5lift_main.a`, hands it the lifted program.
 
-The lifted program runs offline: AnyPS5 gives it a console without a network connection, whose only interface is loopback, unless `APS5_NETWORK=1` is set when it starts. With it, `APS5_NETWORK_ALLOW=github.com,...` limits the program to those domains and their subdomains, and `APS5_NETWORK_DENY=...` stops domains from resolving (see AnyPS5's [networking notes](3rdparty/anyps5/docs/dev/ARCHITECTURE.md#networking)).
+The lifted program runs offline: AnyPS5 gives it a console without a network connection, whose only interface is loopback, unless `APS5_NETWORK=1` is set when it starts. With it, `APS5_NETWORK_ALLOW=github.com,...` limits the program to those domains and their subdomains, and `APS5_NETWORK_DENY=...` stops domains from resolving (see AnyPS5's [networking notes](../docs/dev/ARCHITECTURE.md#networking)).
 
 | Option | Default | Effect |
 |---|---|---|

@@ -93,7 +93,7 @@ add_custom_target(ps5lift_host_runtime
 
 set(PS5LIFT_ANYPS5_BUILD ${CMAKE_BINARY_DIR}/anyps5)
 ExternalProject_Add(anyps5
-        SOURCE_DIR ${CMAKE_SOURCE_DIR}/3rdparty/anyps5
+        SOURCE_DIR ${CMAKE_SOURCE_DIR}/..
         BINARY_DIR ${PS5LIFT_ANYPS5_BUILD}
         DEPENDS ps5lift_host_runtime
         CMAKE_ARGS -G Ninja -DCMAKE_BUILD_TYPE=Release -DANYPS5_GUEST_LIFTED=ON -DBUILD_TESTING=ON -DCMAKE_EXPORT_COMPILE_COMMANDS=ON

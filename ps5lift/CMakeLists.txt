@@ -17,9 +17,9 @@ set(ZYDIS_BUILD_TOOLS OFF CACHE BOOL "" FORCE)
 set(ZYDIS_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
 set(ZYDIS_BUILD_TESTS OFF CACHE BOOL "" FORCE)
 set(ZYDIS_BUILD_DOXYGEN OFF CACHE BOOL "" FORCE)
-add_subdirectory(3rdparty/zydis EXCLUDE_FROM_ALL)
+add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/../3rdparty/zydis ${CMAKE_CURRENT_BINARY_DIR}/zydis EXCLUDE_FROM_ALL)
 
-set(ANYPS5_RELINKER ${CMAKE_CURRENT_SOURCE_DIR}/3rdparty/anyps5/core/relinker)
+set(ANYPS5_RELINKER ${CMAKE_CURRENT_SOURCE_DIR}/../core/relinker)
 add_library(anyps5_elf STATIC
         ${ANYPS5_RELINKER}/relinker/src/parsing/ElfReader.cpp
         ${ANYPS5_RELINKER}/relinker/src/analysis/UnusedNidFilter/EhFrameReader.cpp)

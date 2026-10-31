@@ -9,7 +9,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from run_fixture import runtime_link_arguments, FIXTURES, GUEST_BASE, ROOT, host_triple, lifter_target, run, runner_for, PROGRAM_TIMEOUT
 
-GENERATORS = ROOT / "3rdparty" / "anyps5" / "core" / "relinker" / "relinker" / "tests" / "macos"
+GENERATORS = ROOT.parent / "core" / "relinker" / "relinker" / "tests" / "macos"
 EXPECTED = {
     "import": ("hello from a PS5 ELF on macOS\n", 0),
     "tls": ("", 0x1288 & 0xff),
