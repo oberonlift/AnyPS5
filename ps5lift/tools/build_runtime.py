@@ -19,6 +19,12 @@ SOFTFLOAT_FLAGS = [
 ]
 
 
+# The runtime shares the process with lifted code, which ps5lift lifts for neoverse-v2 on aarch64 unless told otherwise
+# (lifter/src/main.cpp), so it is built for the same CPU. That also gives it LSE atomics in place of calls to the outline
+# atomic helpers; clang 18's -mcpu=native does not know the GB10's cores and falls back to a generic CPU without them.
+CPUS = {"aarch64-unknown-linux-gnu": "neoverse-v2"}
+
+
 def softfloat_sources():
     return [ROOT.parent / line.strip() for line in (ROOT / "runtime" / "softfloat_sources.txt").read_text().splitlines() if line.strip()]
 
@@ -62,6 +68,8 @@ def build(triple, output_directory, clang, clangxx, jobs):
     library = output_directory / "libps5lift_runtime.so"
     main_library = output_directory / "libps5lift_main.a"
     target = [f"--target={triple}", "-O2", "-fPIC"]
+    if triple in CPUS:
+        target.append(f"-mcpu={CPUS[triple]}")
     units = []
     for path in softfloat_sources():
         units.append(([clang, *target, *SOFTFLOAT_FLAGS], path, output_directory / "softfloat" / (path.stem + ".o")))
