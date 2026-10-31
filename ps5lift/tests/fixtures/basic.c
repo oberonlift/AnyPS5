@@ -123,6 +123,7 @@ i64 tail_pass_address_taken_by_lea(void);
 void store_address_past_jump(i64 (**slot)(void));
 void store_address_after_call_and_branch(i64 (**slot)(void));
 void store_address_through_vector(i64 (**slots)(void));
+const char* options_string_through_lea(i64 wide);
 
 __attribute__((noinline)) i64 call_function_pointer(i64 (*function)(void)) {
     return function();
@@ -436,6 +437,21 @@ __asm__(".text\n"
         "    add $8, %rsp\n"
         "    ret\n"
         ".size pass_address_taken_by_lea, .-pass_address_taken_by_lea\n");
+
+/* A function that returns the address of the strings after it past a conditional jump, as OpenSSL's RC4_options does:
+   the address is data, and its first byte, popa's, does not decode in 64-bit mode. */
+__asm__(".text\n"
+        ".globl options_string_through_lea\n"
+        ".type options_string_through_lea, @function\n"
+        "options_string_through_lea:\n"
+        "    lea 2f(%rip), %rax\n"
+        "    test %rdi, %rdi\n"
+        "    jz 1f\n"
+        "    add $12, %rax\n"
+        "1:  ret\n"
+        "2:  .asciz \"aes(8x,int)\"\n"
+        "    .asciz \"aes(16x,int)\"\n"
+        ".size options_string_through_lea, .-options_string_through_lea\n");
 
 static i64 flags_of(u8 carry, u8 overflow, u8 zero, u8 sign) {
     return carry | overflow << 1 | zero << 2 | sign << 3;
@@ -1091,6 +1107,11 @@ int main(void) {
     store_address_through_vector(paired);
     line("function stored from a vector register", call_function_pointer(paired[0]));
     line("pointer stored beside it", (u64)paired[1] - (u64)paired);
+    print("strings returned through lea = ");
+    print(options_string_through_lea(0));
+    print(" ");
+    print(options_string_through_lea(1));
+    print("\n");
     zen2_integer();
     unaligned_accesses();
     locked_forms();
