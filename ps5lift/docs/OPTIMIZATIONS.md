@@ -129,20 +129,6 @@ None is open. The next candidates are under [Later](#later) and [From AnyPS5's A
 
 The draft pull request [boykopovar/AnyPS5#5021](https://github.com/boykopovar/AnyPS5/pull/5021) compiles PS5 x86-64 code to ARM64 ahead of time, as `ps5lift` does, but only for programs that come with a reviewed contract of their own. These are its optimizations that could carry over, read from its code at commit `151294f`; its [known gaps](https://github.com/yabanana/AnyPS5/blob/151294f979ab00aaff2f702314425caf61a72790/docs/dev/debt/aot.md) describe each one in full. None has been measured here, so none is a work item yet.
 
-### Store and reload only what a callee reads and writes
-
-- **Theirs:** [guest_value_leaves.py](https://github.com/yabanana/AnyPS5/blob/151294f979ab00aaff2f702314425caf61a72790/core/aot/guest_value_leaves.py) takes each function's register writes from its code, closes them over known direct calls, and after a direct call reloads only those. Calls they cannot see into reload everything.
-- **Ours today:** `CallGuest` in Lifter.cpp runs `Flush` before every guest call and `Reload` after it, storing and loading every register the calling function names.
-- **Change:**
-  - For each function, compute the registers it may read before writing them and the registers it may write, from the walk `ScanInstructions` already makes. Close both sets over direct calls and tail calls; iterate to a fixpoint so recursion converges.
-  - A function that makes an indirect call or jump, calls an import or calls a runtime helper that reads the whole state (`ps5lift_dispatch`, `ps5lift_resolve`) reads and writes everything.
-  - Before a direct call, store only the callee's read set; after it, reload only its write set.
-- **Why derive it:** an ABI-based version (store only the argument registers, reload only the results) breaks hand-written assembly with its own conventions, which FFmpeg has, so it would need a switch. Sets taken from the code assume no convention.
-- **What must stay true:** wherever the runtime reads the state, the registers there are current. That holds at imports, where the unwinder starts from the state at `__cxa_throw`, and at dispatch, because a callee that reaches either counts as reading everything. A callee that pushes a callee-saved register reads it, so the values the unwinder restores for a landing pad are still stored.
-- **Weakens:** handlers that `sceKernelRaiseException` delivers already read the registers as of the last call; registers that callers did not store become older still.
-- **Measure:** the number of state stores and loads around direct calls in a title's IR (`--emit-ir`), before and after.
-- **Check:** `ctest`, in particular the `exceptions`, `setjmp` and `callbacks` fixtures.
-
 ### Give leaf functions a native calling convention
 
 - **Theirs:** for a leaf function (no calls, no indirect jumps, no runtime helpers, no vector registers, and no stack changes beyond an exact `push %rbp; mov %rsp,%rbp` … `pop %rbp`) that reads at most six general registers and writes at most two, they compile a native core that takes the register values as arguments and returns its results. The guest still sees its stack written as on the console: the return address and the saved `rbp`. The state-based entry stays for callers through dispatch.
@@ -201,6 +187,15 @@ Landed on 2026-10-31. An access through `rip` with no index or segment override 
 ### Stop at a closed jump table's fallback
 
 Landed on 2026-10-31. A recovered table lifts as a `switch` on the target, which fell back to dispatch: storing every register and resolving the target at run time. Discovery now marks a table closed when a recognised guard bounds it, it lies in a segment without `PF_W` and no relocation writes it (`RecoveredTable::Closed` in [Discovery.cpp](../lifter/src/Discovery.cpp)); its targets are then all the jump can take. A closed table's fallback calls `ps5lift_left_jump_table`, which stops the program, so the `switch` keeps no path that stores the state. AnyPS5's ARM64 compiler ([above](#from-anyps5s-arm64-compiler)) skips re-validating targets under the same three conditions. The lift report counts closed tables.
+
+### Store and reload only what a callee names and writes
+
+Landed on 2026-10-31, after AnyPS5's ARM64 compiler ([above](#from-anyps5s-arm64-compiler)), whose [guest_value_leaves.py](https://github.com/yabanana/AnyPS5/blob/151294f979ab00aaff2f702314425caf61a72790/core/aot/guest_value_leaves.py) reloads only a callee's writes after a direct call. `CallGuest` in [Lifter.cpp](../lifter/src/Lifter.cpp) used to store every register the caller names before every guest call and reload them all after it. Discovery now gives each function its `RegisterEffects` ([Discovery.cpp](../lifter/src/Discovery.cpp), `CloseEffects`), closed over direct calls and jumps to a fixpoint, and a direct call stores only the registers the callee names and reloads only those it may write.
+
+- The store set is the registers the callee names, not only those it reads: a callee loads every register it caches at entry and stores it back at its return, so it carries a value through even on paths that do not change it.
+- Dispatch, imports, interrupts, `fxsave` and `fxrstor` name and write everything, so wherever the runtime or the unwinder reads the state, the registers there are current. A callee that pushes a callee-saved register names it, so the values the unwinder restores for a landing pad are still stored.
+- The lifter checks that the registers a function caches are within its effects, since its callers store only those.
+- Handlers that `sceKernelRaiseException` delivers read the registers as of the last call, and registers that callers did not store are older still.
 
 ## Ruled out
 

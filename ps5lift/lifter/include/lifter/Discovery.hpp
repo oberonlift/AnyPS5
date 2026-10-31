@@ -43,12 +43,30 @@ struct FunctionFlow {
     std::set<std::uint64_t> ResumePoints;
 };
 
+// General registers by their index in the state, then the 16 vector registers.
+using RegisterSet = std::uint32_t;
+constexpr RegisterSet EveryRegister = ~RegisterSet{0};
+constexpr unsigned FirstVectorBit = 16;
+
+// The registers a function names, which it loads from the state at entry and stores back at its return even where it
+// does not change them, and those it may change, each with every function it reaches through direct calls and jumps.
+// A function that reaches dispatch, an import or an interrupt names and changes them all.
+struct RegisterEffects {
+    RegisterSet Named = 0;
+    RegisterSet Written = 0;
+
+    bool operator==(const RegisterEffects&) const = default;
+};
+
 // A discovered function as every function is kept: its instructions only by where they lie, since a decoded instruction
-// takes some 1.1 KiB and a large title has tens of millions of them.
+// takes some 1.1 KiB and a large title has tens of millions of them. Exits are the addresses outside its code that it
+// calls or jumps to directly.
 struct GuestFunction : FunctionFlow {
     std::string Name;
     std::optional<std::string> Import;
     std::vector<InstructionSpan> Code;
+    std::vector<std::uint64_t> Exits;
+    RegisterEffects Effects;
 };
 
 // One function with its instructions decoded, while discovery or the lifter works on it.
@@ -67,6 +85,7 @@ private:
 };
 
 bool IsConditionalJump(ZydisMnemonic mnemonic);
+RegisterEffects InstructionEffects(const Instruction& instruction);
 std::optional<std::uint64_t> DirectTarget(const Instruction& instruction);
 std::optional<std::uint64_t> ImportTarget(const GuestImage& image, const Instruction& instruction);
 std::string BridgeSymbol(const std::string& import);

@@ -447,31 +447,21 @@ private:
         return offsetof(Ps5LiftState, Vector) + 32 * static_cast<std::size_t>(index);
     }
 
-    void MarkRegister(const ZydisRegister reg) {
-        if (reg == ZYDIS_REGISTER_NONE || reg == ZYDIS_REGISTER_RIP) return;
-        if (const auto vector = VectorIndex(reg); vector >= 0) _usedVectors[vector] = true;
-        if (const auto gpr = GprIndex(reg); gpr >= 0) _usedGprs[gpr] = true;
-    }
-
+    // The function caches the registers its instructions name, which discovery's effects for it must cover, since callers
+    // store only those before calling it.
     void ScanInstructions() {
-        _usedGprs[PS5LIFT_RSP] = true;
+        RegisterSet named = RegisterSet{1} << PS5LIFT_RSP;
         _framePointer = KeepsFramePointer();
         for (const auto& [address, instruction] : _function.Instructions) {
             if (HandsOutFrameAddress(instruction)) _frameEscapes = true;
-            const auto mnemonic = instruction.Info.mnemonic;
-            if (mnemonic == ZYDIS_MNEMONIC_VZEROUPPER || mnemonic == ZYDIS_MNEMONIC_VZEROALL) _usedVectors.fill(true);
             const auto* flags = instruction.Info.cpu_flags;
             if (flags != nullptr && (flags->tested | flags->modified | flags->set_0 | flags->set_1 | flags->undefined) != 0) _usesFlags = true;
             if (AssignsStackPointer(instruction)) _assignsStackPointer = true;
-            for (unsigned i = 0; i < instruction.Info.operand_count; ++i) {
-                const auto& operand = instruction.Operands[i];
-                if (operand.type == ZYDIS_OPERAND_TYPE_REGISTER) MarkRegister(operand.reg.value);
-                if (operand.type == ZYDIS_OPERAND_TYPE_MEMORY) {
-                    MarkRegister(operand.mem.base);
-                    MarkRegister(operand.mem.index);
-                }
-            }
+            named |= InstructionEffects(instruction).Named;
         }
+        if ((named & ~_module.Functions().at(_function.Entry).Effects.Named) != 0) throw std::logic_error("The function at 0x" + Hex(_function.Entry) + " names registers its effects leave out");
+        for (int i = 0; i < PS5LIFT_GPR_COUNT; ++i) _usedGprs[i] = (named >> i & 1) != 0;
+        for (int i = 0; i < VectorCount; ++i) _usedVectors[i] = (named >> (FirstVectorBit + i) & 1) != 0;
     }
 
     // Whether the function keeps a frame pointer: it starts with push %rbp; mov %rsp,%rbp, and nothing else writes rbp
@@ -525,28 +515,28 @@ private:
         return flag == PS5LIFT_DF || _module.Options().PreserveFlags;
     }
 
-    void Flush() {
+    void Flush(const RegisterSet registers = EveryRegister) {
         for (int i = 0; i < PS5LIFT_GPR_COUNT; ++i) {
-            if (_gpr[i]) StateStore(_builder.CreateLoad(I64(), _gpr[i]), offsetof(Ps5LiftState, Gpr) + 8 * i);
+            if (_gpr[i] && (registers >> i & 1) != 0) StateStore(_builder.CreateLoad(I64(), _gpr[i]), offsetof(Ps5LiftState, Gpr) + 8 * i);
         }
         for (int i = 0; i < PS5LIFT_FLAG_COUNT; ++i) {
             if (_flags[i] && CrossesCalls(i)) StateStore(_builder.CreateZExt(_builder.CreateLoad(_builder.getInt1Ty(), _flags[i]), _builder.getInt8Ty()), offsetof(Ps5LiftState, Flags) + i);
         }
         for (int i = 0; i < VectorCount; ++i) {
-            if (_vectors[i]) StateStore(_builder.CreateLoad(Int(256), _vectors[i]), VectorOffset(i));
+            if (_vectors[i] && (registers >> (FirstVectorBit + i) & 1) != 0) StateStore(_builder.CreateLoad(Int(256), _vectors[i]), VectorOffset(i));
         }
     }
 
-    void Reload() {
+    void Reload(const RegisterSet registers = EveryRegister) {
         for (int i = 0; i < PS5LIFT_GPR_COUNT; ++i) {
-            if (_gpr[i]) _builder.CreateStore(StateLoad(I64(), offsetof(Ps5LiftState, Gpr) + 8 * i), _gpr[i]);
+            if (_gpr[i] && (registers >> i & 1) != 0) _builder.CreateStore(StateLoad(I64(), offsetof(Ps5LiftState, Gpr) + 8 * i), _gpr[i]);
         }
         for (int i = 0; i < PS5LIFT_FLAG_COUNT; ++i) {
             if (_flags[i] && CrossesCalls(i)) _builder.CreateStore(_builder.CreateTrunc(StateLoad(_builder.getInt8Ty(), offsetof(Ps5LiftState, Flags) + i), _builder.getInt1Ty()), _flags[i]);
             else if (_flags[i]) _builder.CreateStore(_builder.getFalse(), _flags[i]);
         }
         for (int i = 0; i < VectorCount; ++i) {
-            if (_vectors[i]) _builder.CreateStore(StateLoad(Int(256), VectorOffset(i)), _vectors[i]);
+            if (_vectors[i] && (registers >> (FirstVectorBit + i) & 1) != 0) _builder.CreateStore(StateLoad(Int(256), VectorOffset(i)), _vectors[i]);
         }
     }
 
@@ -885,8 +875,9 @@ private:
         return value;
     }
 
-    void CallGuest(llvm::Value* callee, llvm::ArrayRef<llvm::Value*> extra = {}) {
-        Flush();
+    // A call stores the registers the callee names and reloads those it may write; the rest keep their cached values.
+    void CallGuest(llvm::Value* callee, const RegisterEffects& effects, llvm::ArrayRef<llvm::Value*> extra = {}) {
+        Flush(effects.Named);
         StateStore(_builder.getInt64(_instruction->Next()), offsetof(Ps5LiftState, Rip));
         std::vector<llvm::Value*> arguments{_state};
         arguments.insert(arguments.end(), extra.begin(), extra.end());
@@ -896,7 +887,7 @@ private:
         auto* unwinding = _builder.CreateICmpNE(StateLoad(_builder.getInt8Ty(), offsetof(Ps5LiftState, Unwinding)), _builder.getInt8(0));
         _builder.CreateCondBr(unwinding, UnwindBlock(), returned, llvm::MDBuilder(Context()).createBranchWeights(1, 1u << 20));
         _builder.SetInsertPoint(returned);
-        Reload();
+        Reload(effects.Written);
     }
 
     // A ret on another stack than the function's own, as libunwind's jumpto makes after loading the landing pad's RSP,
@@ -3764,8 +3755,12 @@ private:
             if (!target) target = ImportTarget(_module.Image(), *_instruction);
             auto* destination = target ? nullptr : Read(0);
             Push(_builder.getInt64(_instruction->Next()));
-            if (target) CallGuest(_module.Guest(*target));
-            else CallGuest(DispatchCallee().getCallee(), {destination});
+            if (target) {
+                auto* callee = _module.Guest(*target);
+                CallGuest(callee, _module.Functions().at(*target).Effects);
+            } else {
+                CallGuest(DispatchCallee().getCallee(), {EveryRegister, EveryRegister}, {destination});
+            }
             return;
         }
         case ZYDIS_MNEMONIC_JMP: {
