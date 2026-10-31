@@ -245,7 +245,7 @@ def describe(cursor, symbol):
                 stack += (argument_record.size + 7) // 8
         elif parameter_class == "extended":
             stack += stack % 2
-            access = f"Extended(state, {stack})"
+            access = f"HostExtended(state, {stack})"
             stack += 2
         elif parameter_class == "integer128":
             if integers + 2 <= 6:
@@ -439,7 +439,7 @@ def emit(exports, data, library_name):
         if export["variadic"] and not export.get("forward"):
             integers, floats, stack = export["variadic"]
             lines.append(f"        VariadicArguments variadic(state, {integers}, {floats}, {stack});")
-        if return_class == "extended" or any(access.startswith("Extended(") for _, access in export["parameters"]):
+        if return_class == "extended" or any(access.startswith("HostExtended(") for _, access in export["parameters"]):
             lines.append("        const ExtendedScope scope(state);")
         if return_class == "void":
             lines.append(f"        {call};")

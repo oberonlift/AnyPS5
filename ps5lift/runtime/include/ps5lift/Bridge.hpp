@@ -114,6 +114,54 @@ void ReturnIndirect(Ps5LiftState* state, const std::uint64_t address, const T& v
     state->Gpr[PS5LIFT_RAX] = address;
 }
 
+class GuestEntry {
+public:
+    GuestEntry() : _state(ps5lift_enter_guest()) {}
+
+    ~GuestEntry() { ps5lift_leave_guest(); }
+
+    GuestEntry(const GuestEntry&) = delete;
+    GuestEntry& operator=(const GuestEntry&) = delete;
+
+    Ps5LiftState* State() const { return _state; }
+
+private:
+    Ps5LiftState* _state;
+};
+
+// The guest's long double, in x87's 80-bit format. No host type but an x86 long double holds it, so arithmetic on it runs
+// through the runtime's x87 and rounds as the guest's control word says.
+class LongDouble {
+public:
+    LongDouble() = default;
+
+    explicit LongDouble(const void* extended) { std::memcpy(_bytes, extended, 10); }
+
+    const void* Bytes() const { return _bytes; }
+
+    friend LongDouble operator/(const LongDouble& dividend, const LongDouble& divisor) {
+        LongDouble quotient;
+        ps5lift_extended_arithmetic(ps5lift_current_state(), PS5LIFT_X87_DIVIDE, dividend._bytes, divisor._bytes, quotient._bytes);
+        return quotient;
+    }
+
+private:
+    unsigned char _bytes[16] = {};
+};
+
+inline const void* ExtendedSlot(const Ps5LiftState* state, const int slot) {
+    return reinterpret_cast<const void*>(state->Gpr[PS5LIFT_RSP] + 8 + 8 * static_cast<std::uint64_t>(slot));
+}
+
+inline LongDouble Extended(const Ps5LiftState* state, const int slot) {
+    return LongDouble(ExtendedSlot(state, slot));
+}
+
+inline void ReturnExtended(Ps5LiftState* state, const LongDouble& value) {
+    ps5lift_x87(state, PS5LIFT_X87_LOAD, PS5LIFT_X87_FLOAT80, reinterpret_cast<std::uint64_t>(value.Bytes()), 0);
+}
+
+#ifdef PS5LIFT_HOST_LONG_DOUBLE_HOLDS_EXTENDED
 class ExtendedScope {
 public:
     explicit ExtendedScope(const Ps5LiftState* state) : _saved(std::fegetround()) {
@@ -130,24 +178,9 @@ private:
     int _saved;
 };
 
-class GuestEntry {
-public:
-    GuestEntry() : _state(ps5lift_enter_guest()) {}
-
-    ~GuestEntry() { ps5lift_leave_guest(); }
-
-    GuestEntry(const GuestEntry&) = delete;
-    GuestEntry& operator=(const GuestEntry&) = delete;
-
-    Ps5LiftState* State() const { return _state; }
-
-private:
-    Ps5LiftState* _state;
-};
-
-inline long double Extended(const Ps5LiftState* state, const int slot) {
+inline long double HostExtended(const Ps5LiftState* state, const int slot) {
     long double value;
-    ps5lift_extended_to_host(reinterpret_cast<const void*>(state->Gpr[PS5LIFT_RSP] + 8 + 8 * static_cast<std::uint64_t>(slot)), &value);
+    ps5lift_extended_to_host(ExtendedSlot(state, slot), &value);
     return value;
 }
 
@@ -156,6 +189,7 @@ inline void ReturnExtended(Ps5LiftState* state, const long double value) {
     ps5lift_extended_from_host(state, &value, extended);
     ps5lift_x87(state, PS5LIFT_X87_LOAD, PS5LIFT_X87_FLOAT80, reinterpret_cast<std::uint64_t>(extended), 0);
 }
+#endif
 
 class VariadicArguments {
 public:
