@@ -59,7 +59,7 @@ Counts Count(std::span<const std::uint32_t> words) {
     return counts;
 }
 
-Counts Compile(std::size_t loads, bool formattedStores = false, bool gpu = false, bool vertex = false, bool registration = false, bool atomicBeforeLoads = false) {
+Counts Compile(std::size_t loads, bool formattedStores = false, bool gpu = false, bool vertex = false, bool registration = false, bool atomicBeforeLoads = false, bool inlinableHelpers = false) {
     std::vector<std::uint32_t> code;
     if (gpu) code.push_back(0x7e160500u);
     if (atomicBeforeLoads) code.insert(code.end(), {0xe1705000u, 0x80012803u, 0xbf8c3f70u});
@@ -75,6 +75,7 @@ Counts Compile(std::size_t loads, bool formattedStores = false, bool gpu = false
     request.shader = {vertex ? ShaderStage::Vertex : ShaderStage::Compute, reinterpret_cast<std::uintptr_t>(code.data()), words, 0, {}};
     request.target = Target();
     request.target.registrationModules = registration;
+    request.target.inlinableHelpers = inlinableHelpers;
     request.layout = {0, 0, 0, 128};
     request.context.waveSize = 32;
     request.context.userDataBaseRegister = 0;
@@ -132,6 +133,8 @@ int main() {
         Check(three.calls == one.calls + 2 && three.functions == one.functions, "formatted buffer once: two more formatted loads from the same descriptor emitted " + std::to_string(three.calls - one.calls) + " calls and " + std::to_string(three.functions - one.functions) + " functions more, expected two calls and no function");
         Check(three.switches == one.switches, "formatted buffer once: two more formatted loads from the same descriptor emitted " + std::to_string(three.switches - one.switches) + " more format switches");
         Check(one.notInlined == none.notInlined + 1, "formatted buffer once: the shared formatted access function may be inlined back into its callers");
+        const auto inlinable = Compile(1, false, false, false, false, false, true);
+        Check(inlinable.notInlined == 0 && inlinable.functions == one.functions && inlinable.calls == one.calls, "formatted buffer once: with inlinable helpers the shared formatted access function kept " + std::to_string(inlinable.notInlined) + " DontInline functions, or the module changed its " + std::to_string(one.functions) + " functions and " + std::to_string(one.calls) + " calls");
         const auto storeOne = Compile(1, true);
         const auto storeThree = Compile(3, true);
         Check(storeOne.functions == none.functions + 2 && storeOne.calls == none.calls + 2, "formatted buffer once: a formatted load and a formatted store to another resource emitted " + std::to_string(storeOne.functions - none.functions) + " functions and " + std::to_string(storeOne.calls - none.calls) + " calls more than none, expected one function and one call each");

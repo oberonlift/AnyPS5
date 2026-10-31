@@ -479,7 +479,7 @@ void DefineReciprocalCorrectionFunction(SpirvEmitterState& state) {
     const auto u32 = TypeU32(state);
     state.reciprocalCorrectionFunction = state.module.AllocateId();
     state.module.AddName(state.reciprocalCorrectionFunction, "rcp_f32_correction");
-    state.module.AddFunction(spv::OpFunction, u32, state.reciprocalCorrectionFunction, spv::FunctionControlDontInlineMask, state.module.Type(spv::OpTypeFunction, u32, u32));
+    state.module.AddFunction(spv::OpFunction, u32, state.reciprocalCorrectionFunction, HelperFunctionControl(state), state.module.Type(spv::OpTypeFunction, u32, u32));
     const auto mantissa = state.module.AllocateId();
     state.module.AddFunction(spv::OpFunctionParameter, u32, mantissa);
     EmitLabel(state, state.module.AllocateId());

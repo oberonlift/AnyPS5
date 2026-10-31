@@ -132,6 +132,7 @@ struct SpirvEmitterState {
     bool waveLdsMemoryBarriers = false;
     bool deviceScopeLdsMemoryBarriers = false;
     bool ldsLockFences = false;
+    bool inlinableHelpers = false;
     std::unordered_set<const IrValue*> sharedLaneValues;
     std::uint32_t laneHalf = 0;
     std::uint32_t spirvVersion = 0x00010300u;
@@ -273,6 +274,10 @@ struct SpirvEmitterState {
     std::vector<std::uint32_t> interfaceVariables;
     std::unordered_map<const IrBlock*, std::uint32_t> labels;
 };
+
+inline spv::FunctionControlMask HelperFunctionControl(const SpirvEmitterState& state) {
+    return state.inlinableHelpers ? spv::FunctionControlMaskNone : spv::FunctionControlDontInlineMask;
+}
 
 struct SpirvValueEmitContext {
     explicit SpirvValueEmitContext(SpirvEmitterState& state);

@@ -1190,7 +1190,7 @@ void DefineDot2F32F16Function(SpirvEmitterState& state) {
     const auto u32 = TypeU32(state);
     state.dot2F32F16Function = state.module.AllocateId();
     state.module.AddName(state.dot2F32F16Function, "dot2_f32_f16_exact");
-    state.module.AddFunction(spv::OpFunction, u32, state.dot2F32F16Function, spv::FunctionControlDontInlineMask, state.module.Type(spv::OpTypeFunction, u32, u32, u32, u32));
+    state.module.AddFunction(spv::OpFunction, u32, state.dot2F32F16Function, HelperFunctionControl(state), state.module.Type(spv::OpTypeFunction, u32, u32, u32, u32));
     std::array<std::uint32_t, 3> parameters{};
     for (auto& parameter : parameters) {
         parameter = state.module.AllocateId();
@@ -1315,7 +1315,7 @@ std::uint32_t InterpolateHelper(SpirvEmitterState& state, std::map<std::pair<boo
 }
 
 std::uint32_t InterpolateFunction(SpirvEmitterState& state, bool halfResult, std::uint32_t mode) {
-    return InterpolateHelper(state, state.interpolateFunctions, halfResult, mode, "", spv::FunctionControlDontInlineMask, [&](const std::array<std::uint32_t, 3>& parameters) {
+    return InterpolateHelper(state, state.interpolateFunctions, halfResult, mode, "", HelperFunctionControl(state), [&](const std::array<std::uint32_t, 3>& parameters) {
         return (state.integerInterpolation ? InterpolateInteger : Interpolate)(state, parameters[0], parameters[1], parameters[2], halfResult, mode);
     });
 }

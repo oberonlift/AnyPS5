@@ -17,6 +17,10 @@ inline bool LdsLockFencesRequired(VkDriverId driver) {
     return driver == VK_DRIVER_ID_MOLTENVK;
 }
 
+inline bool HelperCallsUsable(VkDriverId driver) {
+    return driver != VK_DRIVER_ID_NVIDIA_PROPRIETARY;
+}
+
 }
 
 #endif
