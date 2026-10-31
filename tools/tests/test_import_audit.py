@@ -192,6 +192,33 @@ def build_pe_with_imports(dlls, names=()):
     return bytes(image) + idata + edata + text
 
 
+def uleb128(value):
+    encoded = bytearray()
+    while value >= 0x80:
+        encoded.append(value & 0x7F | 0x80)
+        value >>= 7
+    encoded.append(value)
+    return bytes(encoded)
+
+
+def build_macho(exports, dylibs=(), trie=None):
+    if trie is None:
+        edges = [b"_" + name.encode() + b"\0" for name in exports]
+        root_size = 2 + sum(len(edge) + 1 for edge in edges)
+        trie = uleb128(0) + bytes([len(edges)])
+        trie += b"".join(edge + uleb128(root_size + 4 * index) for index, edge in enumerate(edges))
+        trie += b"\x02\x00\x00\x00" * len(edges)
+    commands = []
+    for dylib in dylibs:
+        name = dylib.encode() + b"\0"
+        name += bytes(-(24 + len(name)) % 8)
+        commands.append(struct.pack("<IIIIII", 0xC, 24 + len(name), 24, 0, 0, 0) + name)
+    trie_offset = 32 + 16 + sum(len(command) for command in commands)
+    commands.insert(0, struct.pack("<IIII", 0x80000033, 16, trie_offset, len(trie)))
+    header = struct.pack("<IiiIIIII", 0xFEEDFACF, 0x0100000C, 0, 6, len(commands), sum(len(command) for command in commands), 0, 0)
+    return header + b"".join(commands) + trie
+
+
 def write_source(root, library, text):
     directory = Path(root) / library
     directory.mkdir(parents=True, exist_ok=True)
@@ -315,6 +342,18 @@ class ImportAuditTests(unittest.TestCase):
         data = json.loads(result.read_text())
         self.assertEqual(data["missing_libraries"], {"libSceA.sprx": 1})
         self.assertEqual(data["library_mismatch"], 1)
+
+    def test_macho_exports_come_from_the_export_trie(self):
+        image = self.work.libs / "libSceA.prx"
+        image.write_bytes(build_macho(["AAAAAAAAAAA", "BBBBBBBBBBB#C#D"], ["@rpath/libSceB.prx", "/usr/lib/libSystem.B.dylib"]))
+        self.assertEqual(import_audit.read_exports(image), {"AAAAAAAAAAA", "BBBBBBBBBBB"})
+        self.assertEqual(import_audit.read_host_imports(image), {"libSceB.prx", "libSystem.B.dylib"})
+
+    def test_macho_export_trie_cycles_are_audit_errors(self):
+        image = self.work.libs / "libSceA.prx"
+        image.write_bytes(build_macho([], trie=uleb128(0) + b"\x01_\x00" + uleb128(0)))
+        with self.assertRaisesRegex(import_audit.AuditError, "reaches node 0x0 twice"):
+            import_audit.read_exports(image)
 
     def test_windows_suffix_lookup_preserves_guest_and_missing_libraries(self):
         work = self.work
@@ -2588,7 +2627,7 @@ class ImportAuditTests(unittest.TestCase):
         self.assertEqual(exports, {"AAAAAAAAAAA": ["libSceA.prx", "libSceB.prx"], "BBBBBBBBBBB": ["libSceB.prx"]})
         self.assertEqual(libraries, {"libSceA.prx", "libSceB.prx"})
         (work.libs / "libSceC.prx").write_bytes(b"text")
-        with self.assertRaisesRegex(import_audit.AuditError, r"libSceC.prx: neither ELF nor PE"):
+        with self.assertRaisesRegex(import_audit.AuditError, r"libSceC.prx: neither ELF, PE nor Mach-O"):
             import_audit.built_libraries([work.libs])
         with self.assertRaisesRegex(import_audit.AuditError, "no .prx files"):
             import_audit.built_libraries([work.modules])
