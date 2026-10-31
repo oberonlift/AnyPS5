@@ -1,6 +1,6 @@
 # Optimizations
 
-Performance work for agents to pick up. Nothing here is implemented. Take the work items in order: each says where the code is, what has to stay true, and how to check it. After an item lands, re-measure and update the baseline in this file.
+Performance work for agents to pick up. Take the work items in order: each says where the code is, what has to stay true, and how to check it. After an item lands, re-measure, update the baseline in this file and move the item to [Done](#done).
 
 Rules for every item:
 
@@ -10,21 +10,22 @@ Rules for every item:
 
 ## Baseline
 
-Measured on 2026-10-30. The probe was lifted at 265ee08; the benchmark used the GB10 checkout's `ps5lift` of that day.
+The probe was lifted on 2026-10-30, at d758281d61. The benchmark was measured on 2026-10-31, after the dispatch lookup was hashed.
 
 ### Benchmark
 
-`tools/bench.py` on the GB10, scale 16, best of three runs. `tso/native` compares with the native build without vectorization.
+`tools/bench.py` on the GB10, scale 16, best of five runs. `tso/native` compares with the native build without vectorization.
 
 | Kernel | native | native, no vectors | lifted, relaxed | lifted, TSO | tso/relaxed | tso/native |
 |---|---|---|---|---|---|---|
-| stream | 24.5 ms | 38.2 ms | 28.2 ms | 41.5 ms | 1.47× | 1.08× |
-| chase | 54.2 ms | 52.6 ms | 64.9 ms | 66.9 ms | 1.03× | 1.27× |
-| copy | 4.9 ms | 4.0 ms | 5.9 ms | 7.2 ms | 1.21× | 1.81× |
-| hash | 10.5 ms | 11.3 ms | 10.4 ms | 11.7 ms | 1.13× | 1.03× |
-| sort | 7.6 ms | 7.6 ms | 8.5 ms | 21.8 ms | 2.57× | 2.87× |
+| stream | 18.3 ms | 36.7 ms | 25.4 ms | 37.8 ms | 1.49× | 1.03× |
+| chase | 52.1 ms | 52.4 ms | 51.7 ms | 55.9 ms | 1.08× | 1.07× |
+| copy | 3.9 ms | 4.6 ms | 4.1 ms | 6.2 ms | 1.52× | 1.34× |
+| hash | 10.5 ms | 8.4 ms | 10.2 ms | 11.2 ms | 1.11× | 1.34× |
+| sort | 7.6 ms | 7.6 ms | 8.5 ms | 21.7 ms | 2.55× | 2.88× |
+| dispatch | 18.2 ms | 16.6 ms | 35.7 ms | 39.1 ms | 1.10× | 2.35× |
 
-Without ordering, lifted code is within about 20% of native. Ordering costs little where loads wait on each other (`chase`) and the most where stores dominate (`sort`). The kernels have no indirect calls, no frame pointers and no floating point, so items 1 and 2 below need kernels of their own before they can be timed. Vector loads and stores wider than 64 bits are not ordered yet ([known gaps](DEBT.md)), so the TSO column understates what full TSO costs; ordering them will add to it.
+Without ordering, lifted code other than `dispatch` is within about 20% of native. Ordering costs little where loads wait on each other (`chase`) and the most where stores dominate (`sort`). `dispatch` makes 1,048,576 indirect calls through a table of 65,536 functions: one takes 34 ns lifted and 16 ns native, and besides the lookup the lifted call stores and reloads the state around `ps5lift_dispatch` (see the probe below). The kernels have no frame pointers and no floating point, so item 1 below needs a kernel of its own before it can be timed. Vector loads and stores wider than 64 bits are not ordered yet ([known gaps](DEBT.md)), so the TSO column understates what full TSO costs; ordering them will add to it.
 
 To run it: `python3 -B tools/bench.py --ps5lift <build>/lifter/ps5lift --clang /usr/lib/llvm-18/bin/clang --clangxx /usr/lib/llvm-18/bin/clang++`. It builds the runtime into `runtime-<triple>` beside the `ps5lift` build directory; in a checkout another agent is using, copy the binary to `/tmp/<dir>/build/lifter/` first so that build stays untouched.
 
@@ -92,24 +93,7 @@ The test was a C program for the host. It set the bit with `mrs`/`msr fpcr`, ran
 
 ## Work items
 
-### 1. Hash the dispatch lookup
-
-- **Code:** `Ps5Lift::LookupFunction` in [Runtime.cpp](../runtime/src/Runtime.cpp) binary-searches `ps5lift_program.Functions`, a sorted array of `Ps5LiftFunctionEntry {GuestAddress, Host}`. It has four callers:
-  - `ps5lift_resolve`, which lifted indirect tail jumps call;
-  - `ps5lift_dispatch`, for indirect calls and the callback thunks in [Bridge.hpp](../runtime/include/ps5lift/Bridge.hpp);
-  - the thread entry in `RunThread`;
-  - the fault handler in [NativeCall.cpp](../runtime/src/NativeCall.cpp).
-- **Cost now:** about 20 dependent loads over a 10 MB table for a title, on every virtual call.
-- **Change:**
-  - Build an open-addressing table keyed by guest address, a power of two at least twice the function count.
-  - Build it before the first guest thread starts, in `ps5lift_run_main` before `StartThread`, or as a function-local static.
-  - Leave it read-only afterwards, so threads read it without locking.
-  - Keep `LookupFunction`'s contract: null for an address that is not a function start.
-  - Building the table at lift time in `TableLifter` instead would move the work out of start-up, at about 20 MB per title.
-- **Measure:** first add a kernel to `tests/fixtures/bench.c` that makes indirect calls through a table of many functions, and record its baseline.
-- **Check:** `ctest`. The `basic`, `callbacks` and `modules` fixtures call through function pointers and so go through dispatch.
-
-### 2. Leave a frame unordered only when its address does not escape
+### 1. Leave a frame unordered only when its address does not escape
 
 This item fixes a correctness hole in today's rule, then extends the rule to `rbp`.
 
@@ -135,7 +119,7 @@ This item fixes a correctness hole in today's rule, then extends the rule to `rb
   - The ordered-instruction count of EVO Player's or a title's lifted code should drop by about the `rbp` share in the table above, less the frames that escape.
   - For a timing, build the benchmark guest with `-fno-omit-frame-pointer` as well.
 
-### 3. Leave loads from read-only segments unordered
+### 2. Leave loads from read-only segments unordered
 
 - **Code:** `NeedsOrdering` in Lifter.cpp.
 - **Change:** an access through `rip` without an index or segment override has a known address, `_instruction->Next() + disp`. If the whole access lies in a segment without `PF_W` (`GuestSegment::Flags` in [GuestImage.hpp](../lifter/include/lifter/GuestImage.hpp)), no other thread can write it, so the load can be plain.
@@ -226,12 +210,22 @@ The draft pull request [boykopovar/AnyPS5#5021](https://github.com/boykopovar/An
   - ThinLTO over the parts is one way to inline across parts, the roadmap item.
 - **Caveat:** a profile covers only what the training run reached, EVO Player's or a title's screens today; everything else gets no profile.
 
+## Done
+
+### Hash the dispatch lookup
+
+Landed on 2026-10-31. `Ps5Lift::LookupFunction` in [Runtime.cpp](../runtime/src/Runtime.cpp) used to binary-search the sorted function table the lifter emits, about 20 dependent loads over a title's 8 MB table on every indirect call. It now probes an open-addressing table keyed by guest address, with Fibonacci hashing and linear probing, a power of two at least twice the function count. `ps5lift_use_program` builds it from the sorted table before any guest thread starts, and threads only read it.
+
+- The `dispatch` kernel went from 92.3 ms to 35.7 ms relaxed and from 96.2 ms to 39.1 ms under TSO, from 88 ns a call to 34 ns.
+- For 507,412 functions, a large title's count, the build takes 7 ms and the table 16 MB at start-up, so building it at lift time instead would not pay for the larger executable.
+- A perfect hash would shrink the table to about 8 MB but not speed it up: at most half full, the table finds most functions in one cache line, where a perfect hash reads a displacement table first, and it still has to compare the stored address to reject one that starts no function.
+
 ## Ruled out
 
 Each of these was considered for the ordering cost and rejected. Do not pick them up without new evidence.
 
 - **Reusing a loaded or stored value across another load.**
-  - Forwarding a store to a later load of the same address, or reusing a load for a repeated one, is safe only when no other load sits between them, and never across loop iterations, where it is the hoisting hang of item 2.
+  - Forwarding a store to a later load of the same address, or reusing a load for a repeated one, is safe only when no other load sits between them, and never across loop iterations, where it is the hoisting hang of item 1.
   - With a load between them, TSO can require the newer value. Suppose this thread stores to `a` and then loads `b`, and another thread set `b` after it saw this thread's store and overwrote `a`. Then the reload of `a` must see the other thread's value.
   - The safe case is narrow and the gain small.
 - **Ordering switches per title or per function.** Other x86 translators for ARM let users weaken ordering for a program. A title that needs the ordering then fails rarely and unreproducibly, which the correctness rule at the top excludes.
