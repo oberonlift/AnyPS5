@@ -59,7 +59,7 @@ A review of the whole tree in October 2026 found these. Each gives a wrong resul
 
 - Every fixture is built for `znver2`, so the compiler encodes SSE with VEX, and the only legacy SSE forms tested are AES, `pclmulqdq`, SHA, MMX and a set of scalar arithmetic, comparison, rounding and conversion forms, which come from assembly. `vector.c` and `float.c` use AVX throughout, so covering the packed legacy forms needs SSE-only builds of their tests.
 - No test runs `--float fast`, `--preserve-flags` or `--emit-ir`, and no fixture splits an image into more than one part, so calls between the parts of one image are tested only by EVO Player.
-- Untested paths: division traps, jump tables sized by layout, the generator's forwarded variadics and 128-bit stack arguments, and the runtime's reports of a guest `int`, a full callback pool, a `longjmp` through native code and a resume a frame has no point for.
+- Untested paths: division traps, jump tables sized by layout, the generator's forwarded variadics and 128-bit stack arguments, and the runtime's reports of a guest `int`, a full callback pool, a `longjmp` through native code, a resume a frame has no point for and a jump that leaves a closed jump table.
 - The TSO check in `threads.c` can only fail when the lifted code runs on aarch64 hardware.
 
 ## Cleanup

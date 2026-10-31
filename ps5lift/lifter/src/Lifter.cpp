@@ -3791,6 +3791,12 @@ private:
                 _builder.CreateBr(fallback);
             }
             _builder.SetInsertPoint(fallback);
+            if (_function.ClosedJumpTables.contains(_instruction->Address)) {
+                auto left = _module.Runtime("ps5lift_left_jump_table", llvm::FunctionType::get(_builder.getVoidTy(), {_module.Pointer(), I64()}, false));
+                _builder.CreateCall(left, {_state, _builder.getInt64(_instruction->Address)})->setDoesNotReturn();
+                _builder.CreateUnreachable();
+                return;
+            }
             Flush();
             auto resolve = _module.Runtime("ps5lift_resolve", llvm::FunctionType::get(_module.Pointer(), {I64()}, false));
             auto* function = _builder.CreateCall(resolve, {destination});

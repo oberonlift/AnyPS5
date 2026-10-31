@@ -417,6 +417,12 @@ extern "C" void ps5lift_trap(Ps5LiftState*, const std::uint64_t address) {
     ps5lift_fail("guest trap at 0x%" PRIx64, address);
 }
 
+// Discovery found the jump's table closed: bounded by a guard, read-only and never relocated, so its targets are all
+// the jump can take.
+extern "C" void ps5lift_left_jump_table(Ps5LiftState*, const std::uint64_t address) {
+    ps5lift_fail("the jump at 0x%" PRIx64 " went outside its jump table, which discovery found closed", address);
+}
+
 extern "C" void ps5lift_divide_error(Ps5LiftState*, const std::uint64_t address) {
     ps5lift_fail("divide error at 0x%" PRIx64 ": the divisor is zero or the quotient does not fit", address);
 }

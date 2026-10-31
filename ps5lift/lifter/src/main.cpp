@@ -110,13 +110,15 @@ int main(int argc, char** argv) {
         for (const auto& [mnemonic, count] : report.Unsupported) unsupported += count;
         std::size_t tables = 0;
         std::size_t unguarded = 0;
+        std::size_t closed = 0;
         for (const auto& image : functions) {
             for (const auto& [entry, function] : image) {
                 tables += function.JumpTables.size();
                 unguarded += function.UnguardedJumpTables.size();
+                closed += function.ClosedJumpTables.size();
             }
         }
-        std::cerr << ", " << unsupported << " unsupported, " << tables << " jump tables (" << unguarded << " sized by layout)\n";
+        std::cerr << ", " << unsupported << " unsupported, " << tables << " jump tables (" << unguarded << " sized by layout, " << closed << " closed)\n";
         for (const auto& [mnemonic, count] : report.Unsupported) std::cerr << "  unsupported " << mnemonic << ": " << count << "\n";
     } catch (const std::exception& error) {
         std::cerr << "ps5lift: " << error.what() << "\n";

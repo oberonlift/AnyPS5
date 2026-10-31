@@ -93,12 +93,7 @@ The test was a C program for the host. It set the bit with `mrs`/`msr fpcr`, ran
 
 ## Work items
 
-### 1. Drop a jump table's fallback when the table is read-only
-
-- **Code:** jump tables in [Lifter.cpp](../lifter/src/Lifter.cpp). A recovered table lifts as a `switch` that falls back to dispatch.
-- **Change:** when the table lies wholly in a segment without `PF_W` (`GuestImage::IsReadOnly`), no relocation overlaps it and its bound comes from a recognised guard, every target is known, so the fallback is unreachable and can go. AnyPS5's ARM64 compiler ([below](#from-anyps5s-arm64-compiler)) skips re-validating targets under the same three conditions.
-- **What must stay true:** the table never changes, which holds for the same reason as for [read-only loads](#leave-loads-from-read-only-segments-unordered).
-- **Check:** `ctest`.
+None is open. The next candidates are under [Later](#later) and [From AnyPS5's ARM64 compiler](#from-anyps5s-arm64-compiler).
 
 ## Later
 
@@ -202,6 +197,10 @@ Landed on 2026-10-31. Accesses through `rsp` used to be plain in every function.
 ### Leave loads from read-only segments unordered
 
 Landed on 2026-10-31. An access through `rip` with no index or segment override has a known address. When the whole access lies in a segment without `PF_W` (`InReadOnlySegment` in [Lifter.cpp](../lifter/src/Lifter.cpp)), no other thread writes it, so the load is plain. Many of these are float constants loaded with `movss` or `movsd`, which took an `ldapr` into a general register and a move to the vector unit. The runtime keeps the assumption checked: AnyPS5's `DoMprotect` calls `GuestCpuMakingWritable` in [GuestCpu.cpp](../runtime/src/GuestCpu.cpp) for every range the guest makes writable, which stops the program if the range overlaps such a segment.
+
+### Stop at a closed jump table's fallback
+
+Landed on 2026-10-31. A recovered table lifts as a `switch` on the target, which fell back to dispatch: storing every register and resolving the target at run time. Discovery now marks a table closed when a recognised guard bounds it, it lies in a segment without `PF_W` and no relocation writes it (`RecoveredTable::Closed` in [Discovery.cpp](../lifter/src/Discovery.cpp)); its targets are then all the jump can take. A closed table's fallback calls `ps5lift_left_jump_table`, which stops the program, so the `switch` keeps no path that stores the state. AnyPS5's ARM64 compiler ([above](#from-anyps5s-arm64-compiler)) skips re-validating targets under the same three conditions. The lift report counts closed tables.
 
 ## Ruled out
 
