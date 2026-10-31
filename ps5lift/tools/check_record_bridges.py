@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import argparse
+import platform
 import re
 import subprocess
 import sys
@@ -15,7 +16,8 @@ ROOT = Path(__file__).resolve().parent.parent
 SOURCE = ROOT / "tests" / "fixtures" / "records.cpp"
 GUEST_TARGET = "--target=x86_64-unknown-linux-gnu"
 FLAGS = ["-x", "c++", "-std=c++20", GUEST_TARGET]
-HOST_TARGETS = ["x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu"]
+# The hosts the bridges are compiled for: both Linux targets on Linux, which has headers for each, and the Mac itself.
+HOST_TARGETS = ["arm64-apple-macosx"] if platform.system() == "Darwin" else ["x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu"]
 UNSUPPORTED = {
     "Packed": "a packed record",
     "Bits": "a record with bit-fields",
@@ -54,8 +56,8 @@ def lowered(clang):
     return result
 
 
-def classified():
-    unit = cindex.Index.create().parse(str(SOURCE), args=FLAGS)
+def classified(extra):
+    unit = cindex.Index.create().parse(str(SOURCE), args=[*FLAGS, *extra])
     errors = [diagnostic.spelling for diagnostic in unit.diagnostics if diagnostic.severity >= cindex.Diagnostic.Error]
     if errors:
         raise SystemExit(f"{SOURCE}: {errors}")
@@ -81,10 +83,15 @@ def classified():
 def main():
     parser = argparse.ArgumentParser(description="Check the bridge generator's SysV classification of records against clang's own lowering")
     parser.add_argument("--clang", required=True, help="clang, to lower calls for x86-64 and to compile the generated record layouts")
+    parser.add_argument("--libclang", type=Path, help="the libclang library to parse with; the bindings find one by default")
     args = parser.parse_args()
 
+    extra = []
+    if args.libclang is not None:
+        generate_bridges.use_libclang(str(args.libclang))
+        extra = ["-resource-dir", str(generate_bridges.resource_directory(args.libclang))]
     expected = lowered(args.clang)
-    actual = classified()
+    actual = classified(extra)
     failures = [f"{record} as a {role}: lowered by clang but not classified" for role, record in sorted(set(expected) - set(actual))]
     definitions = []
     for key in sorted(actual):

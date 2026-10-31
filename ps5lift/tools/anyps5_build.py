@@ -1,10 +1,13 @@
 import json
+import platform
 import shlex
 import struct
 from pathlib import Path
 
 ANYPS5 = Path(__file__).resolve().parents[2]
 LIBS = ANYPS5 / "core" / "libs"
+# What a program that links AnyPS5's libraries links from the host besides them; macOS's libSystem holds libatomic and libdl.
+HOST_LIBRARIES = ["-pthread"] if platform.system() == "Darwin" else ["-pthread", "-latomic", "-ldl"]
 DEPENDENCY_OPTIONS = {"-o", "-MF", "-MT", "-MQ"}
 
 
@@ -25,6 +28,8 @@ class Build:
 
     def library_exports(self, name):
         data = self.library(name).read_bytes()
+        if data[:4] == MACH_O_MAGIC:
+            return mach_o_exports(data, self.library(name))
         offset, = struct.unpack_from("<Q", data, 0x28)
         size, count = struct.unpack_from("<HH", data, 0x3a)
         sections = [struct.unpack_from("<IIQQQQIIQQ", data, offset + index * size) for index in range(count)]
@@ -53,6 +58,32 @@ class Build:
         if len(entries) != 1:
             raise SystemExit(f"AnyPS5's build compiles {path} {len(entries)} times, expected once")
         return entries[0]
+
+
+MACH_O_MAGIC = struct.pack("<I", 0xfeedfacf)
+LC_SYMTAB = 0x2
+N_EXT = 0x01
+N_TYPE = 0x0e
+N_SECT = 0x0e
+
+
+def mach_o_exports(data, path):
+    # The defined external symbols of a 64-bit Mach-O library, whose C names carry a leading underscore.
+    commands, = struct.unpack_from("<I", data, 16)
+    offset = 32
+    for _ in range(commands):
+        command, size = struct.unpack_from("<II", data, offset)
+        if command == LC_SYMTAB:
+            symbols, count, strings, _ = struct.unpack_from("<IIII", data, offset + 8)
+            names = set()
+            for index in range(count):
+                name, kind, _, _, _ = struct.unpack_from("<IBBHQ", data, symbols + 16 * index)
+                if kind & N_EXT and kind & N_TYPE == N_SECT:
+                    text = data[strings + name:data.index(b"\0", strings + name)].decode()
+                    names.add(text[1:] if text.startswith("_") else text)
+            return names
+        offset += size
+    raise SystemExit(f"{path} has no symbol table")
 
 
 def is_test(path):

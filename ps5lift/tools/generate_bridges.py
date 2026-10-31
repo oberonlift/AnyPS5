@@ -348,7 +348,7 @@ def scan_source(job):
     return errors, candidates
 
 
-def collect(sources, exported, pool):
+def collect(sources, exported, pool, extra):
     explicit = {}
     for source, _ in sources:
         for nid, function in EXPORT_PATTERN.findall(source.read_text(errors="replace")):
@@ -359,7 +359,7 @@ def collect(sources, exported, pool):
     unsupported = {}
     parse_errors = []
     candidates = []
-    for errors, found in pool.map(scan_source, [(source, compiler_arguments(entry), explicit) for source, entry in sources]):
+    for errors, found in pool.map(scan_source, [(source, [*compiler_arguments(entry), *extra], explicit) for source, entry in sources]):
         parse_errors.extend(errors)
         candidates.extend(candidate for candidate in found if not candidate["c_linkage"] or candidate["name"] in exported)
     named = {candidate["name"] for candidate in candidates}
@@ -473,6 +473,14 @@ def use_libclang(path):
     cindex.Config.set_library_file(path)
 
 
+def resource_directory(libclang):
+    # Homebrew's libclang on macOS does not find clang's builtin headers, such as stdarg.h, beside itself.
+    versions = list((libclang.resolve().parent / "clang").iterdir())
+    if len(versions) != 1:
+        raise SystemExit(f"--libclang: expected one clang resource directory beside {libclang}, found {versions}")
+    return versions[0]
+
+
 def main():
     parser = argparse.ArgumentParser(description="Generate SysV-to-native import bridges for AnyPS5 libraries")
     parser.add_argument("library", nargs="+", help="AnyPS5 library targets, such as libc; for a NID that several export, the first one's export gets the bridge")
@@ -483,16 +491,16 @@ def main():
     parser.add_argument("--jobs", type=int, default=os.cpu_count())
     args = parser.parse_args()
 
-    initializer, initargs = None, ()
+    initializer, initargs, extra = None, (), []
     if args.libclang is not None:
         if not args.libclang.is_file():
             parser.error(f"--libclang: {args.libclang} does not exist")
-        initializer, initargs = use_libclang, (str(args.libclang),)
+        initializer, initargs, extra = use_libclang, (str(args.libclang),), ["-resource-dir", str(resource_directory(args.libclang))]
     pool = concurrent.futures.ProcessPoolExecutor(args.jobs, initializer=initializer, initargs=initargs)
     exports, data, unsupported, parse_errors = {}, {}, {}, []
     build = Build(args.anyps5_build)
     for name in args.library:
-        library_exports, library_data, library_unsupported, library_errors = collect(build.library_sources(name), build.library_exports(name), pool)
+        library_exports, library_data, library_unsupported, library_errors = collect(build.library_sources(name), build.library_exports(name), pool, extra)
         for nid, export in library_exports.items():
             exports.setdefault(nid, export)
         for nid, symbol in library_data.items():
