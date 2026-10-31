@@ -115,7 +115,7 @@ class Check:
         self.blobs = {}
         self.tree = set(self.modes)
         self.dirs = {str(parent) for path in self.tree for parent in PurePosixPath(path).parents}
-        diff = ("--find-renames", "-l0", self.base, head)
+        diff = ("--find-renames", "-l0", self.base, head, "--", ".", ":(exclude)ps5lift")
         statuses = iter(git("diff", "--name-status", "-z", *diff).split("\0")[:-1])
         for status in statuses:
             path = next(statuses)
