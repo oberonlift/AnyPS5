@@ -44,6 +44,7 @@
 #include "prx/libc/include/General.hpp"
 #include "prx/libc/include/GuestArena.hpp"
 #include "prx/libc/include/GuestHeap.hpp"
+#include "prx/libc/include/HostNetwork.hpp"
 #include "prx/libkernel/Socket/include/SocketError.hpp"
 #include "prx/libkernel/Socket/include/SocketPoll.hpp"
 #include "prx/libkernel/Socket/include/SocketRuntime.hpp"
@@ -1043,7 +1044,7 @@ int APS5_VABI sceNetBind_nid_postfix(int s, const void* addr, uint32_t addrlen) 
     NativeLength native_length = 0;
     if (!guest_to_native_address(addr, addrlen, native, native_length)) return fail(NET_EINVAL);
     if (native.ss_family != (socket.family == NET_AF_INET ? AF_INET : AF_INET6)) return fail(NET_EAFNOSUPPORT);
-    if (::bind(socket.native->value, reinterpret_cast<const sockaddr*>(&native), native_length) != 0)
+    if (HostNetwork::Bind(socket.native->value, reinterpret_cast<const sockaddr*>(&native), native_length) != 0)
         return fail(native_error());
     std::lock_guard lk(g_mutex);
     auto it = g_socks.find(s);
@@ -1142,11 +1143,11 @@ static int disconnect_datagram(const Sock& socket) {
 #ifdef _WIN32
     sockaddr_storage unspecified{};
     unspecified.ss_family = local.ss_family;
-    if (::connect(value, reinterpret_cast<const sockaddr*>(&unspecified), local_length) != 0) return fail(native_error());
+    if (HostNetwork::Connect(value, reinterpret_cast<const sockaddr*>(&unspecified), local_length) != 0) return fail(native_error());
 #else
     sockaddr unspecified{};
     unspecified.sa_family = AF_UNSPEC;
-    if (::connect(value, &unspecified, sizeof(unspecified)) != 0) return fail(native_error());
+    if (HostNetwork::Connect(value, &unspecified, sizeof(unspecified)) != 0) return fail(native_error());
 #endif
     sockaddr_storage current{};
     NativeLength current_length = sizeof(current);
@@ -1155,7 +1156,7 @@ static int disconnect_datagram(const Sock& socket) {
     sockaddr_storage wildcard{};
     wildcard.ss_family = local.ss_family;
     native_port(wildcard) = native_port(local);
-    if (::bind(value, reinterpret_cast<const sockaddr*>(&wildcard), local_length) != 0) return fail(native_error());
+    if (HostNetwork::Bind(value, reinterpret_cast<const sockaddr*>(&wildcard), local_length) != 0) return fail(native_error());
     return 0;
 }
 
@@ -1188,7 +1189,7 @@ int APS5_VABI sceNetConnect(int s, const void* addr, uint32_t addrlen) {
         const auto current = g_socks.find(s);
         if (current != g_socks.end() && current->second.native == socket.native) current->second.connectAttempted = true;
     }
-    if (::connect(socket.native->value, reinterpret_cast<const sockaddr*>(&native), native_length) == 0) {
+    if (HostNetwork::Connect(socket.native->value, reinterpret_cast<const sockaddr*>(&native), native_length) == 0) {
 #if defined(_WIN32) || defined(__APPLE__)
         note_local_address(s, socket);
 #endif
@@ -1348,12 +1349,12 @@ int64_t APS5_VABI sceNetSendto(int s, const void* buf, size_t len, int flags, co
         if (destination.ss_family != (socket.family == NET_AF_INET ? AF_INET : AF_INET6)) return fail(NET_EAFNOSUPPORT);
 #ifdef __APPLE__
         result = send_stream_in_chunks(*socket.native, flags, static_cast<const char*>(buf), len, [&](const char* data, std::size_t size) {
-            return ::sendto(socket.native->value, data, size, NATIVE_SEND_FLAGS | native_message_flags(flags),
+            return HostNetwork::SendTo(socket.native->value, data, size, NATIVE_SEND_FLAGS | native_message_flags(flags),
                 reinterpret_cast<const sockaddr*>(&destination), destination_length);
         });
 #else
         result = native_transfer(*socket.native, flags, true, [&](int offset) {
-            return ::sendto(socket.native->value, offset ? static_cast<const char*>(buf) + offset : static_cast<const char*>(buf), static_cast<int>(len) - offset, NATIVE_SEND_FLAGS | native_message_flags(flags),
+            return HostNetwork::SendTo(socket.native->value, offset ? static_cast<const char*>(buf) + offset : static_cast<const char*>(buf), static_cast<int>(len) - offset, NATIVE_SEND_FLAGS | native_message_flags(flags),
                 reinterpret_cast<const sockaddr*>(&destination), destination_length);
         }, true, static_cast<int>(len));
 #endif
@@ -2363,7 +2364,7 @@ int lookup_host(int rid, const char* hostname, const char* func, int family, std
     addrinfo hints{};
     hints.ai_family = family;
     addrinfo* results = nullptr;
-    const int result = ::getaddrinfo(hostname, nullptr, &hints, &results);
+    const int result = HostNetwork::GetAddrInfo(hostname, nullptr, &hints, &results);
     if (result != 0) {
         set_errno(result == EAI_AGAIN ? NET_ETIMEDOUT : NET_ENOENT);
         log_soft(func, "host DNS lookup failed");
@@ -2452,7 +2453,7 @@ int reverse_lookup(int rid, const sockaddr* address, NativeLength addressLength,
     std::uint64_t generation = 0;
     if (const int error = begin_lookup(rid, &Resolver::abort_aton, generation)) return error;
     std::vector<char> name(static_cast<std::size_t>(len));
-    const int result = ::getnameinfo(address, addressLength, name.data(), static_cast<NativeLength>(len), nullptr, 0, NI_NAMEREQD);
+    const int result = HostNetwork::GetNameInfo(address, addressLength, name.data(), static_cast<NativeLength>(len), nullptr, 0, NI_NAMEREQD);
     if (result != 0) {
         set_errno(result == EAI_AGAIN ? NET_ETIMEDOUT : NET_ENOENT);
         log_soft(func, "host reverse DNS lookup failed");

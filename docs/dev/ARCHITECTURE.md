@@ -114,6 +114,19 @@ APR and AMM each have their own queue and worker thread. Order is kept inside a 
 
 [`GuestAmpr.cpp`](../../core/libs/tests/GuestAmpr.cpp) checks both cases: a submit whose wait is satisfied afterwards returns and keeps buffer order, and an AMM buffer submitted after a waiting APR buffer still completes.
 
+## Networking
+
+Networking is on unless `APS5_NETWORK=0`. The libraries reach the host's network only through [HostNetwork.hpp](../../core/libs/prx/libc/include/HostNetwork.hpp), in place of the host's `connect`, `bind`, `sendto`, `getaddrinfo`, `getnameinfo`, `gethostbyname` and `gethostbyname_r`, and libc's [HostNetwork.cpp](../../core/libs/prx/libc/src/HostNetwork.cpp) holds the one policy they share. Without networking a title sees a console without a connection whose only interface is loopback:
+
+- A connection or datagram to an address other than loopback or the unspecified address fails with `ENETUNREACH`, as on a host without a route, and each library reports that with its own error.
+- Only numeric hosts and `localhost` resolve; another name fails as a lookup without a reachable name server does (`EAI_AGAIN`, which libSceNet's resolver reports as `SCE_NET_ERROR_RESOLVER_ENODNS`). A reverse lookup of another address gives its numeric form, or fails if it requires a name.
+- A socket bound to every address is bound to loopback, so nothing outside the host reaches it, and one bound to another address fails with `EADDRNOTAVAIL`.
+- libSceNetCtl reports the state `DISCONNECTED`, its information and NAT queries fail with `SCE_NET_CTL_ERROR_NOT_CONNECTED` and it sends no STUN probe, and `getifaddrs` lists only loopback interfaces.
+
+With networking, `APS5_NETWORK_ALLOW` and `APS5_NETWORK_DENY` take domains separated by commas; a domain covers its subdomains, and case and a final dot do not matter. A denied name, or one outside the allowed domains, fails as a name that does not exist (`EAI_NONAME`). An allow list also keeps the rest of the offline view: the guest reaches only loopback and the addresses that allowed names resolved to, binds every-address sockets to loopback and makes no reverse lookups. A deny list alone stops names, not addresses.
+
+`sceHttp2` throws when a name does not resolve, as on its other DNS failures (see its [debt](debt/libSceHttp2.md)), so without networking its requests stop rather than fail.
+
 ## Graphics
 
 ```mermaid

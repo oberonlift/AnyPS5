@@ -34,6 +34,7 @@
 #include "SceTypes.hpp"
 #include "prx/libc/include/General.hpp"
 #include "prx/libc/include/HostEntropy.hpp"
+#include "prx/libc/include/HostNetwork.hpp"
 #include <fstream>
 #include <memory>
 #include <mutex>
@@ -260,6 +261,7 @@ void WatchHostAddresses(HostAddressCache& cache) {
 #endif
 
 static bool HostHasAddress(int family) {
+    if (!HostNetwork::Enabled()) return false;
 #ifdef _WIN32
     auto& cache = AddressCache();
     const int slot = family == AF_INET ? 0 : family == AF_INET6 ? 1 : 2;
@@ -460,6 +462,7 @@ static bool QueryHostIpv4Interface(HostIpv4Interface& found) {
 }
 
 static bool FindHostIpv4Interface(HostIpv4Interface& found) {
+    if (!HostNetwork::Enabled()) return false;
 #ifdef _WIN32
     auto& cache = AddressCache();
     std::lock_guard guard(cache.lock);
@@ -596,7 +599,7 @@ static std::vector<sockaddr_in> ResolveStunServers(int& timeoutMs, std::uint64_t
             hints.ai_socktype = SOCK_DGRAM;
             hints.ai_protocol = IPPROTO_UDP;
             addrinfo* list = nullptr;
-            if (getaddrinfo(entry.host, entry.port, &hints, &list) != 0 || !list) continue;
+            if (HostNetwork::GetAddrInfo(entry.host, entry.port, &hints, &list) != 0 || !list) continue;
             {
                 std::lock_guard guard(state->lock);
                 for (auto* item = list; item; item = item->ai_next) {
@@ -675,8 +678,8 @@ static bool ProbeStunServer(StunSocket descriptor, const sockaddr_in& server, in
     const std::uint32_t cookie = htonl(STUN_MAGIC_COOKIE);
     std::memcpy(request + 4, &cookie, sizeof(cookie));
     HostEntropy_nid_no_patch(request + 8, STUN_TRANSACTION_ID_SIZE);
-    const auto sent = sendto(descriptor, reinterpret_cast<const char*>(request), sizeof(request), 0,
-                             reinterpret_cast<const sockaddr*>(&server), sizeof(server));
+    const auto sent = HostNetwork::SendTo(descriptor, reinterpret_cast<const char*>(request), sizeof(request), 0,
+                                          reinterpret_cast<const sockaddr*>(&server), sizeof(server));
     if (sent != static_cast<int>(sizeof(request))) return false;
     const auto probeDeadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeoutMs > 0 ? timeoutMs : 1);
     const auto deadline = probeDeadline < totalDeadline ? probeDeadline : totalDeadline;
@@ -745,7 +748,7 @@ static NetCtlNatInfo DiscoverNatInfo(in_addr localAddress) {
     bindAddr.sin_family = AF_INET;
     bindAddr.sin_addr = (ntohl(servers[0].sin_addr.s_addr) >> 24) == 127 ? servers[0].sin_addr : localAddress;
     bindAddr.sin_port = 0;
-    if (bind(descriptor, reinterpret_cast<const sockaddr*>(&bindAddr), sizeof(bindAddr)) != 0) {
+    if (HostNetwork::Bind(descriptor, reinterpret_cast<const sockaddr*>(&bindAddr), sizeof(bindAddr)) != 0) {
         CloseStunSocket(descriptor);
         return result;
     }

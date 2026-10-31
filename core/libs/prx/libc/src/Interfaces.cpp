@@ -26,6 +26,7 @@
 #endif
 #include "prx/libc/include/ApplicationHeap.hpp"
 #include "prx/libc/include/general/VabiMacros.hpp"
+#include "prx/libc/include/HostNetwork.hpp"
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
@@ -158,6 +159,7 @@ int HostEntries(std::vector<Entry>& entries) {
     if (result == ERROR_NOT_ENOUGH_MEMORY) { *__error_nid_postfix() = 12; return -1; }
     if (result != NO_ERROR) throw std::runtime_error("getifaddrs: GetAdaptersAddresses failed with " + std::to_string(result));
     for (auto* adapter = reinterpret_cast<IP_ADAPTER_ADDRESSES*>(storage.data()); adapter; adapter = adapter->Next) {
+        if (!HostNetwork::Enabled() && adapter->IfType != IF_TYPE_SOFTWARE_LOOPBACK) continue;
         std::string name;
         for (auto* unicast = adapter->FirstUnicastAddress; unicast; unicast = unicast->Next) {
             const sockaddr* address = unicast->Address.lpSockaddr;
@@ -340,7 +342,7 @@ int HostEntries(std::vector<Entry>& entries) {
     };
     try {
         for (auto* item = host; item; item = item->ifa_next) {
-            if (!item->ifa_addr) continue;
+            if (!item->ifa_addr || (!HostNetwork::Enabled() && !(item->ifa_flags & IFF_LOOPBACK))) continue;
 #ifdef __linux__
             if (item->ifa_addr->sa_family == AF_PACKET) {
                 const auto& link = *reinterpret_cast<const sockaddr_ll*>(item->ifa_addr);

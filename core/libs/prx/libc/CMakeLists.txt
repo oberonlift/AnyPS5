@@ -73,6 +73,7 @@ target_sources(libc PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/src/FloatBuiltins.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/FloatingPrefix.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/HostEntropy.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/HostNetwork.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/Backtrace.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/DinkumwareAtomics.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/DinkumwareInternals.cpp

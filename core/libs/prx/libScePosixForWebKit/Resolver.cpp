@@ -11,6 +11,7 @@
 #endif
 #include "prx/libc/include/general/VabiMacros.hpp"
 #include "prx/libc/include/HostThreadLocal.hpp"
+#include "prx/libc/include/HostNetwork.hpp"
 #include <cstdint>
 #include <algorithm>
 #include <array>
@@ -171,7 +172,7 @@ GuestResolver::HostEntry* APS5_VABI gethostbyname_nid_postfix(const char* name) 
         hostent* native = &nativeEntry;
         const bool numeric = NumericAddress(name, numericAddress);
 #ifdef _WIN32
-        if (!numeric) native = ::gethostbyname(name);
+        if (!numeric) native = HostNetwork::GetHostByName(name);
         if (!native) {
             const auto error = WSAGetLastError();
             *sceNetErrnoLoc() = error == WSAHOST_NOT_FOUND ? 1 : error == WSATRY_AGAIN ? 2 : error == WSANO_DATA ? 4 : 3;
@@ -183,14 +184,14 @@ GuestResolver::HostEntry* APS5_VABI gethostbyname_nid_postfix(const char* name) 
         int error = 0;
         if (!numeric) {
 #ifdef __APPLE__
-            native = ::gethostbyname(name);
+            native = HostNetwork::GetHostByName(name);
             if (native == nullptr) {
                 hostError = h_errno;
                 error = hostError == TRY_AGAIN ? EAGAIN : 0;
             }
 #else
             buffer.resize(1024);
-            while ((error = ::gethostbyname_r(name, &nativeEntry, buffer.data(), buffer.size(), &native, &hostError)) == ERANGE)
+            while ((error = HostNetwork::GetHostByNameR(name, &nativeEntry, buffer.data(), buffer.size(), &native, &hostError)) == ERANGE)
                 buffer.resize(buffer.size() * 2);
 #endif
         }
@@ -282,7 +283,7 @@ int APS5_VABI getaddrinfo_nid_postfix(const char* node, const char* service,
     if (rawQuery && service) return 9;
     if (!Ready()) return 4;
     addrinfo* native = nullptr;
-    const auto error = ::getaddrinfo(node, service, &nativeHints, &native);
+    const auto error = HostNetwork::GetAddrInfo(node, service, &nativeHints, &native);
     if (error) return GuestError(error);
     GuestResolver::AddressInfo* first = nullptr;
     auto** tail = &first;
@@ -366,7 +367,7 @@ int APS5_VABI getnameinfo_nid_postfix(const void* address, std::uint32_t length,
     char resolvedService[NI_MAXSERV]{};
     const bool wantHost = host && hostLength;
     const bool wantService = service && serviceLength;
-    const int error = ::getnameinfo(reinterpret_cast<const sockaddr*>(&native), nativeLength,
+    const int error = HostNetwork::GetNameInfo(reinterpret_cast<const sockaddr*>(&native), nativeLength,
         wantHost ? resolvedHost : nullptr, wantHost ? sizeof(resolvedHost) : 0,
         wantService ? resolvedService : nullptr, wantService ? sizeof(resolvedService) : 0, nativeFlags);
     if (error) return GuestError(error);
