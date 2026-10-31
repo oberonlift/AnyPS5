@@ -76,6 +76,9 @@ static void interrupted(int number) {
 
 enum { Threads = 4, Iterations = 10000 };
 
+/* A thread handle points into the process's own memory, below the end of the application area, as on the console. */
+static const unsigned long ApplicationAreaEnd = 0xfc00000000ul;
+
 static void* mutex;
 static volatile long counter;
 
@@ -184,6 +187,9 @@ int main(void) {
     }
     guest_printf("counter %ld results %ld\n", counter, sum);
     guest_printf("mutex destroy %d\n", guest_mutex_destroy(&mutex));
+    int guest_handles = (unsigned long)guest_pthread_self() < ApplicationAreaEnd;
+    for (int i = 0; i < Threads; ++i) guest_handles &= threads[i] != 0 && (unsigned long)threads[i] < ApplicationAreaEnd;
+    guest_printf("thread handles are guest addresses %d\n", guest_handles);
 
     void* exiting = 0;
     void* exited = 0;
