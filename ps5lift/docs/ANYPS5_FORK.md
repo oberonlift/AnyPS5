@@ -1,12 +1,12 @@
 # The AnyPS5 fork
 
-AnyPS5-lift builds AnyPS5's libraries from `3rdparty/anyps5`, a fork that carries a patch set on top of upstream `main` (`https://github.com/boykopovar/AnyPS5`). This file is for agents who rebase that patch set, test it, or turn it into upstream pull requests. [Design](DESIGN.md) says how the lifted libraries work; this file treats the patches as patches.
+ps5lift lives in [oberonlift/AnyPS5](https://github.com/oberonlift/AnyPS5), a fork of AnyPS5 whose `main` carries a patch set on top of upstream `main` (`https://github.com/boykopovar/AnyPS5`), and builds AnyPS5's libraries from the tree around it. This file is for agents who rebase that patch set, test it, or turn it into upstream pull requests. [Design](DESIGN.md) says how the lifted libraries work; this file treats the patches as patches.
 
 Rules:
 
 - Refer to a patch by its subject. Every rebase changes the hashes; the subjects are unique within the patch set.
-- Another agent may be rebasing the submodule. Check `git -C 3rdparty/anyps5 status` and its `HEAD` before touching it, and commit with explicit paths.
-- Commits in both repositories are authored as `Claude <noreply@anthropic.com>`.
+- Another agent may be working in the same checkout. Check `git status` and `HEAD` before rebasing, and commit with explicit paths.
+- Commits are authored as `oberonlift <oberonlift@gmail.com>`.
 
 ## Open decisions
 
@@ -14,18 +14,17 @@ Only the user can settle these. Ask before starting the work that depends on one
 
 1. **Whether [phase 2](#phase-2-the-lifted-target) goes upstream.** Unless ps5lift is public, upstream can only compile the lifted paths. Phase 1 does not depend on this.
 2. **Whether to name titles upstream.** An `Unblocks:` line gives a title ID and a public Game bring-up discussion, posted from the account that opens the pull request. Without it, phase 1's title fixes go up with `Unblocks: none` and stand on their tests.
-3. **The `Claude-Session:` trailers** on twelve patches: remove them or keep them, before the patches go anywhere new (a new remote, an upstream pull request).
-4. **Which x86-64 Linux machine** runs upstream's build and tests, and the titles phase 1 names, for the `Tested:` lines.
+3. **Which x86-64 Linux machine** runs upstream's build and tests, and the titles phase 1 names, for the `Tested:` lines.
 
 ## The patch set
 
-On 2026-10-31: 35 commits on upstream `ac551a1`, ending at the commit the superproject pins. The branch `aarch64-host`, locally and on the fork's remote, sits on an older upstream and is superseded.
+On 2026-10-31: 33 commits on upstream `474030e`, followed on `main` by the merge that brought ps5lift in under `ps5lift/` and ps5lift's own commits. The macOS patches follow them on the `macos` branch ([the macOS plan](MACOS.md)).
 
-The submodule has no `upstream` remote. Fetch by URL, then list the patch set:
+Fetch upstream by URL, then list the patch set, which is every commit since upstream outside `ps5lift/`:
 
 ```sh
-git -C 3rdparty/anyps5 fetch https://github.com/boykopovar/AnyPS5 main:refs/remotes/upstream/main
-git -C 3rdparty/anyps5 log --reverse --format='%h %s' upstream/main..HEAD
+git fetch https://github.com/boykopovar/AnyPS5 main:refs/remotes/upstream/main
+git log --reverse --no-merges --format='%h %s' upstream/main..HEAD -- . ':!ps5lift'
 ```
 
 The patches fall in four groups, listed one by one under [upstream pull requests](#upstream-pull-requests):
@@ -35,7 +34,6 @@ The patches fall in four groups, listed one by one under [upstream pull requests
 - **A network gate**: the guest is offline unless `APS5_NETWORK=1`, and `APS5_NETWORK_ALLOW` and `APS5_NETWORK_DENY` limit the domains it may resolve.
 - **Fixes found on titles**, none specific to lifting: HTTP/2 (the redirect callback, asynchronous send and read, HTTP/1.x lookups) for the EOS SDK in two Unreal titles, 16-bit access to converted images, `sceNpGetSandboxInfo`, a GPU snapshot that overlaps a writable range, and helper functions that NVIDIA's driver may inline.
 
-Twelve patches carry a `Claude-Session:` trailer, a link to a claude.ai session; see [open decisions](#open-decisions).
 
 ## What the patch set costs an x86 build
 
@@ -63,16 +61,16 @@ To confirm: build upstream `main` and the patch set for x86-64 Linux with the sa
 What runs today:
 
 - Upstream's CI builds and tests x86-64 only: the full Linux build on upstream's self-hosted runner and Windows with g++ under MSYS2, on every push to `main`, and for a pull request only when a collaborator starts the run. A relinker-only matrix covers Linux, Windows and macOS, and an Emscripten workflow compiles the libraries for WebAssembly. Nothing builds for aarch64, builds the full tree with Clang, or defines `ANYPS5_GUEST_LIFTED`.
-- AnyPS5-lift has no CI. Its `ctest` (the fixtures and `tests/libc`) runs on the GB10 by hand.
+- ps5lift has no CI. Its `ctest` (the fixtures and `tests/libc`) runs on the GB10 by hand.
 
 What follows from that:
 
-- The lifted paths compile only when someone builds AnyPS5-lift, so upstream changes break them unseen. The 2026-10-30 rebase needed two new patches, `default-construct HostGainRamp implicitly` and `cast vtable entries to functions in one place`, for new upstream code that GCC accepts and Clang rejects.
-- 24 of the 35 patches change no test file. Most compile only in the lifted build, which AnyPS5-lift's tests cover indirectly. `allocate thread objects in guest memory` changes the x86 build and has no test.
+- The lifted paths compile only when someone builds ps5lift, so upstream changes break them unseen. The 2026-10-30 rebase needed two new patches, `default-construct HostGainRamp implicitly` and `cast vtable entries to functions in one place`, for new upstream code that GCC accepts and Clang rejects; upstream made the same changes itself, and the 2026-10-31 rebase dropped both.
+- 22 of the 33 patches change no test file. Most compile only in the lifted build, which ps5lift's tests cover indirectly. `allocate thread objects in guest memory` changes the x86 build and has no test.
 
 Work items, in order:
 
-1. **CI for AnyPS5-lift on a Linux arm64 runner.** Build `ps5lift` and the runtime with LLVM 18, build AnyPS5 with Clang and `ANYPS5_GUEST_LIFTED` as the test build does in `build/anyps5`, and run `ctest`. It runs on every superproject commit, submodule bumps included, so a rebase that breaks the lifted build fails there. Find out first whether hosted arm64 runners, and enough minutes, are available for the repository's visibility; how long the AnyPS5 build takes on four cores (time it on the GB10 with `-j4`); and which tests need a display (run those under Xvfb). Titles never run in CI. A self-hosted runner on one of the user's machines needs the user's agreement.
+1. **CI for ps5lift on a Linux arm64 runner.** Build `ps5lift` and the runtime with LLVM 18, build AnyPS5 with Clang and `ANYPS5_GUEST_LIFTED` as the test build does in `build/anyps5`, and run `ctest`. It runs on every commit to `main`, rebases included, so a rebase that breaks the lifted build fails there. Find out first whether hosted arm64 runners, and enough minutes, are available for the repository's visibility; how long the AnyPS5 build takes on four cores (time it on the GB10 with `-j4`); and which tests need a display (run those under Xvfb). Titles never run in CI. A self-hosted runner on one of the user's machines needs the user's agreement.
 2. **A scheduled rebase check.** Fetch upstream `main`, rebase the patch set onto it in a scratch clone, and build the lifted configuration, so conflicts and Clang breaks show up before anyone rebases by hand.
 3. **A test for thread objects in guest memory**: the handle `scePthreadCreate` returns lies in the guest heap's memory. It belongs in AnyPS5's tests (`core/libs/tests`), where upstream's x86 CI runs it.
 4. **No timings in CI.** Hosted runners are too noisy, and upstream accepts a speed claim only with traces from one machine. The disassembly diff above settles the x86 question once.
@@ -97,14 +95,14 @@ Each applies to the x86 build too, and each one merged shrinks the patch set.
 
 | # | Pull request | Patches | Depends on | Notes |
 |---|---|---|---|---|
-| 1 | Build with Clang | make Json object members a complete type; default-construct HostGainRamp implicitly; cast vtable entries to functions in one place | none | The first pull request. Confirm first that upstream `main` fails to build with Clang on x86-64, and send only the fixes it needs. |
+| 1 | Build with Clang | make Json object members a complete type | none | The first pull request. Confirm first that upstream `main` fails to build with Clang on x86-64, and send only the fixes it needs. |
 | 2 | HTTP/2 redirect callback | keep the redirect callback a template or request sets | none | Unblocks an Unreal title (the EOS SDK). |
 | 3 | Asynchronous HTTP/2 | send and read asynchronously | 2 | Unblocks an Unreal title. Also changes libSceNet. The event codes come from the title's HTTP module, not from a console; its debt entry says so. |
 | 4 | HTTP/1.x lookups | look an HTTP/1.x request's host up before stopping on it | 3 | Unblocks an Unreal title. |
 | 5 | Empty sandbox info | report an empty sandbox from sceNpGetSandboxInfo | none | Unblocks an Unreal title. What a console writes is unmeasured, so expect questions under "generic behaviour". |
 | 6 | Snapshot over writable memory | serve a snapshot that overlaps a writable range from live memory | none | GPU checklist. |
 | 7 | 16-bit converted images | load and store converted images with 16-bit data | none | Unblocks an Unreal title. GPU checklist, and the source of the semantics. |
-| 8 | Offline by default | keep the guest offline unless APS5_NETWORK=1 | none | Changes the default for every user, so open a discussion first. If upstream wants the network on by default, AnyPS5-lift's runs set `APS5_NETWORK=0`. |
+| 8 | Offline by default | keep the guest offline unless APS5_NETWORK=1 | none | Changes the default for every user, so open a discussion first. If upstream wants the network on by default, ps5lift's runs set `APS5_NETWORK=0`. |
 | 9 | Allowed and denied domains | limit networking to allowed domains and stop denied ones | 8 | |
 | 10 | Inlinable helpers on NVIDIA | let NVIDIA's driver inline helper functions | none | GPU checklist. The patch message says the validation-layer runs were not made. |
 
