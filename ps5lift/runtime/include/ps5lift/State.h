@@ -1,6 +1,7 @@
 #ifndef PS5LIFT_STATE_H
 #define PS5LIFT_STATE_H
 
+#include <float.h>
 #include <stdint.h>
 
 #ifdef __cplusplus
@@ -193,8 +194,14 @@ Ps5LiftFunction ps5lift_resolve(uint64_t target);
 void ps5lift_apply_mxcsr(Ps5LiftState* state);
 uint32_t ps5lift_read_mxcsr(Ps5LiftState* state);
 uint32_t ps5lift_x87(Ps5LiftState* state, uint32_t operation, uint32_t format, uint64_t address, uint32_t index);
+void ps5lift_extended_arithmetic(Ps5LiftState* state, uint32_t operation, const void* left, const void* right, void* result);
+// A host long double holds every x87 value where it is x87's own format or IEEE binary128; on macOS for arm64 it is a
+// double.
+#if LDBL_MANT_DIG == 64 || LDBL_MANT_DIG == 113
+#define PS5LIFT_HOST_LONG_DOUBLE_HOLDS_EXTENDED
 void ps5lift_extended_to_host(const void* extended, long double* host);
 void ps5lift_extended_from_host(const Ps5LiftState* state, const long double* host, void* extended);
+#endif
 uint64_t ps5lift_thread_create(Ps5LiftState* parent, uint64_t entry, uint64_t argument);
 uint64_t ps5lift_thread_join(uint64_t handle);
 Ps5LiftState* ps5lift_current_state(void);

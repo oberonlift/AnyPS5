@@ -180,8 +180,7 @@ extern "C" void ps5lift_import_host__call__recorded(Ps5LiftState* state) {
 }
 
 extern "C" void ps5lift_import_host__extended(Ps5LiftState* state) {
-    const ExtendedScope scope(state);
     long sum = Stack<long>(state, 0);
     for (int index = 0; index < 6; ++index) sum += Integer<long>(state, index);
-    ReturnExtended(state, sum != 28 ? 0.0L : Extended(state, 2) / Extended(state, 4));
+    ReturnExtended(state, sum != 28 ? LongDouble() : Extended(state, 2) / Extended(state, 4));
 }

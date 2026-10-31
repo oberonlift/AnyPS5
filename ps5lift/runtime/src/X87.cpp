@@ -712,8 +712,17 @@ extern "C" std::uint32_t ps5lift_x87(Ps5LiftState* state, const std::uint32_t op
     }
 }
 
-#if LDBL_MANT_DIG != 64
-static_assert(LDBL_MANT_DIG == 113 && sizeof(long double) == sizeof(float128_t), "host long double is x87 extended or IEEE binary128");
+extern "C" void ps5lift_extended_arithmetic(Ps5LiftState* state, const std::uint32_t operation, const void* left, const void* right, void* result) {
+    Fpu fpu(state);
+    fpu.ClearRoundedUp();
+    const auto first = LoadMemory(fpu, PS5LIFT_X87_FLOAT80, reinterpret_cast<std::uint64_t>(left));
+    const auto second = LoadMemory(fpu, PS5LIFT_X87_FLOAT80, reinterpret_cast<std::uint64_t>(right));
+    fpu.Operands(first, second);
+    StoreMemory(fpu, PS5LIFT_X87_FLOAT80, reinterpret_cast<std::uint64_t>(result), WithRoundUp(fpu, [&] { return Arithmetic(operation, first, second); }));
+}
+
+#if LDBL_MANT_DIG == 113
+static_assert(sizeof(long double) == sizeof(float128_t));
 
 namespace {
 
@@ -728,6 +737,7 @@ float128_t HostDefaultNan() {
 }
 #endif
 
+#ifdef PS5LIFT_HOST_LONG_DOUBLE_HOLDS_EXTENDED
 extern "C" void ps5lift_extended_to_host(const void* extended, long double* host) {
     std::memset(host, 0, sizeof(*host));
 #if LDBL_MANT_DIG == 64
@@ -777,3 +787,4 @@ extern "C" void ps5lift_extended_from_host(const Ps5LiftState* state, const long
     std::memcpy(static_cast<unsigned char*>(extended) + 8, &converted.signExp, 2);
 #endif
 }
+#endif
