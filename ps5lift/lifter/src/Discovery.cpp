@@ -458,6 +458,96 @@ Instruction DecodeReached(const GuestImage& image, const Decoder& decoder, const
     }
 }
 
+// Whether the lifted instruction reads and writes every register through the state: an indirect call, an indirect jump
+// that no closed table resolves and an interrupt run code the lifter cannot see, and fxsave and fxrstor move every
+// vector register without naming them.
+bool UsesWholeState(const GuestImage& image, const DecodedFunction& function, const Instruction& instruction) {
+    switch (instruction.Info.mnemonic) {
+    case ZYDIS_MNEMONIC_CALL:
+        return !DirectTarget(instruction) && !ImportTarget(image, instruction);
+    case ZYDIS_MNEMONIC_JMP:
+        return !DirectTarget(instruction) && !ImportTarget(image, instruction) && !function.ClosedJumpTables.contains(instruction.Address);
+    case ZYDIS_MNEMONIC_INT:
+    case ZYDIS_MNEMONIC_INT1:
+    case ZYDIS_MNEMONIC_INTO:
+    case ZYDIS_MNEMONIC_SYSCALL:
+    case ZYDIS_MNEMONIC_FXSAVE:
+    case ZYDIS_MNEMONIC_FXSAVE64:
+    case ZYDIS_MNEMONIC_FXRSTOR:
+    case ZYDIS_MNEMONIC_FXRSTOR64:
+        return true;
+    default:
+        return false;
+    }
+}
+
+// The function's own effects, before the functions it reaches add theirs. The lifter keeps rsp in every function.
+RegisterEffects LocalEffects(const GuestImage& image, const DecodedFunction& function) {
+    RegisterEffects effects{RegisterSet{1} << (ZYDIS_REGISTER_RSP - ZYDIS_REGISTER_RAX), 0};
+    for (const auto& [address, instruction] : function.Instructions) {
+        if (UsesWholeState(image, function, instruction)) return {EveryRegister, EveryRegister};
+        const auto own = InstructionEffects(instruction);
+        effects.Named |= own.Named;
+        effects.Written |= own.Written;
+    }
+    return effects;
+}
+
+std::vector<std::uint64_t> Exits(const GuestImage& image, const DecodedFunction& function) {
+    std::set<std::uint64_t> exits;
+    const auto leave = [&](const std::uint64_t address) {
+        if (!function.Instructions.contains(address)) exits.insert(address);
+    };
+    for (const auto& [address, instruction] : function.Instructions) {
+        const auto mnemonic = instruction.Info.mnemonic;
+        if (const auto target = DirectTarget(instruction)) {
+            if (mnemonic == ZYDIS_MNEMONIC_CALL) exits.insert(*target);
+            else leave(*target);
+        } else if (const auto import = ImportTarget(image, instruction); import && (mnemonic == ZYDIS_MNEMONIC_CALL || mnemonic == ZYDIS_MNEMONIC_JMP)) {
+            exits.insert(*import);
+        }
+        if (!EndsFlow(instruction)) leave(instruction.Next());
+    }
+    for (const auto& [jump, targets] : function.JumpTables) {
+        for (const auto target : targets) leave(target);
+    }
+    return {exits.begin(), exits.end()};
+}
+
+// Adds to each function the effects of every function it reaches, until nothing changes, as recursion needs. An exit
+// that starts no function counts as unknown code.
+void CloseEffects(std::map<std::uint64_t, GuestFunction>& functions) {
+    std::vector<GuestFunction*> nodes;
+    std::map<std::uint64_t, std::size_t> indices;
+    for (auto& [entry, function] : functions) {
+        if (function.Import) function.Effects = {EveryRegister, EveryRegister};
+        indices.emplace(entry, nodes.size());
+        nodes.push_back(&function);
+    }
+    constexpr auto Unknown = ~std::size_t{0};
+    std::vector<std::vector<std::size_t>> edges(nodes.size());
+    for (std::size_t i = 0; i < nodes.size(); ++i) {
+        for (const auto exit : nodes[i]->Exits) {
+            const auto found = indices.find(exit);
+            edges[i].push_back(found == indices.end() ? Unknown : found->second);
+        }
+    }
+    for (bool changed = true; changed;) {
+        changed = false;
+        for (std::size_t i = 0; i < nodes.size(); ++i) {
+            auto effects = nodes[i]->Effects;
+            for (const auto edge : edges[i]) {
+                const auto reached = edge == Unknown ? RegisterEffects{EveryRegister, EveryRegister} : nodes[edge]->Effects;
+                effects.Named |= reached.Named;
+                effects.Written |= reached.Written;
+            }
+            if (effects == nodes[i]->Effects) continue;
+            nodes[i]->Effects = effects;
+            changed = true;
+        }
+    }
+}
+
 GuestFunction DiscoverFunction(const GuestImage& image, const Decoder& decoder, const std::set<std::uint64_t>& references, const std::uint64_t entry, const std::set<std::uint64_t>& starts,
                                std::set<std::uint64_t>& reachedStarts, std::set<std::uint64_t>& takenAddresses) {
     GuestFunction discovered;
@@ -558,6 +648,8 @@ GuestFunction DiscoverFunction(const GuestImage& image, const Decoder& decoder, 
     }
     discovered.Code.reserve(function.Instructions.size());
     for (const auto& [address, instruction] : function.Instructions) discovered.Code.push_back({address, instruction.Info.length});
+    discovered.Effects = LocalEffects(image, function);
+    discovered.Exits = Exits(image, function);
     static_cast<FunctionFlow&>(discovered) = std::move(function);
     return discovered;
 }
@@ -664,6 +756,31 @@ std::optional<Instruction> Decoder::TryDecode(const std::span<const std::uint8_t
     instruction.Address = address;
     if (ZYAN_FAILED(ZydisDecoderDecodeFull(&_decoder, code.data(), code.size(), &instruction.Info, instruction.Operands.data()))) return std::nullopt;
     return instruction;
+}
+
+RegisterEffects InstructionEffects(const Instruction& instruction) {
+    const auto bit = [](const ZydisRegister reg) -> RegisterSet {
+        const auto enclosing = ZydisRegisterGetLargestEnclosing(ZYDIS_MACHINE_MODE_LONG_64, reg);
+        if (enclosing >= ZYDIS_REGISTER_RAX && enclosing <= ZYDIS_REGISTER_R15) return RegisterSet{1} << (enclosing - ZYDIS_REGISTER_RAX);
+        if (reg >= ZYDIS_REGISTER_XMM0 && reg <= ZYDIS_REGISTER_XMM15) return RegisterSet{1} << (FirstVectorBit + reg - ZYDIS_REGISTER_XMM0);
+        if (reg >= ZYDIS_REGISTER_YMM0 && reg <= ZYDIS_REGISTER_YMM15) return RegisterSet{1} << (FirstVectorBit + reg - ZYDIS_REGISTER_YMM0);
+        return 0;
+    };
+    RegisterEffects effects;
+    const auto mnemonic = instruction.Info.mnemonic;
+    if (mnemonic == ZYDIS_MNEMONIC_VZEROUPPER || mnemonic == ZYDIS_MNEMONIC_VZEROALL) {
+        constexpr auto vectors = EveryRegister << FirstVectorBit;
+        effects = {vectors, vectors};
+    }
+    for (unsigned i = 0; i < instruction.Info.operand_count; ++i) {
+        const auto& operand = instruction.Operands[i];
+        if (operand.type == ZYDIS_OPERAND_TYPE_REGISTER) {
+            effects.Named |= bit(operand.reg.value);
+            if ((operand.actions & ZYDIS_OPERAND_ACTION_MASK_WRITE) != 0) effects.Written |= bit(operand.reg.value);
+        }
+        if (operand.type == ZYDIS_OPERAND_TYPE_MEMORY) effects.Named |= bit(operand.mem.base) | bit(operand.mem.index);
+    }
+    return effects;
 }
 
 bool IsConditionalJump(const ZydisMnemonic mnemonic) {
@@ -799,7 +916,10 @@ std::map<std::uint64_t, GuestFunction> DiscoverFunctions(const GuestImage& image
         added.clear();
         std::set_difference(reachedStarts.begin(), reachedStarts.end(), starts.begin(), starts.end(), std::inserter(added, added.end()));
         if (added.empty()) added = PaddedStarts(image, decoder, references, starts, functions);
-        if (added.empty()) return functions;
+        if (added.empty()) {
+            CloseEffects(functions);
+            return functions;
+        }
         starts.insert(added.begin(), added.end());
     }
 }
