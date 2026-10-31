@@ -19,7 +19,7 @@ Only the user can settle these. Ask before starting the work that depends on one
 
 ## The patch set
 
-On 2026-10-30: 32 commits on upstream `ac551a1`, ending at the commit the superproject pins. The branch `aarch64-host`, locally and on the fork's remote, sits on an older upstream and is superseded.
+On 2026-10-31: 35 commits on upstream `ac551a1`, ending at the commit the superproject pins. The branch `aarch64-host`, locally and on the fork's remote, sits on an older upstream and is superseded.
 
 The submodule has no `upstream` remote. Fetch by URL, then list the patch set:
 
@@ -30,8 +30,8 @@ git -C 3rdparty/anyps5 log --reverse --format='%h %s' upstream/main..HEAD
 
 The patches fall in four groups, listed one by one under [upstream pull requests](#upstream-pull-requests):
 
-- **Building for a lifted guest on aarch64**, mostly behind `ANYPS5_GUEST_LIFTED`: the build switch, the guest FPU state and timestamp counter through `GuestCpu`, x87 `long double` converted at libc's boundaries, guest `va_list`s, unwinding, `dl_iterate_phdr`, fibers (which stop when resumed on another thread), and fixes for Clang.
-- **libkernel for lifted programs**: guest thread stacks of the requested size, thread objects in guest memory, `dlopen` of lifted modules, and module information for lifted images.
+- **Building for a lifted guest on aarch64**, mostly behind `ANYPS5_GUEST_LIFTED`: the build switch and the libraries' link to ps5lift's runtime, the guest FPU state and timestamp counter through `GuestCpu`, x87 `long double` converted at libc's boundaries and then kept exactly in a class whose arithmetic runs on the runtime's x87, guest `va_list`s, unwinding, `dl_iterate_phdr`, fibers (which stop when resumed on another thread), and fixes for Clang.
+- **libkernel for lifted programs**: guest thread stacks of the requested size, thread objects in guest memory, `dlopen` of lifted modules, and module information and module lists for lifted images, which the runtime's image list holds.
 - **A network gate**: the guest is offline unless `APS5_NETWORK=1`, and `APS5_NETWORK_ALLOW` and `APS5_NETWORK_DENY` limit the domains it may resolve.
 - **Fixes found on titles**, none specific to lifting: HTTP/2 (the redirect callback, asynchronous send and read, HTTP/1.x lookups) for the EOS SDK in two Unreal titles, 16-bit access to converted images, `sceNpGetSandboxInfo`, a GPU snapshot that overlaps a writable range, and helper functions that NVIDIA's driver may inline.
 
@@ -39,7 +39,7 @@ Twelve patches carry a `Claude-Session:` trailer, a link to a claude.ai session;
 
 ## What the patch set costs an x86 build
 
-Read from the diffs on 2026-10-30, not measured. Most patches compile only under `ANYPS5_GUEST_LIFTED`, `__aarch64__` or a `long double` that is not x87. These compile into the x86 build:
+Read from the diffs on 2026-10-30 and 2026-10-31, not measured. Most patches compile only under `ANYPS5_GUEST_LIFTED`, `__aarch64__` or a `long double` that is not x87. These compile into the x86 build:
 
 | Patch | Effect on x86 |
 |---|---|
@@ -47,6 +47,7 @@ Read from the diffs on 2026-10-30, not measured. Most patches compile only under
 | build for a lifted guest (libkernel); use portable timestamp and spin pause | `GuestCpu::ReadTsc` is `__rdtsc` and `PreciseSpinPause` is `_mm_pause`. |
 | spin and diff guest memory portably | `pause` as before. `WriteChanged` keeps its SSE2 loop: upstream builds only with GCC or Clang, and both define `__SSE2__` on x86-64. |
 | convert guest long double at its boundaries | A `memcpy` where `long double` is the x87 format. |
+| keep the guest's long double exactly in lifted builds | The same `std` calls, through inline `LibcDetail` templates. `printf` formats an infinite `long double` through `double`, with the same text. |
 | read guest va_lists portably | `FormatArguments` tests one flag per argument, and a `%L` float scan goes through a local `long double`. |
 | keep the guest offline unless APS5_NETWORK=1; limit networking to allowed domains | A cached policy read per `connect` and `sendto`, and a numeric-only `getaddrinfo` before each name lookup. With `APS5_NETWORK_ALLOW` set, every `sendto` to an address takes a global mutex and a set lookup. Offline by default is a change of behaviour. |
 | allocate thread objects in guest memory | One guest-heap allocation per thread instead of a host one. |
@@ -67,7 +68,7 @@ What runs today:
 What follows from that:
 
 - The lifted paths compile only when someone builds AnyPS5-lift, so upstream changes break them unseen. The 2026-10-30 rebase needed two new patches, `default-construct HostGainRamp implicitly` and `cast vtable entries to functions in one place`, for new upstream code that GCC accepts and Clang rejects.
-- 21 of the 32 patches change no test file. Most compile only in the lifted build, which AnyPS5-lift's tests cover indirectly. `allocate thread objects in guest memory` changes the x86 build and has no test.
+- 24 of the 35 patches change no test file. Most compile only in the lifted build, which AnyPS5-lift's tests cover indirectly. `allocate thread objects in guest memory` changes the x86 build and has no test.
 
 Work items, in order:
 
@@ -114,11 +115,11 @@ Only if upstream wants a lifted aarch64 target in its tree; ask in a discussion 
 | # | Pull request | Patches | Depends on | Notes |
 |---|---|---|---|---|
 | 11 | Portable CPU helpers | reach the guest FPU state through GuestCpu; use portable timestamp and spin pause; spin and diff guest memory portably; take the FFmpeg package for the target's architecture; the `ReadTsc` part of build for a lifted guest (libkernel) | none | No change on x86, so it can also go in phase 1 as a refactor. Split `ReadTsc` out of the libkernel patch. |
-| 12 | The build switch and its CI | add ANYPS5_GUEST_LIFTED to build the libraries for ps5lift | 11 | Add a workflow that builds the libraries with Clang and `ANYPS5_GUEST_LIFTED` on an arm64 runner. |
-| 13 | Guest long double | convert guest long double at its boundaries | 12 | |
+| 12 | The build switch and its CI | add ANYPS5_GUEST_LIFTED to build the libraries for ps5lift; link lifted libraries against the ps5lift runtime | 11 | Add a workflow that builds the libraries with Clang and `ANYPS5_GUEST_LIFTED` on an arm64 runner. |
+| 13 | Guest long double | convert guest long double at its boundaries; keep the guest's long double exactly in lifted builds | 12 | Needs the runtime's `GuestCpuExtended*` entry points. |
 | 14 | Guest va_lists | read guest va_lists portably in lifted builds; start err and warn va_lists with APS5_VA_BEGIN | 13 | Uses `GuestLongDoubleRound` from 13. |
 | 15 | x86-only libc helpers | build the x86-only helpers portably for a lifted guest | 12 | |
 | 16 | Unwinding and exception pointers | unwind guest frames from the lifted guest state; keep the host's exception pointers in lifted builds | 12 | The `host_exception_pointer` test runs on x86 too. |
 | 17 | Lifted threads | the rest of build for a lifted guest (libkernel); call a lifted thread entry as the native callback it is; run a lifted guest thread on the stack it asked for; allocate thread objects in guest memory | 11, 12 | Add the thread-object test from [tests and CI](#tests-and-ci). |
-| 18 | Lifted images and modules | iterate the lifted program's guest images in dl_iterate_phdr; find lifted guest images in sceKernelGetModuleInfoFromAddr; load modules that are part of a lifted program | 17 | Unblocks an Unreal title (module information). |
+| 18 | Lifted images and modules | iterate the lifted program's guest images in dl_iterate_phdr; find lifted guest images in sceKernelGetModuleInfoFromAddr; load modules that are part of a lifted program; find a lifted guest's images through the runtime | 17 | Unblocks an Unreal title (module information). |
 | 19 | Fibers on aarch64 | switch fibers for a lifted guest on aarch64; stop a lifted fiber resumed on another thread | 17 | |
