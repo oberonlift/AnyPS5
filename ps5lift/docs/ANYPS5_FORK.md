@@ -18,7 +18,7 @@ Only the user can settle these. Ask before starting the work that depends on one
 
 ## The patch set
 
-On 2026-10-31: 33 commits on upstream `474030e`, followed on `main` by the merge that brought ps5lift in under `ps5lift/` and ps5lift's own commits. The macOS patches follow them on the `macos` branch ([the macOS plan](MACOS.md)).
+On 2026-10-31: 36 commits on upstream `474030e` change files outside `ps5lift/`: the patch set's 34, and two that make room for ps5lift (its submodules under `3rdparty/`, and the convention check leaving `ps5lift/` to its own conventions). The merge that brought ps5lift in under `ps5lift/` and ps5lift's own commits sit among them on `main`. The macOS patches follow on the `macos` branch ([the macOS plan](MACOS.md)).
 
 Fetch upstream by URL, then list the patch set, which is every commit since upstream outside `ps5lift/`:
 
@@ -66,7 +66,7 @@ What runs today:
 What follows from that:
 
 - The lifted paths compile only when someone builds ps5lift, so upstream changes break them unseen. The 2026-10-30 rebase needed two new patches, `default-construct HostGainRamp implicitly` and `cast vtable entries to functions in one place`, for new upstream code that GCC accepts and Clang rejects; upstream made the same changes itself, and the 2026-10-31 rebase dropped both.
-- 22 of the 33 patches change no test file. Most compile only in the lifted build, which ps5lift's tests cover indirectly. `allocate thread objects in guest memory` changes the x86 build and has no test.
+- 24 of the 36 patches change no test file. Most compile only in the lifted build, which ps5lift's tests cover indirectly. `allocate thread objects in guest memory` changes the x86 build and has no test.
 
 Work items, in order:
 
@@ -115,7 +115,7 @@ Only if upstream wants a lifted aarch64 target in its tree; ask in a discussion 
 | 11 | Portable CPU helpers | reach the guest FPU state through GuestCpu; use portable timestamp and spin pause; spin and diff guest memory portably; take the FFmpeg package for the target's architecture; the `ReadTsc` part of build for a lifted guest (libkernel) | none | No change on x86, so it can also go in phase 1 as a refactor. Split `ReadTsc` out of the libkernel patch. |
 | 12 | The build switch and its CI | add ANYPS5_GUEST_LIFTED to build the libraries for ps5lift; link lifted libraries against the ps5lift runtime | 11 | Add a workflow that builds the libraries with Clang and `ANYPS5_GUEST_LIFTED` on an arm64 runner. |
 | 13 | Guest long double | convert guest long double at its boundaries; keep the guest's long double exactly in lifted builds | 12 | Needs the runtime's `GuestCpuExtended*` entry points. |
-| 14 | Guest va_lists | read guest va_lists portably in lifted builds; start err and warn va_lists with APS5_VA_BEGIN | 13 | Uses `GuestLongDoubleRound` from 13. |
+| 14 | Guest va_lists | read guest va_lists portably in lifted builds; start err and warn va_lists with APS5_VA_BEGIN; hand report handlers a SysV va_list in lifted builds | 13 | Uses `GuestLongDoubleRound` from 13. |
 | 15 | x86-only libc helpers | build the x86-only helpers portably for a lifted guest | 12 | |
 | 16 | Unwinding and exception pointers | unwind guest frames from the lifted guest state; keep the host's exception pointers in lifted builds | 12 | The `host_exception_pointer` test runs on x86 too. |
 | 17 | Lifted threads | the rest of build for a lifted guest (libkernel); call a lifted thread entry as the native callback it is; run a lifted guest thread on the stack it asked for; allocate thread objects in guest memory | 11, 12 | Add the thread-object test from [tests and CI](#tests-and-ci). |
