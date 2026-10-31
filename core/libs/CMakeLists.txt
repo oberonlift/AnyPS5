@@ -130,10 +130,17 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
 endif()
 
 set(UNPATCHED_DIR ${CMAKE_CURRENT_BINARY_DIR}/libs/unpatched)
-if(APPLE AND CMAKE_SYSTEM_PROCESSOR STREQUAL "arm64")
-    set(UNSIGN_FOR_PATCHING COMMAND codesign --remove-signature)
-    set(SIGN_AFTER_PATCHING COMMAND codesign --sign - --force)
-endif()
+function(nid_patch_commands variable unpatched patched)
+    set(commands COMMAND ${CMAKE_COMMAND} -E copy ${unpatched} ${patched})
+    if(APPLE AND CMAKE_SYSTEM_PROCESSOR STREQUAL "arm64")
+        list(APPEND commands COMMAND codesign --remove-signature ${patched})
+    endif()
+    list(APPEND commands COMMAND $<TARGET_FILE:nid_patcher> ${ARGN} ${patched})
+    if(APPLE AND CMAKE_SYSTEM_PROCESSOR STREQUAL "arm64")
+        list(APPEND commands COMMAND codesign --sign - --force ${patched})
+    endif()
+    set(${variable} ${commands} PARENT_SCOPE)
+endfunction()
 set(PATCHED_DIR ${CMAKE_CURRENT_BINARY_DIR}/libs)
 set(IMPLIB_DIR ${PATCHED_DIR}/implib)
 set(RELEASE_IMPLIBS "libc=$<TARGET_LINKER_FILE:libc>\n")
@@ -159,12 +166,10 @@ add_custom_command(
         COMMENT "Listing libc exports"
 )
 
+nid_patch_commands(LIBC_PATCH_COMMANDS ${LIBC_UNPATCHED} ${LIBC_PATCHED} libc)
 add_custom_command(
         OUTPUT ${LIBC_PATCHED}
-        COMMAND ${CMAKE_COMMAND} -E copy ${LIBC_UNPATCHED} ${LIBC_PATCHED}
-        ${UNSIGN_FOR_PATCHING} ${LIBC_PATCHED}
-        COMMAND $<TARGET_FILE:nid_patcher> libc ${LIBC_PATCHED}
-        ${SIGN_AFTER_PATCHING} ${LIBC_PATCHED}
+        ${LIBC_PATCH_COMMANDS}
         DEPENDS nid_patcher libc ${LIBC_UNPATCHED}
         COMMENT "Patching NIDs for libc"
 )
@@ -219,12 +224,10 @@ foreach(LIB_DIR ${LIBS_DIRS})
         set(UNPATCHED_FILE ${UNPATCHED_DIR}/${LIB_NAME}.prx)
         set(PATCHED_FILE ${PATCHED_DIR}/${LIB_NAME}.prx)
 
+        nid_patch_commands(PATCH_COMMANDS ${UNPATCHED_FILE} ${PATCHED_FILE} ${LIB_NAME} --preserve-export-list ${LIBC_EXPORT_LIST})
         add_custom_command(
                 OUTPUT ${PATCHED_FILE}
-                COMMAND ${CMAKE_COMMAND} -E copy ${UNPATCHED_FILE} ${PATCHED_FILE}
-                ${UNSIGN_FOR_PATCHING} ${PATCHED_FILE}
-                COMMAND $<TARGET_FILE:nid_patcher> ${LIB_NAME} --preserve-export-list "${LIBC_EXPORT_LIST}" "${PATCHED_FILE}"
-                ${SIGN_AFTER_PATCHING} ${PATCHED_FILE}
+                ${PATCH_COMMANDS}
                 DEPENDS nid_patcher ${LIB_NAME} ${UNPATCHED_FILE} ${LIBC_EXPORT_LIST}
                 COMMENT "Patching NIDs for ${LIB_NAME}"
         )
