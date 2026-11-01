@@ -60,14 +60,17 @@ foreach(triple IN LISTS PS5LIFT_TEST_TRIPLES)
         if(fixture STREQUAL "threads")
             set(memory_models --memory tso)
         endif()
-        add_test(NAME fixture_${fixture}_${arch}
-                COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tools/ps5lift.py fixture
-                        --ps5lift $<TARGET_FILE:ps5lift>
-                        --clang ${CMAKE_C_COMPILER}
-                        --clangxx ${CMAKE_CXX_COMPILER}
-                        --triple ${triple}
-                        --fixture ${fixture}
-                        ${memory_models})
+        foreach(level O0 O1 O2 O3)
+            add_test(NAME fixture_${fixture}_${level}_${arch}
+                    COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tools/ps5lift.py fixture
+                            --ps5lift $<TARGET_FILE:ps5lift>
+                            --clang ${CMAKE_C_COMPILER}
+                            --clangxx ${CMAKE_CXX_COMPILER}
+                            --triple ${triple}
+                            --fixture ${fixture}
+                            --optimization=-${level}
+                            ${memory_models})
+        endforeach()
     endforeach()
     add_test(NAME fixture_basic_unoptimized_${arch}
             COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tools/ps5lift.py fixture
@@ -133,13 +136,16 @@ if(NOT PS5LIFT_LIBCLANG_PYTHON EQUAL 0)
             "Install them (python3-clang-18 on Ubuntu) or configure with -DBUILD_TESTING=OFF.")
 endif()
 foreach(fixture libc exceptions kernel fiber)
-    add_test(NAME ${fixture}_${PS5LIFT_HOST_ARCH}
-            COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tools/ps5lift.py libc-fixture
-                    --ps5lift $<TARGET_FILE:ps5lift>
-                    --anyps5-build ${PS5LIFT_ANYPS5_BUILD}
-                    --clang ${CMAKE_C_COMPILER}
-                    --clangxx ${CMAKE_CXX_COMPILER}
-                    --fixture ${fixture})
+    foreach(level O0 O2)
+        add_test(NAME ${fixture}_${level}_${PS5LIFT_HOST_ARCH}
+                COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tools/ps5lift.py libc-fixture
+                        --ps5lift $<TARGET_FILE:ps5lift>
+                        --anyps5-build ${PS5LIFT_ANYPS5_BUILD}
+                        --clang ${CMAKE_C_COMPILER}
+                        --clangxx ${CMAKE_CXX_COMPILER}
+                        --fixture ${fixture}
+                        --optimization=-${level})
+    endforeach()
 endforeach()
 
 add_test(NAME record_bridges
