@@ -2,7 +2,7 @@
 
 A static recompiler for PS5 executables. `ps5lift` lifts guest x86-64 code to LLVM IR and compiles it to native code for the host, so a title can run on aarch64 Linux machines such as the NVIDIA DGX Spark (GB10) without an x86 emulator. The system libraries come from [AnyPS5](https://github.com/boykopovar/anyps5), which is a submodule; its ELF reader and `.eh_frame` scanner are the lifter's frontend.
 
-Status: **milestone 2 in progress**. Guest code built for Zen 2, including SSE, AVX2, FMA, F16C and x87 code, lifts and runs on aarch64 with the same output as on x86-64. AnyPS5's PS5-style test executables (NID imports, static TLS) relink, lift and run, and so does [EVO Player](https://github.com/sainsaji/EVO-PLAYER-PS5), a homebrew media player, as far as its home screen. Commercial titles do not run yet; see [the design](docs/DESIGN.md), [known gaps](docs/DEBT.md) and [next steps](docs/NEXT.md).
+Status: **milestone 2 in progress**. Guest code built for Zen 2, including SSE, AVX2, FMA, F16C and x87 code, lifts and runs on aarch64 with the same output as on x86-64. AnyPS5's PS5-style test executables (NID imports, static TLS) relink, lift and run, and so does [EVO Player](https://github.com/sainsaji/EVO-PLAYER-PS5), a homebrew media player, as far as its home screen. Commercial titles do not run yet; see [the design](docs/DESIGN.md) and [known gaps](docs/DEBT.md).
 
 ## Build
 
@@ -20,7 +20,7 @@ ctest --test-dir build --output-on-failure
 
 When the tests run lifted code natively they lift it for the host CPU (`--cpu native`), since the `neoverse-v2` default uses SVE, which CPUs such as Apple's do not have; `run_fixture.py --cpu` lifts for another CPU. On an aarch64 host the test lifts the fixture and runs it natively; building the x86-64 guests there needs an x86-64 cross toolchain and libraries (`g++-x86-64-linux-gnu` on Ubuntu). On an x86-64 host it also runs it natively and, when `qemu-aarch64` and an aarch64 sysroot are installed (`qemu-user g++-aarch64-linux-gnu`), lifts it for aarch64 and runs it under qemu. AnyPS5 is built for the host, so the tests that use its libraries run for the host's architecture only. The libc tests reserve the PS5 user address range, about 1 TiB of address space, so they fail under a `ulimit -v` limit.
 
-On an Apple Silicon Mac `ps5lift` builds and lifts for Linux, but what it lifts still runs on Linux only ([the macOS plan](docs/MACOS.md)). Xcode's command-line tools and Homebrew's `llvm` and `lld` are the toolchain. The tests lift every fixture for aarch64 and x86-64 Linux without running the result, and leave out AnyPS5's build and the tests that use its libraries. The x86-64 guests that use threads or libc build against an x86-64 Linux sysroot: a directory holding `usr/x86_64-linux-gnu` and `usr/lib/gcc-cross/x86_64-linux-gnu` as Ubuntu's `g++-x86-64-linux-gnu` installs them, copied from such a machine.
+On an Apple Silicon Mac `ps5lift` builds and lifts for Linux, but what it lifts still runs on Linux only. Xcode's command-line tools and Homebrew's `llvm` and `lld` are the toolchain. The tests lift every fixture for aarch64 and x86-64 Linux without running the result, and leave out AnyPS5's build and the tests that use its libraries. The x86-64 guests that use threads or libc build against an x86-64 Linux sysroot: a directory holding `usr/x86_64-linux-gnu` and `usr/lib/gcc-cross/x86_64-linux-gnu` as Ubuntu's `g++-x86-64-linux-gnu` installs them, copied from such a machine.
 
 ```sh
 git submodule update --init --recursive 3rdparty/zydis 3rdparty/softfloat
