@@ -166,6 +166,16 @@ extern "C" {
     ServeMainQueue(nullptr);
 }
 
+#ifdef ANYPS5_GUEST_LIFTED
+[[noreturn]] void Aps5ServeMainQueue_nid_no_patch(void (*start)(void*), void* context) {
+    mainLoopRunning.store(true, std::memory_order_release);
+    start(context);
+    CFRunLoopTimerRef timer = CFRunLoopTimerCreate(nullptr, 1.0e10, 1.0e10, 0, 0, KeepAlive, nullptr);
+    CFRunLoopAddTimer(CFRunLoopGetMain(), timer, kCFRunLoopCommonModes);
+    for (;;) CFRunLoopRun();
+}
+#endif
+
 void Aps5RunOnMainThread_nid_no_patch(void (*function)(void*), void* context) {
     if (pthread_main_np() != 0 || !mainLoopRunning.load(std::memory_order_acquire)) {
         function(context);
