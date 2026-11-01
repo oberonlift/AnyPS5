@@ -83,7 +83,7 @@ Function-pointer parameters become native thunks that call back into the guest (
 
 Several libraries can go into one file (`generate_bridges.py libc libkernel --anyps5-build build/anyps5 -o bridges.cpp`); a NID that more than one exports gets the first one's bridge. `tools/survey_libraries.py --anyps5-build build/anyps5` generates the bridges of every AnyPS5 library and reports how many exports each covers (`--json` keeps the details).
 
-The bridges call AnyPS5's libraries as AnyPS5's own CMake build makes them with `ANYPS5_GUEST_LIFTED`: the test build builds AnyPS5 in `build/anyps5`, whose `core/libs/libs/unpatched` holds each library as a shared object before NID patching. `tools/run_libc_tests.py` runs upstream's libc, socket and resolver tests against those libraries, including the one that checks the offline view and the domain lists, and `tools/run_libc_fixture.py` lifts a guest that calls the libraries through the generated bridges; ctest runs both.
+The bridges call AnyPS5's libraries as AnyPS5's own CMake build makes them with `ANYPS5_GUEST_LIFTED`: the test build builds AnyPS5 in `build/anyps5`, whose `core/libs/libs/unpatched` holds each library as a shared object before NID patching. `tools/run_libc_tests.py` runs upstream's libc, socket and resolver tests against those libraries, and `tools/run_libc_fixture.py` lifts a guest that calls the libraries through the generated bridges; ctest runs both.
 
 ## Benchmark
 
