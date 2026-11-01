@@ -95,6 +95,7 @@ add_custom_target(ps5lift_host_runtime
         VERBATIM)
 
 set(PS5LIFT_ANYPS5_BUILD ${CMAKE_BINARY_DIR}/anyps5)
+set(PS5LIFT_ANYPS5_LIBRARIES ${PS5LIFT_ANYPS5_BUILD}/core/libs/libs/unpatched)
 # The libraries share the process with lifted code and the runtime, so they are built for the CPU both are built for
 # (tools/ps5lift.py runtime).
 set(PS5LIFT_ANYPS5_CPU_FLAGS)
@@ -111,7 +112,8 @@ ExternalProject_Add(anyps5
         BUILD_COMMAND ${CMAKE_COMMAND} --build <BINARY_DIR> --target libs relinker
         INSTALL_COMMAND ""
         BUILD_ALWAYS ON
-        BUILD_BYPRODUCTS ${PS5LIFT_ANYPS5_BUILD}/core/relinker/relinker
+        BUILD_BYPRODUCTS ${PS5LIFT_ANYPS5_BUILD}/core/relinker/relinker ${PS5LIFT_ANYPS5_LIBRARIES}/libc.prx ${PS5LIFT_ANYPS5_LIBRARIES}/libkernel.prx
+                         ${PS5LIFT_ANYPS5_LIBRARIES}/libSceFiber.prx
         EXCLUDE_FROM_ALL OFF)
 
 foreach(triple IN LISTS PS5LIFT_TEST_TRIPLES)
@@ -135,7 +137,25 @@ if(NOT PS5LIFT_LIBCLANG_PYTHON EQUAL 0)
             "which ${Python3_EXECUTABLE} cannot load:\n${PS5LIFT_LIBCLANG_PYTHON_ERROR}"
             "Install them (python3-clang-18 on Ubuntu) or configure with -DBUILD_TESTING=OFF.")
 endif()
+# Each fixture's bridges are generated once, by the build, from the libraries it calls.
+set(PS5LIFT_BRIDGES_libc libc)
+set(PS5LIFT_BRIDGES_exceptions libc)
+set(PS5LIFT_BRIDGES_kernel libc libkernel)
+set(PS5LIFT_BRIDGES_fiber libc libkernel libSceFiber)
+set(PS5LIFT_TEST_BRIDGES)
 foreach(fixture libc exceptions kernel fiber)
+    set(bridges ${CMAKE_BINARY_DIR}/test-bridges/${fixture}.cpp)
+    set(libraries)
+    foreach(library IN LISTS PS5LIFT_BRIDGES_${fixture})
+        list(APPEND libraries ${PS5LIFT_ANYPS5_LIBRARIES}/${library}.prx)
+    endforeach()
+    add_custom_command(OUTPUT ${bridges}
+            COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_BINARY_DIR}/test-bridges
+            COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tools/ps5lift.py bridges ${PS5LIFT_BRIDGES_${fixture}}
+                    --anyps5-build ${PS5LIFT_ANYPS5_BUILD} -o ${bridges}
+            DEPENDS ${libraries} ${CMAKE_SOURCE_DIR}/tools/ps5lift.py
+            VERBATIM)
+    list(APPEND PS5LIFT_TEST_BRIDGES ${bridges})
     foreach(level O0 O2)
         add_test(NAME ${fixture}_${level}_${PS5LIFT_HOST_ARCH}
                 COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tools/ps5lift.py libc-fixture
@@ -144,9 +164,11 @@ foreach(fixture libc exceptions kernel fiber)
                         --clang ${CMAKE_C_COMPILER}
                         --clangxx ${CMAKE_CXX_COMPILER}
                         --fixture ${fixture}
+                        --bridges ${bridges}
                         --optimization=-${level})
     endforeach()
 endforeach()
+add_custom_target(ps5lift_test_bridges ALL DEPENDS ${PS5LIFT_TEST_BRIDGES})
 
 add_test(NAME record_bridges
         COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tools/ps5lift.py record-bridges --clang ${CMAKE_C_COMPILER})
