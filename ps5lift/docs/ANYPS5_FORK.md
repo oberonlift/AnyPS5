@@ -18,7 +18,7 @@ Only the user can settle these. Ask before starting the work that depends on one
 
 ## The patch set
 
-On 2026-10-31, on the `macos` branch: 46 commits on upstream `474030e` change files outside `ps5lift/`. The first 36 are `main`'s: the patch set's 34 and two that make room for ps5lift, among which sit the merge that brought ps5lift in under `ps5lift/` and ps5lift's own commits. The last 10 build the libraries for a lifted guest on macOS ([the macOS plan](MACOS.md)).
+On 2026-10-31, on the `macos` branch: 45 commits on upstream `8a4fc62` change files outside `ps5lift/`. The first 35 are `main`'s: the patch set's 33 and two that make room for ps5lift, among which sit the merge that brought ps5lift in under `ps5lift/` and ps5lift's own commits. The last 10 build the libraries for a lifted guest on macOS ([the macOS plan](MACOS.md)).
 
 Fetch upstream by URL, then list the patch set, which is every commit since upstream outside `ps5lift/`:
 
