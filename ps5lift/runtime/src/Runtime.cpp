@@ -39,6 +39,20 @@ bool HostFeature(const char* name) {
     if (sysctlbyname(name, &value, &size, nullptr, 0) != 0) ps5lift_fail("cannot read the host CPU feature %s: %s", name, std::strerror(errno));
     return value != 0;
 }
+
+constexpr std::uint64_t GuestImagesStart = 0xFC00000000ull;
+constexpr std::uint64_t GuestImagesEnd = std::uint64_t{1} << 40;
+
+struct GuestImagesReservation {
+    GuestImagesReservation() {
+        mach_vm_address_t address = GuestImagesStart;
+        if (const kern_return_t result = mach_vm_map(mach_task_self(), &address, GuestImagesEnd - GuestImagesStart, 0, VM_FLAGS_FIXED, MEMORY_OBJECT_NULL, 0, FALSE, VM_PROT_NONE, VM_PROT_ALL, VM_INHERIT_DEFAULT);
+            result != KERN_SUCCESS)
+            ps5lift_fail("cannot reserve the guest images' range at 0x%" PRIx64 "-0x%" PRIx64 ": %s", GuestImagesStart, GuestImagesEnd, mach_error_string(result));
+    }
+};
+
+const GuestImagesReservation ReservedGuestImages;
 #endif
 
 constexpr std::uint32_t ArenaReadWrite = 0x04;
@@ -80,7 +94,8 @@ void MapSegments(const Ps5LiftImage& image) {
     }
 #if defined(__APPLE__)
     mach_vm_address_t address = begin;
-    if (const kern_return_t result = mach_vm_allocate(mach_task_self(), &address, end - begin, VM_FLAGS_FIXED); result != KERN_SUCCESS)
+    const int reserved = begin >= GuestImagesStart && end <= GuestImagesEnd ? VM_FLAGS_OVERWRITE : 0;
+    if (const kern_return_t result = mach_vm_allocate(mach_task_self(), &address, end - begin, VM_FLAGS_FIXED | reserved); result != KERN_SUCCESS)
         ps5lift_fail("cannot map the guest image at 0x%" PRIx64 "-0x%" PRIx64 ": %s", begin, end, mach_error_string(result));
 #else
     auto* mapped = mmap(start, end - begin, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED_NOREPLACE, -1, 0);
