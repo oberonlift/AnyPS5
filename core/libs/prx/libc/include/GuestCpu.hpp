@@ -18,6 +18,7 @@ std::uint32_t GuestCpuMxcsrMask_nid_no_patch(void);
 void GuestCpuUnwindStart_nid_no_patch(std::uint64_t* registers);
 bool GuestCpuUnwindTables_nid_no_patch(std::uint64_t pc, const void** header, std::uint64_t* text, std::uint64_t* data);
 const char* GuestCpuImportName_nid_no_patch(std::uint64_t address);
+void GuestCpuMakingWritable_nid_no_patch(std::uint64_t address, std::uint64_t length);
 [[noreturn]] void GuestCpuUnwindResume_nid_no_patch(const std::uint64_t* registers);
 std::uint64_t GuestCpuReadTsc_nid_no_patch(void);
 void GuestCpuUseStack_nid_no_patch(std::uint64_t stackTop);
