@@ -27,6 +27,11 @@
 #include <unistd.h>
 #include <unordered_map>
 #include "prx/libc/include/specifics/linux/ElfTypes.hpp"
+#ifdef __APPLE__
+#include <climits>
+#include <cstdlib>
+#include <mach-o/dyld.h>
+#endif
 #endif
 
 extern "C" std::int32_t ModuleIdForImage_nid_no_patch(const void* native);
@@ -111,10 +116,20 @@ EhFrame::Tables FrameTables(const dl_phdr_info& image, std::uintptr_t header) {
 std::string ImageName(const dl_phdr_info& image) {
     std::string path = image.dlpi_name ? image.dlpi_name : "";
     if (path.empty()) {
+#ifdef __APPLE__
+        std::uint32_t size = 0;
+        _NSGetExecutablePath(nullptr, &size);
+        std::string executable(size, '\0');
+        char resolved[PATH_MAX];
+        if (_NSGetExecutablePath(executable.data(), &size) != 0 || !::realpath(executable.c_str(), resolved))
+            throw std::runtime_error("sceKernelGetModuleInfoFromAddr: cannot resolve the executable path");
+        path = resolved;
+#else
         char executable[4096];
         const auto length = ::readlink("/proc/self/exe", executable, sizeof(executable) - 1);
         if (length < 0) throw std::runtime_error("sceKernelGetModuleInfoFromAddr: cannot resolve the executable path");
         path.assign(executable, static_cast<std::size_t>(length));
+#endif
     }
     return ModuleName(path.substr(path.find_last_of('/') + 1));
 }

@@ -28,6 +28,9 @@
 #include "prx/libc/include/specifics/linux/ElfTypes.hpp"
 #ifdef __linux__
 #include <unistd.h>
+#elif defined(__APPLE__)
+#include <mach-o/dyld.h>
+#include <pthread.h>
 #endif
 #endif
 #include "prx/libc/include/HostThreadLocal.hpp"
@@ -179,13 +182,18 @@ void* FindSymbol(Module& module, const char* name) {
     return Symbol(module, (nid + guestSuffix).c_str());
 #endif
 }
-#ifdef __linux__
+#if defined(__linux__) || defined(ANYPS5_GUEST_LIFTED)
 template <typename Start, typename Initialize>
 void RunGuestLifecycle(std::uint64_t* table, Start start, Initialize initialize) {
     if (table[0] != 0x415053354c494658ull) throw std::runtime_error("dlopen: unsupported guest lifecycle metadata");
     static std::mutex initializedLock;
     static std::condition_variable initializedChanged;
+#ifdef __APPLE__
+    std::uint64_t thread = 0;
+    pthread_threadid_np(nullptr, &thread);
+#else
     const auto thread = static_cast<std::uint64_t>(::gettid());
+#endif
     std::unique_lock lock(initializedLock);
     while (table[6] == 1) {
         if (table[7] == thread) return;
@@ -227,7 +235,6 @@ char* APS5_VABI dlerror_nid_postfix() {
     pendingError = false;
     return LoaderError().data();
 }
-#ifdef __linux__
 #ifdef ANYPS5_GUEST_LIFTED
 static void InitializeLiftedGuestModule(const std::uint64_t image) {
     auto* table = reinterpret_cast<std::uint64_t*>(GuestCpuImageSymbol_nid_no_patch(image, "__aps5_guest_lifecycle_nid_no_patch"));
@@ -239,7 +246,7 @@ static void InitializeLiftedGuestModule(const std::uint64_t image) {
         },
         [](const std::uint64_t initializer) { GuestCpuCall_nid_no_patch(initializer, 0, 0, 0); });
 }
-#else
+#elif defined(__linux__)
 static void InitializeLinuxGuestModule(void* native) {
     auto* table = static_cast<std::uint64_t*>(::dlsym(native, "__aps5_guest_lifecycle_nid_no_patch"));
     if (!table) return;
@@ -257,7 +264,6 @@ static void InitializeLinuxGuestModule(void* native) {
         [](const std::uint64_t entry, const PendingModuleArgs& pending) { return reinterpret_cast<Entry>(entry)(pending.args, pending.argp, nullptr); },
         [](const std::uint64_t initializer) { reinterpret_cast<Initializer>(initializer)(0, nullptr, nullptr); });
 }
-#endif
 #endif
 #ifdef _WIN32
 static void InitializeDeferredModule(HMODULE native) {
@@ -440,6 +446,8 @@ int APS5_VABI dlclose_nid_postfix(void* handle) {
         GuestAllocations::Mutation mutation;
 #ifdef _WIN32
         mutation.UnregisterImage(module->native);
+#elif defined(__APPLE__)
+        mutation.UnregisterImage(_dyld_get_dlopen_image_header(module->native));
 #else
         mutation.UnregisterImage(reinterpret_cast<const void*>(static_cast<link_map*>(module->native)->l_addr));
 #endif
