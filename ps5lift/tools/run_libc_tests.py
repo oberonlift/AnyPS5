@@ -18,7 +18,7 @@ TESTS = {
     "GuestNetworkPolicy": ["libSceNetCtl", "libScePosixForWebKit", "libkernel", "libc"], "GuestTcp": ["libkernel", "libc"],
     "GuestSocketOptions": ["libkernel", "libc"], "GuestResolver": ["libScePosixForWebKit", "libSceNet", "libc"], "ResolverRaw": ["libScePosixForWebKit", "libc"],
 }
-RUNS = {"GuestNetworkPolicy": [["offline"], ["allow"], ["deny"]], "GuestHttp2Transport": [[], ["--early"]]}
+RUNS = {"GuestNetworkPolicy": [["offline"], ["online"], ["allow"], ["deny"]], "GuestHttp2Transport": [[], ["--early"]]}
 ARCHIVES = {"GuestHttp2Transport": ["3rdparty/nghttp2/lib/libnghttp2.a", "3rdparty/mbedtls/library/libmbedtls.a", "3rdparty/mbedtls/library/libmbedx509.a",
                                     "3rdparty/mbedtls/library/libmbedcrypto.a"]}
 IMAGE_STUB = ROOT / "tests" / "libc" / "image_stub.cpp"
