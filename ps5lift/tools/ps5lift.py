@@ -117,12 +117,12 @@ def compare(expected, actual, label):
     return False
 
 
-def configured_compilers(build):
+def configured_tools(build):
     cache = Path(build) / "CMakeCache.txt"
     if not cache.exists():
         raise SystemExit(f"{cache} does not exist: configure ps5lift there first (see docs/dev/PS5LIFT.md)")
-    values = dict(re.findall(r"^(CMAKE_C_COMPILER|CMAKE_CXX_COMPILER):\w+=(.*)$", cache.read_text(), re.MULTILINE))
-    return values["CMAKE_C_COMPILER"], values["CMAKE_CXX_COMPILER"]
+    values = dict(re.findall(r"^(CMAKE_C_COMPILER|CMAKE_CXX_COMPILER|PS5LIFT_LIBCLANG|PS5LIFT_VULKAN_LOADER):\w+=(.*)$", cache.read_text(), re.MULTILINE))
+    return values["CMAKE_C_COMPILER"], values["CMAKE_CXX_COMPILER"], values.get("PS5LIFT_LIBCLANG"), values.get("PS5LIFT_VULKAN_LOADER")
 
 
 DEPENDENCY_OPTIONS = {"-o", "-MF", "-MT", "-MQ"}
@@ -972,7 +972,13 @@ def game_command(args):
     dump = Path(args.dump).resolve()
     if not (dump / "eboot.bin").is_file():
         raise SystemExit(f"{dump} holds no eboot.bin: pass the title's extracted app0 directory")
-    clang, clangxx = configured_compilers(build)
+    clang, clangxx, libclang, vulkan_loader = configured_tools(build)
+    triple = host_triple()
+    loader_search = []
+    if apple(triple):
+        if not vulkan_loader:
+            raise SystemExit(f"{build} names no Vulkan loader, which a game loads on macOS: configure it with -DPS5LIFT_VULKAN_LOADER=<libvulkan.1.dylib>, from Homebrew's vulkan-loader and molten-vk or the Vulkan SDK")
+        loader_search = [f"-Wl,-rpath,{Path(vulkan_loader).parent}"]
     lifter = build / "lifter" / "ps5lift"
     anyps5 = build / "anyps5"
     if not lifter.is_file() or not (anyps5 / "compile_commands.json").is_file():
@@ -989,24 +995,23 @@ def game_command(args):
     libraries = needed_libraries(elf)
     bridges = out / "bridges.cpp"
     print(f"generating bridges for {len(libraries)} libraries")
-    generate_bridges(libraries, anyps5, bridges, jobs=args.jobs)
+    generate_bridges(libraries, anyps5, bridges, libclang, args.jobs)
     archive = out / "app.a"
     if not args.relift and archive.exists() and archive.stat().st_mtime > max(lifter.stat().st_mtime, elf.stat().st_mtime):
         print(f"lifted: {archive}")
     else:
         print(f"lifting {elf}")
         archive.unlink(missing_ok=True)
-        result = subprocess.run([str(lifter), str(elf), "-o", str(archive), *(["--jobs", str(args.jobs)] if args.jobs else [])], stderr=subprocess.PIPE, text=True)
+        result = subprocess.run([str(lifter), str(elf), "-o", str(archive), "--triple", triple, *(["--jobs", str(args.jobs)] if args.jobs else [])], stderr=subprocess.PIPE, text=True)
         (out / "lift.log").write_text(result.stderr)
         if result.returncode != 0:
             raise SystemExit(f"lifting failed with exit code {result.returncode}; see {out / 'lift.log'}")
         print(result.stderr.strip().splitlines()[-1] if result.stderr.strip() else "lifted")
-    triple = host_triple()
     runtime, main_library = build_runtime(triple, None, runtime_directory(build, triple, None), clang, clangxx, args.jobs or os.cpu_count())
     anyps5_build = AnyPS5Build(anyps5)
     game = out / "game"
     print(f"linking {game}")
-    link_lifted(clangxx, triple, game, [archive, bridges, *anyps5_build.linked_libraries(libraries, triple)], link_arguments(triple, runtime, main_library))
+    link_lifted(clangxx, triple, game, [archive, bridges, *anyps5_build.linked_libraries(libraries, triple), *loader_search], link_arguments(triple, runtime, main_library))
     directory = out / "run"
     directory.mkdir(exist_ok=True)
     for name, target in (("app0", dump), ("game", game)):
