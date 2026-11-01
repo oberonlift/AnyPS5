@@ -234,7 +234,7 @@ void* RunMain(void* argument) {
     std::_Exit(static_cast<int>(state.Gpr[PS5LIFT_RAX] & 0xff));
 }
 
-void StartMain(std::uint64_t& entry) {
+pthread_t StartMain(std::uint64_t& entry) {
     pthread_attr_t attributes;
     pthread_attr_init(&attributes);
     pthread_attr_setstacksize(&attributes, HostStackSize);
@@ -242,7 +242,7 @@ void StartMain(std::uint64_t& entry) {
     const auto error = pthread_create(&handle, &attributes, RunMain, &entry);
     pthread_attr_destroy(&attributes);
     if (error != 0) ps5lift_fail("cannot start the main guest thread: %s", std::strerror(error));
-    pthread_join(handle, nullptr);
+    return handle;
 }
 
 }
@@ -642,5 +642,11 @@ extern "C" void ps5lift_run_main(void) {
     }
     Ps5Lift::InstallNativeCalls();
     auto entry = program.Entry;
-    StartMain(entry);
+#ifdef __APPLE__
+    if (const auto serveMainQueue = Ps5Lift::AnyPs5Function<void(void (*)(void*), void*)>("Aps5ServeMainQueue_nid_no_patch")) {
+        serveMainQueue([](void* argument) { StartMain(*static_cast<std::uint64_t*>(argument)); }, &entry);
+        ps5lift_fail("AnyPS5 stopped serving the main queue");
+    }
+#endif
+    pthread_join(StartMain(entry), nullptr);
 }
