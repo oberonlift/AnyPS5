@@ -1,5 +1,7 @@
 #include "prx/libSceAgcDriver/Execution/include/VulkanDevice.hpp"
+#include "prx/libSceAgcDriver/Graphics/include/DepthSurface.hpp"
 #include "prx/libSceAgcDriver/Graphics/include/Draw.hpp"
+#include "prx/libSceAgcDriver/Graphics/include/GuestTextureResource.hpp"
 #include "prx/libSceAgcDriver/Graphics/include/ShaderInputState.hpp"
 #include "Recompiler.hpp"
 #include "VulkanTestDevice.hpp"
@@ -52,8 +54,19 @@ constexpr std::uint32_t Height = 16;
 constexpr std::uint32_t WaveSize = 64;
 constexpr std::byte Kept{0x40};
 alignas(256) std::array<std::byte, Width * Height * 4> Pixels{};
-alignas(256) std::array<std::byte, 128 * 128 * 4> DepthMemory{};
-alignas(256) std::array<std::byte, 256 * 256> StencilMemory{};
+constexpr std::size_t SurfaceBlockBytes = 65536;
+std::vector<std::byte> SurfaceStorage(12u * SurfaceBlockBytes);
+
+std::byte* SurfaceBlock(std::size_t index) {
+    const auto aligned = (reinterpret_cast<std::uintptr_t>(SurfaceStorage.data()) + SurfaceBlockBytes - 1u) & ~static_cast<std::uintptr_t>(SurfaceBlockBytes - 1u);
+    return reinterpret_cast<std::byte*>(aligned) + index * SurfaceBlockBytes;
+}
+
+std::byte* const DepthMemory = SurfaceBlock(0);
+std::byte* const StencilMemory = SurfaceBlock(1);
+std::byte* const OtherDepthMemory = SurfaceBlock(2);
+std::byte* const MultisampleDepthMemory = SurfaceBlock(3);
+std::byte* const MultisampleStencilMemory = SurfaceBlock(7);
 
 alignas(256) constexpr std::array<std::uint32_t, 6> VertexCode{
     0xe0382000, 0x80000005, 0xbf8c3f70, 0xf80008cf, 0x03020100, 0xbf810000,
@@ -142,7 +155,7 @@ void Draw(AgcDriver::VulkanDevice& device, std::span<const std::uint32_t> pixelC
     state.color = {reinterpret_cast<std::uintptr_t>(Pixels.data()), {Width, Height}, VK_FORMAT_R8G8B8A8_UNORM, Pixels.size(), 0xe4u};
     state.colors = {state.color};
     state.hasColorTarget = true;
-    state.depth = AgcDriver::Graphics::DepthTarget{reinterpret_cast<std::uintptr_t>(DepthMemory.data()), reinterpret_cast<std::uintptr_t>(StencilMemory.data()), {Width, Height}, VK_FORMAT_D32_SFLOAT_S8_UINT, 1.0f, 0};
+    state.depth = AgcDriver::Graphics::DepthTarget{reinterpret_cast<std::uintptr_t>(DepthMemory), reinterpret_cast<std::uintptr_t>(StencilMemory), {Width, Height}, VK_FORMAT_D32_SFLOAT_S8_UINT, 1.0f, 0};
     state.depthTest = depthFail;
     state.depthCompare = depthFail ? VK_COMPARE_OP_NEVER : VK_COMPARE_OP_ALWAYS;
     state.stencilTest = true;
@@ -402,6 +415,62 @@ int main() {
         Check(all, "a replayed export beside an image draws the image's texels");
         Draw(*device, PlainPixelCode, plain, equal(0x35u));
         Check([](std::uint32_t x, std::uint32_t) { return x == 5u; }, "a replayed export beside an image reads its guest buffer at a 4-byte offset");
+        const auto context = AgcDriver::VulkanDeviceTestAccess::ContextOf(*device);
+        const auto depthTexture = [](const void* plane) {
+            const auto address = static_cast<std::uint64_t>(reinterpret_cast<std::uintptr_t>(plane));
+            return std::array<std::uint32_t, 8>{static_cast<std::uint32_t>(address >> 8u), static_cast<std::uint32_t>((address >> 40u) & 0xffu) | (22u << 20u) | (((Width - 1u) & 3u) << 30u), ((Width - 1u) >> 2u) | ((Height - 1u) << 14u), 0xfacu | (0x18u << 20u) | (9u << 28u), 0u, 0u, 0u, 0u};
+        };
+        const auto depthImageData = [&](const void* plane) {
+            const auto texture = depthTexture(plane);
+            std::vector<std::uint32_t> data(columnBuffer.begin(), columnBuffer.end());
+            data.insert(data.end(), texture.begin(), texture.end());
+            data.insert(data.end(), alignedBuffer.begin(), alignedBuffer.end());
+            return data;
+        };
+        const auto resident = [&](const void* plane) {
+            const auto words = depthTexture(plane);
+            return AgcDriver::Graphics::DepthSurfaceAt(context, words, AgcDriver::Graphics::DecodeTextureResource(words));
+        };
+        Require(AgcDriver::Graphics::DepthSliceBytes({Width, Height}, 4u) <= SurfaceBlockBytes, "a depth plane does not fit its memory block");
+        std::fill_n(reinterpret_cast<float*>(OtherDepthMemory), SurfaceBlockBytes / sizeof(float), 1.0f);
+        Require(AgcDriver::Graphics::DepthSurfaceView(context, {reinterpret_cast<std::uintptr_t>(OtherDepthMemory), 0u, {Width, Height}, VK_FORMAT_D32_SFLOAT, 1.0f, 0}) != VK_NULL_HANDLE, "the other depth surface has no view");
+        Draw(*device, PlainPixelCode, plain, replace(0u));
+        Require(resident(OtherDepthMemory), "the other depth surface is not resident");
+        Draw(*device, bufferImageCode, exported, replace(), 3u, 1u, false, {}, {}, Vertices, VertexCode, depthImageData(OtherDepthMemory));
+        Check(all, "a replayed export samples another resident depth surface");
+        Draw(*device, PlainPixelCode, plain, equal(0x35u));
+        Check([](std::uint32_t x, std::uint32_t) { return x == 5u; }, "a replayed export beside another depth surface keeps its exported references");
+        Require(resident(DepthMemory), "the draws' own depth surface is not resident");
+        bool ownPlaneRefused = false;
+        try { Draw(*device, bufferImageCode, exported, replace(), 3u, 1u, false, {}, {}, Vertices, VertexCode, depthImageData(DepthMemory)); }
+        catch (const std::exception& error) { ownPlaneRefused = std::string(error.what()).find("feedback") != std::string::npos; }
+        Require(ownPlaneRefused, "a replayed export sampling its own depth plane was not refused");
+        if ((context.limits.framebufferDepthSampleCounts & VK_SAMPLE_COUNT_4_BIT) == 0) {
+            std::puts("multisampled stencil replay not tested: the device has no four-sample depth targets");
+        } else {
+            Require(AgcDriver::Graphics::MultisampledDepthBytes_nid_no_patch({Width, Height}, 4u, 4u) <= 4u * SurfaceBlockBytes && AgcDriver::Graphics::MultisampledDepthBytes_nid_no_patch({Width, Height}, 1u, 4u) <= 4u * SurfaceBlockBytes, "the four-sample depth target does not fit its memory");
+            const auto multisampled = [](AgcDriver::Graphics::State& state) {
+                state.samples = 4u;
+                state.truncatedCoverage = true;
+                state.depth->address = reinterpret_cast<std::uintptr_t>(MultisampleDepthMemory);
+                state.depth->stencilAddress = reinterpret_cast<std::uintptr_t>(MultisampleStencilMemory);
+                state.depth->samples = 4u;
+            };
+            bool mixedSamples = true;
+            try { Draw(*device, PlainPixelCode, plain, replace(0u), 3u, 1u, false, multisampled); }
+            catch (const std::exception& error) {
+                if (std::string_view(error.what()).find("truncated coverage reduction") == std::string_view::npos) throw;
+                mixedSamples = false;
+                std::puts("multisampled stencil replay not tested: the device has no truncated coverage reduction for a one-sample color target");
+            }
+            if (mixedSamples) {
+                Draw(*device, alternating, exported, replace(), 3u, 1u, false, multisampled);
+                Draw(*device, PlainPixelCode, plain, equal(255u), 3u, 1u, false, multisampled);
+                Check(even, "four-sample replay writes even columns' exported 255 to every sample");
+                Draw(*device, PlainPixelCode, plain, equal(0u), 3u, 1u, false, multisampled);
+                Check(odd, "four-sample replay writes odd columns' exported zero to every sample");
+            }
+        }
         std::puts("stencil replay tests passed");
         return 0;
     } catch (const std::exception& error) {

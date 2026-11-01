@@ -2894,7 +2894,7 @@ bool prepareDraw(const Context& context, const State& state, const Pm4::DrawPara
             Require((shader.program->hostSubgroupSize == 1u || shader.program->hostSubgroupSize == context.subgroup.subgroupSize) && shader.program->spirv.size() >= 5u && shader.program->spirv[1] >= 0x00010000u && shader.program->spirv[1] < 0x00010600u, "stencil replay vertex subgroup contract differs from the physical device");
         }
         Require(static_cast<std::uint64_t>(draw.firstInstance) + draw.instanceCount <= 0x100000000ull && (draw.indexed || static_cast<std::uint64_t>(draw.firstVertex) + draw.indexCount <= 0x100000000ull), "stencil replay draw indices overflow");
-        Require(state.samples == 1u && (!state.depth || HasStencil(state.depth->format)), "stencil replay requires single-sample rendering and an eight-bit stencil format");
+        Require(!state.depth || HasStencil(state.depth->format), "stencil replay requires an eight-bit stencil format");
         recipeOut = nullptr;
     }
     if (state.quadList || StripPatches(state, shaders)) recipeOut = nullptr;
@@ -3069,8 +3069,10 @@ bool prepareDraw(const Context& context, const State& state, const Pm4::DrawPara
             Require(!imageRead && !resources->ReadsImage(target.resident.get()) && !resources->ReadsOverlap(target.color.address, static_cast<std::size_t>(target.color.bytes)) && !inputOverlaps(target.color.address, target.color.bytes), "stencil replay refuses attachment feedback reads");
         }
         if (state.depth) {
-            const auto bytes = static_cast<std::size_t>(state.depth->extent.width) * state.depth->extent.height * 4u;
-            Require(!resources->ReadsOverlap(state.depth->address, bytes) && !resources->ReadsOverlap(state.depth->stencilAddress, bytes) && !inputOverlaps(state.depth->address, bytes) && !inputOverlaps(state.depth->stencilAddress, bytes), "stencil replay refuses depth or stencil feedback reads");
+            const auto depthBytes = static_cast<std::size_t>(DepthPlaneBytes(*state.depth, state.depth->format == VK_FORMAT_D16_UNORM_S8_UINT ? 2u : 4u));
+            const auto stencilBytes = static_cast<std::size_t>(DepthPlaneBytes(*state.depth, 1u));
+            Require(!resources->ReadsOverlap(state.depth->address, depthBytes) && !resources->ReadsOverlap(state.depth->stencilAddress, stencilBytes) && !inputOverlaps(state.depth->address, depthBytes) && !inputOverlaps(state.depth->stencilAddress, stencilBytes), "stencil replay refuses depth or stencil feedback reads");
+            const auto inPlane = [](std::uint64_t address, std::uint64_t plane, std::size_t bytes) { return address >= plane && address - plane < bytes; };
             for (const auto& shader : shaders) {
                 for (const auto& binding : shader.program->bindings) {
                     if (binding.role != ShaderRecompiler::DescriptorRole::GuestImages && binding.role != ShaderRecompiler::DescriptorRole::ImageTable) continue;
@@ -3078,7 +3080,7 @@ bool prepareDraw(const Context& context, const State& state, const Pm4::DrawPara
                         const auto words = std::span<const std::uint32_t>(binding.guestDescriptor).subspan(offset, 8u);
                         if (words[0] == 0u && (words[1] & 0xffu) == 0u) continue;
                         const auto texture = DecodeTextureResource(words);
-                        Require(!DepthSurfaceAt(context, words, texture), "stencil replay refuses sampled depth-surface feedback");
+                        Require(!DepthSurfaceAt(context, words, texture) || (!inPlane(texture.baseAddress, state.depth->address, depthBytes) && !inPlane(texture.baseAddress, state.depth->stencilAddress, stencilBytes)), "stencil replay refuses sampled depth-surface feedback");
                     }
                 }
             }
