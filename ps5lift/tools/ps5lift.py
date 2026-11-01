@@ -10,6 +10,7 @@ import collections
 import concurrent.futures
 import difflib
 import fcntl
+import functools
 import hashlib
 import json
 import os
@@ -142,11 +143,13 @@ class AnyPS5Build:
             raise SystemExit(f"{path} does not exist: build AnyPS5's libs target")
         return path
 
-    def linked_libraries(self, names):
-        return [*(self.library(name) for name in names), f"-Wl,-rpath,{self.libraries_directory}", "-latomic", "-ldl"]
+    def linked_libraries(self, names, triple):
+        return [*(self.library(name) for name in names), f"-Wl,-rpath,{self.libraries_directory}", *system_libraries(triple)]
 
     def library_exports(self, name):
         data = self.library(name).read_bytes()
+        if data[:4] == MACH_O_MAGIC:
+            return mach_o_exports(data, self.library(name))
         offset, = struct.unpack_from("<Q", data, 0x28)
         size, count = struct.unpack_from("<HH", data, 0x3a)
         sections = [struct.unpack_from("<IIQQQQIIQQ", data, offset + index * size) for index in range(count)]
@@ -177,12 +180,57 @@ class AnyPS5Build:
         return entries[0]
 
 
+MACH_O_MAGIC = struct.pack("<I", 0xFEEDFACF)
+LC_SYMTAB = 0x2
+N_STAB = 0xE0
+N_TYPE = 0x0E
+N_SECT = 0x0E
+N_EXT = 0x01
+
+
+def mach_o_exports(data, path):
+    commands, = struct.unpack_from("<I", data, 16)
+    offset = 32
+    for _ in range(commands):
+        command, size = struct.unpack_from("<II", data, offset)
+        if command == LC_SYMTAB:
+            symbols, count, strings, _ = struct.unpack_from("<IIII", data, offset + 8)
+            names = set()
+            for index in range(count):
+                name, kind, _, _, _ = struct.unpack_from("<IBBHQ", data, symbols + 16 * index)
+                if kind & N_STAB == 0 and kind & N_TYPE == N_SECT and kind & N_EXT:
+                    text = data[strings + name:data.index(b"\0", strings + name)].decode()
+                    names.add(text.removeprefix("_"))
+            return names
+        offset += size
+    raise SystemExit(f"{path} has no symbol table")
+
+
+def system_libraries(triple):
+    return [] if apple(triple) else ["-latomic", "-ldl"]
+
+
+def sysroot_flags(sysroot):
+    return [f"--sysroot={sysroot}"] if sysroot else []
+
+
 def is_test(path):
     return path.is_relative_to(ANYPS5) and "tests" in path.relative_to(ANYPS5).parts
 
 
+@functools.cache
+def implicit_sysroot(compiler):
+    driver = subprocess.run([compiler, "-###", "-x", "c++", "-c", os.devnull, "-o", os.devnull], capture_output=True, text=True, check=True).stderr
+    for line in driver.splitlines():
+        if line.lstrip().startswith('"'):
+            words = shlex.split(line)
+            if "-isysroot" in words:
+                return ["-isysroot", words[words.index("-isysroot") + 1]]
+    return []
+
+
 def compiler_arguments(entry):
-    words = shlex.split(entry["command"])[1:]
+    compiler, *words = shlex.split(entry["command"])
     arguments = []
     skip = False
     for word in words:
@@ -192,7 +240,7 @@ def compiler_arguments(entry):
             skip = True
         elif word not in ("-c", "-MD", "-MMD", entry["file"]):
             arguments.append(word)
-    return arguments
+    return [*arguments, *implicit_sysroot(compiler)]
 
 
 def needed_libraries(elf):
@@ -378,16 +426,26 @@ BRIDGE_LONG_DOUBLE = "Ps5Lift::Bridge::LongDouble"
 DISAMBIGUATION = re.compile(r"_nid_disambig\d+$")
 
 cindex = None
+parse_arguments = []
 
 
 def bindings(libclang=None):
-    global cindex, K, INTEGER_KINDS, FLOAT_KINDS, POINTER_KINDS, FUNCTION_KINDS, Kind
+    global cindex, parse_arguments, K, INTEGER_KINDS, FLOAT_KINDS, POINTER_KINDS, FUNCTION_KINDS, Kind
     if cindex is not None:
         return cindex
+    if libclang is not None:
+        library = Path(libclang)
+        shipped = library.parent / f"python{sys.version_info.major}.{sys.version_info.minor}" / "site-packages"
+        if shipped.is_dir():
+            sys.path.insert(0, str(shipped))
+        resources = list((library.parent / "clang").glob("*"))
+        if len(resources) != 1:
+            raise SystemExit(f"{library}: expected one clang resource directory in {library.parent / 'clang'}, found {len(resources)}")
+        parse_arguments = ["-resource-dir", str(resources[0])]
     try:
         import clang.cindex as module
     except ImportError:
-        raise SystemExit("the bridges need libclang's Python bindings (python3-clang-18 on Ubuntu)")
+        raise SystemExit("the bridges need libclang's Python bindings (python3-clang-18 on Ubuntu, Homebrew's llvm on macOS)")
     if libclang is not None:
         module.Config.set_library_file(libclang)
     cindex = module
@@ -687,7 +745,7 @@ class Definitions:
 def scan_source(job):
     bindings()
     source, arguments, explicit = job
-    unit = cindex.Index.create().parse(str(source), args=arguments, options=cindex.TranslationUnit.PARSE_SKIP_FUNCTION_BODIES)
+    unit = cindex.Index.create().parse(str(source), args=[*arguments, *parse_arguments], options=cindex.TranslationUnit.PARSE_SKIP_FUNCTION_BODIES)
     errors = [f"{diagnostic.location.file}:{diagnostic.location.line}: {diagnostic.spelling}" for diagnostic in unit.diagnostics if diagnostic.severity >= cindex.Diagnostic.Error]
     defined = Definitions()
     candidates = []
@@ -948,7 +1006,7 @@ def game_command(args):
     anyps5_build = AnyPS5Build(anyps5)
     game = out / "game"
     print(f"linking {game}")
-    link_lifted(clangxx, triple, game, [archive, bridges, *anyps5_build.linked_libraries(libraries)], link_arguments(triple, runtime, main_library))
+    link_lifted(clangxx, triple, game, [archive, bridges, *anyps5_build.linked_libraries(libraries, triple)], link_arguments(triple, runtime, main_library))
     directory = out / "run"
     directory.mkdir(exist_ok=True)
     for name, target in (("app0", dump), ("game", game)):
@@ -996,7 +1054,7 @@ def build_host_library(clang, work, cross=()):
 
 
 def build_guest(clang, work, name, optimization, defines=(), vectorize=False, suffix="", sysroot=None):
-    cross = [f"--sysroot={sysroot}"] if sysroot else []
+    cross = sysroot_flags(sysroot)
     build_host_library(clang, work, cross)
     extra = []
     if name in HOST_LIBRARIES:
@@ -1082,15 +1140,19 @@ GUEST_LINK = ["-no-pie", f"-Wl,--image-base={GUEST_BASE:#x}", "-Wl,--dynamic-lin
 LIBRARY_PROGRAM_TIMEOUT = 600
 
 
+def guest_flags(args):
+    return [*GUEST_FLAGS, *sysroot_flags(args.guest_sysroot)]
+
+
 def build_libc_guest(args, work, optimization):
-    build_host_library(args.clang, work)
+    build_host_library(args.clang, work, sysroot_flags(args.guest_sysroot))
     guest = build_stubbed_guest(args, work, optimization, "libc", LIBC_IMPORTS, LIBC_DATA_IMPORTS, ["host"])[0]
     return guest, False, [FIXTURES / "host_bridge.cpp"], []
 
 
 def build_exceptions_guest(args, work, optimization):
     guest = work / f"exceptions{optimization}"
-    run([args.clangxx, optimization, *GUEST_FLAGS, "-fno-vectorize", "-fno-slp-vectorize", "-fexceptions", "-fpie", *GUEST_LINK,
+    run([args.clangxx, optimization, *guest_flags(args), "-fno-vectorize", "-fno-slp-vectorize", "-fexceptions", "-fpie", *GUEST_LINK,
          FIXTURES / "exceptions.cpp", "-lstdc++", "-lc", "-lgcc_s", "-o", guest])
     return guest, True, [], ["--import-nids"]
 
@@ -1102,9 +1164,9 @@ def build_stubbed_guest(args, work, optimization, fixture, imports, data_imports
                     + "".join(f'char data_{index}[8] __asm__("{compute_nid(name)}");\n' for index, name in enumerate(data_imports)))
     library = work / f"lib{fixture}stub.so"
     if not library.exists():
-        run([args.clang, *GUEST_FLAGS, "-O2", "-fPIC", "-shared", stub, "-o", library])
+        run([args.clang, *guest_flags(args), "-O2", "-fPIC", "-shared", stub, "-o", library])
     guest = work / f"{fixture}{optimization}"
-    run([args.clang, optimization, *GUEST_FLAGS, "-fno-vectorize", "-fno-slp-vectorize", f"-I{work}", "-fpie", *GUEST_LINK,
+    run([args.clang, optimization, *guest_flags(args), "-fno-vectorize", "-fno-slp-vectorize", f"-I{work}", "-fpie", *GUEST_LINK,
          FIXTURES / f"{fixture}.c", f"-L{work}", f"-l{fixture}stub", *(f"-l{library}" for library in libraries), "-o", guest])
     return guest, False, [], []
 
@@ -1112,7 +1174,7 @@ def build_stubbed_guest(args, work, optimization, fixture, imports, data_imports
 def build_kernel_guest(args, work, optimization):
     module = work / "libkernelmodule.so"
     if not module.exists():
-        run([args.clang, *GUEST_FLAGS, "-O2", "-fPIC", "-shared", "-Wl,-soname,$ORIGIN/libkernelmodule.so", FIXTURES / "kernel_module.c", "-o", module])
+        run([args.clang, *guest_flags(args), "-O2", "-fPIC", "-shared", "-Wl,-soname,$ORIGIN/libkernelmodule.so", FIXTURES / "kernel_module.c", "-o", module])
     return build_stubbed_guest(args, work, optimization, "kernel", KERNEL_IMPORTS, libraries=["kernelmodule"])
 
 
@@ -1152,8 +1214,8 @@ def libc_fixture_command(args):
             bridges = args.bridges.resolve()
         else:
             bridges = work / "bridges.cpp"
-            generate_bridges(GUEST_LIBRARIES[args.fixture], args.anyps5_build, bridges)
-        linked = [bridges, *anyps5.linked_libraries(GUEST_LIBRARIES[args.fixture])]
+            generate_bridges(GUEST_LIBRARIES[args.fixture], args.anyps5_build, bridges, args.libclang)
+        linked = [bridges, *anyps5.linked_libraries(GUEST_LIBRARIES[args.fixture], triple)]
         runtime = runtime_link_arguments(args.ps5lift, triple, cpu, args.clang, args.clangxx)
         for optimization in args.optimization or ["-O0", "-O2"]:
             guest, native, host_sources, lift_flags = LIBRARY_GUESTS[args.fixture](args, work, optimization)
@@ -1266,7 +1328,7 @@ def libc_tests_command(args):
     for test in tests:
         program = work / test
         archives = [anyps5.directory / archive for archive in LIBC_TEST_ARCHIVES.get(test, [])]
-        link = [args.clangxx, work / f"{test}.o", empty_program, *anyps5.linked_libraries(LIBC_TESTS[test]), *archives, *link_arguments(triple, runtime), "-pthread", "-o", program]
+        link = [args.clangxx, work / f"{test}.o", empty_program, *anyps5.linked_libraries(LIBC_TESTS[test], triple), *archives, *link_arguments(triple, runtime), "-pthread", "-o", program]
         linked = subprocess.run(link, capture_output=True, text=True)
         if linked.returncode != 0:
             print(f"FAIL {test}: link\n{linked.stderr[-2000:]}")
@@ -1284,7 +1346,7 @@ def libc_tests_command(args):
 
 RECORD_SOURCE = FIXTURES / "records.cpp"
 RECORD_FLAGS = ["-x", "c++", "-std=c++20", "--target=x86_64-unknown-linux-gnu"]
-RECORD_HOST_TARGETS = ["x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu"]
+RECORD_LINUX_TARGETS = ["x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu"]
 RECORD_REFUSALS = {
     "Packed": "a packed record",
     "Bits": "a record with bit-fields",
@@ -1323,9 +1385,9 @@ def lowered_records(clang):
     return result
 
 
-def classified_records():
-    bindings()
-    unit = cindex.Index.create().parse(str(RECORD_SOURCE), args=RECORD_FLAGS)
+def classified_records(libclang):
+    bindings(libclang)
+    unit = cindex.Index.create().parse(str(RECORD_SOURCE), args=[*RECORD_FLAGS, *parse_arguments])
     errors = [diagnostic.spelling for diagnostic in unit.diagnostics if diagnostic.severity >= cindex.Diagnostic.Error]
     if errors:
         raise SystemExit(f"{RECORD_SOURCE}: {errors}")
@@ -1351,7 +1413,7 @@ def classified_records():
 
 def record_bridges_command(args):
     expected = lowered_records(args.clang)
-    actual = classified_records()
+    actual = classified_records(args.libclang)
     failures = [f"{name} as a {role}: lowered by clang but not classified" for role, name in sorted(set(expected) - set(actual))]
     definitions = []
     for key in sorted(actual):
@@ -1372,7 +1434,7 @@ def record_bridges_command(args):
     with tempfile.TemporaryDirectory() as work:
         layouts = Path(work) / "layouts.cpp"
         layouts.write_text("#include <cstddef>\n\n" + "\n".join(definitions) + "\n")
-        for triple in RECORD_HOST_TARGETS:
+        for triple in [host_triple()] if apple(host_triple()) else RECORD_LINUX_TARGETS:
             compiled = subprocess.run([args.clang, "-x", "c++", "-std=c++20", f"--target={triple}", "-fsyntax-only", layouts], capture_output=True, text=True)
             if compiled.returncode != 0:
                 failures.append(f"generated layouts do not compile for {triple}:\n{compiled.stderr}")
@@ -1450,7 +1512,7 @@ def survey_command(args):
     with tempfile.TemporaryDirectory() as work:
         for library in libraries:
             try:
-                exports, data, unsupported = generate_bridges([library], args.anyps5_build, Path(work) / "bridges.cpp")
+                exports, data, unsupported = generate_bridges([library], args.anyps5_build, Path(work) / "bridges.cpp", args.libclang)
                 entry = {"bridges": len(exports), "data": len(data), "unbridged": len(unsupported),
                          "reasons": [f"{count:5} {reason}" for reason, count in collections.Counter(re.sub(r"\d+-byte", "N-byte", reason) for _, reason in unsupported.values()).most_common()]}
                 print(f"{library}: {entry['bridges']} bridges, {entry['data']} data, {entry['unbridged']} unbridged", flush=True)
@@ -1551,6 +1613,8 @@ def main():
     libc_fixture.add_argument("--anyps5-build", required=True, help="AnyPS5's build directory, configured with ANYPS5_GUEST_LIFTED")
     libc_fixture.add_argument("--fixture", choices=sorted(LIBRARY_GUESTS), default="libc")
     libc_fixture.add_argument("--bridges", type=Path, help="bridges generated for the fixture's libraries; generated here when absent")
+    libc_fixture.add_argument("--libclang", help="the libclang library to parse with; the bindings find one by default")
+    libc_fixture.add_argument("--guest-sysroot", help="x86-64 Linux sysroot to build the guests against; the compiler's own by default")
     libc_fixture.add_argument("--optimization", action="append")
     libc_fixture.add_argument("--keep", action="store_true")
     libc_fixture.set_defaults(handler=libc_fixture_command)
@@ -1574,6 +1638,7 @@ def main():
 
     record_bridges = commands.add_parser("record-bridges", help="test: check the bridges' record classification", description="Check the bridge generator's SysV classification of records against clang's own lowering")
     record_bridges.add_argument("--clang", required=True, help="clang, to lower calls for x86-64 and to compile the generated record layouts")
+    record_bridges.add_argument("--libclang", help="the libclang library to parse with; the bindings find one by default")
     record_bridges.set_defaults(handler=record_bridges_command)
 
     bench = commands.add_parser("bench", help="time the memory benchmark natively and lifted", description="Time the memory benchmark natively and lifted with each memory model")
@@ -1589,6 +1654,7 @@ def main():
     survey = commands.add_parser("survey", help="count the bridges of every AnyPS5 library", description="Generate the bridges of every AnyPS5 library and report how many of its exports they cover")
     survey.add_argument("--anyps5-build", required=True, help="AnyPS5's build directory, configured with CMAKE_EXPORT_COMPILE_COMMANDS=ON")
     survey.add_argument("--library", action="append")
+    survey.add_argument("--libclang", help="the libclang library to parse with; the bindings find one by default")
     survey.add_argument("--json", help="also write the results to this file")
     survey.set_defaults(handler=survey_command)
 

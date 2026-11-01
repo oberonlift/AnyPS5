@@ -99,41 +99,36 @@ if(NOT CMAKE_SYSTEM_NAME STREQUAL "Linux")
                         --guest-sysroot ${PS5LIFT_X86_64_SYSROOT}
                         --lift-only)
     endforeach()
-    if(APPLE AND CMAKE_SYSTEM_PROCESSOR STREQUAL "arm64")
-        ps5lift_fixture_tests(arm64-apple-macosx --guest-sysroot ${PS5LIFT_X86_64_SYSROOT})
-        set(PS5LIFT_RELINKER_BUILD ${CMAKE_BINARY_DIR}/anyps5-relinker)
-        ExternalProject_Add(anyps5_relinker
-                SOURCE_DIR ${CMAKE_SOURCE_DIR}/..
-                BINARY_DIR ${PS5LIFT_RELINKER_BUILD}
-                CMAKE_ARGS -G Ninja -DCMAKE_BUILD_TYPE=Release -DANYPS5_RELINKER_ONLY=ON
-                           -DCMAKE_C_COMPILER=${CMAKE_C_COMPILER} -DCMAKE_CXX_COMPILER=${CMAKE_CXX_COMPILER}
-                BUILD_COMMAND ${CMAKE_COMMAND} --build <BINARY_DIR> --target relinker
-                INSTALL_COMMAND ""
-                BUILD_ALWAYS ON
-                BUILD_BYPRODUCTS ${PS5LIFT_RELINKER_BUILD}/core/relinker/relinker
-                EXCLUDE_FROM_ALL OFF)
-        ps5lift_ps5_fixture_tests(${PS5LIFT_RELINKER_BUILD}/core/relinker/relinker arm64-apple-macosx)
+    if(NOT (APPLE AND CMAKE_SYSTEM_PROCESSOR STREQUAL "arm64"))
+        return()
     endif()
-    return()
-endif()
-
-if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(aarch64|arm64)$")
-    set(PS5LIFT_HOST_ARCH aarch64)
-    set(PS5LIFT_TEST_TRIPLES aarch64-unknown-linux-gnu)
+    set(PS5LIFT_HOST_ARCH arm64)
+    set(PS5LIFT_HOST_TRIPLE arm64-apple-macosx)
+    set(PS5LIFT_TEST_TRIPLES ${PS5LIFT_HOST_TRIPLE})
+    set(PS5LIFT_GUEST_ARGUMENTS --guest-sysroot ${PS5LIFT_X86_64_SYSROOT})
+    set(PS5LIFT_ANYPS5_CPU_FLAGS)
 else()
-    set(PS5LIFT_HOST_ARCH x86_64)
-    set(PS5LIFT_TEST_TRIPLES x86_64-unknown-linux-gnu)
-    if(PS5LIFT_QEMU_TESTS)
-        list(APPEND PS5LIFT_TEST_TRIPLES aarch64-unknown-linux-gnu)
+    if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(aarch64|arm64)$")
+        set(PS5LIFT_HOST_ARCH aarch64)
+        set(PS5LIFT_TEST_TRIPLES aarch64-unknown-linux-gnu)
+        set(PS5LIFT_ANYPS5_CPU_FLAGS -DCMAKE_C_FLAGS=-mcpu=neoverse-v2 -DCMAKE_CXX_FLAGS=-mcpu=neoverse-v2)
+    else()
+        set(PS5LIFT_HOST_ARCH x86_64)
+        set(PS5LIFT_TEST_TRIPLES x86_64-unknown-linux-gnu)
+        if(PS5LIFT_QEMU_TESTS)
+            list(APPEND PS5LIFT_TEST_TRIPLES aarch64-unknown-linux-gnu)
+        endif()
+        set(PS5LIFT_ANYPS5_CPU_FLAGS)
     endif()
+    set(PS5LIFT_HOST_TRIPLE ${PS5LIFT_HOST_ARCH}-unknown-linux-gnu)
+    set(PS5LIFT_GUEST_ARGUMENTS)
 endif()
 
 foreach(triple IN LISTS PS5LIFT_TEST_TRIPLES)
-    ps5lift_fixture_tests(${triple})
+    ps5lift_fixture_tests(${triple} ${PS5LIFT_GUEST_ARGUMENTS})
 endforeach()
 
-set(PS5LIFT_HOST_TRIPLE ${PS5LIFT_HOST_ARCH}-unknown-linux-gnu)
-set(PS5LIFT_HOST_RUNTIME ${CMAKE_BINARY_DIR}/runtime-${PS5LIFT_HOST_TRIPLE}/libps5lift_runtime.so)
+set(PS5LIFT_HOST_RUNTIME ${CMAKE_BINARY_DIR}/runtime-${PS5LIFT_HOST_TRIPLE}/libps5lift_runtime${CMAKE_SHARED_LIBRARY_SUFFIX})
 add_custom_target(ps5lift_host_runtime
         COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tools/ps5lift.py runtime --triple ${PS5LIFT_HOST_TRIPLE}
                 --output ${CMAKE_BINARY_DIR}/runtime-${PS5LIFT_HOST_TRIPLE} --clang ${CMAKE_C_COMPILER} --clangxx ${CMAKE_CXX_COMPILER}
@@ -142,10 +137,6 @@ add_custom_target(ps5lift_host_runtime
 
 set(PS5LIFT_ANYPS5_BUILD ${CMAKE_BINARY_DIR}/anyps5)
 set(PS5LIFT_ANYPS5_LIBRARIES ${PS5LIFT_ANYPS5_BUILD}/core/libs/libs/unpatched)
-set(PS5LIFT_ANYPS5_CPU_FLAGS)
-if(PS5LIFT_HOST_ARCH STREQUAL "aarch64")
-    set(PS5LIFT_ANYPS5_CPU_FLAGS -DCMAKE_C_FLAGS=-mcpu=neoverse-v2 -DCMAKE_CXX_FLAGS=-mcpu=neoverse-v2)
-endif()
 ExternalProject_Add(anyps5
         SOURCE_DIR ${CMAKE_SOURCE_DIR}/..
         BINARY_DIR ${PS5LIFT_ANYPS5_BUILD}
@@ -164,12 +155,17 @@ foreach(triple IN LISTS PS5LIFT_TEST_TRIPLES)
     ps5lift_ps5_fixture_tests(${PS5LIFT_ANYPS5_BUILD}/core/relinker/relinker ${triple})
 endforeach()
 
-execute_process(COMMAND ${Python3_EXECUTABLE} -c "import clang.cindex; clang.cindex.Index.create()"
+set(PS5LIFT_LIBCLANG_ARGUMENTS)
+if(PS5LIFT_LIBCLANG)
+    set(PS5LIFT_LIBCLANG_ARGUMENTS --libclang ${PS5LIFT_LIBCLANG})
+endif()
+execute_process(COMMAND ${Python3_EXECUTABLE} -B -c "import sys; sys.path.insert(0, sys.argv.pop(1)); import ps5lift; ps5lift.bindings(*sys.argv[1:]).Index.create()"
+                ${CMAKE_SOURCE_DIR}/tools ${PS5LIFT_LIBCLANG}
         RESULT_VARIABLE PS5LIFT_LIBCLANG_PYTHON ERROR_VARIABLE PS5LIFT_LIBCLANG_PYTHON_ERROR OUTPUT_QUIET)
 if(NOT PS5LIFT_LIBCLANG_PYTHON EQUAL 0)
     message(FATAL_ERROR "The libc, exceptions, kernel, fiber and loader tests generate bridges with the libclang Python bindings, "
             "which ${Python3_EXECUTABLE} cannot load:\n${PS5LIFT_LIBCLANG_PYTHON_ERROR}"
-            "Install them (python3-clang-18 on Ubuntu) or configure with -DBUILD_TESTING=OFF.")
+            "Install them (python3-clang-18 on Ubuntu, Homebrew's llvm on macOS) or configure with -DBUILD_TESTING=OFF.")
 endif()
 set(PS5LIFT_BRIDGES_libc libc)
 set(PS5LIFT_BRIDGES_exceptions libc)
@@ -186,7 +182,7 @@ foreach(fixture libc exceptions kernel fiber loader)
     add_custom_command(OUTPUT ${bridges}
             COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_BINARY_DIR}/test-bridges
             COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tools/ps5lift.py bridges ${PS5LIFT_BRIDGES_${fixture}}
-                    --anyps5-build ${PS5LIFT_ANYPS5_BUILD} -o ${bridges}
+                    --anyps5-build ${PS5LIFT_ANYPS5_BUILD} -o ${bridges} ${PS5LIFT_LIBCLANG_ARGUMENTS}
             DEPENDS ${libraries} ${CMAKE_SOURCE_DIR}/tools/ps5lift.py
             VERBATIM)
     list(APPEND PS5LIFT_TEST_BRIDGES ${bridges})
@@ -199,13 +195,14 @@ foreach(fixture libc exceptions kernel fiber loader)
                         --clangxx ${CMAKE_CXX_COMPILER}
                         --fixture ${fixture}
                         --bridges ${bridges}
-                        --optimization=-${level})
+                        --optimization=-${level}
+                        ${PS5LIFT_GUEST_ARGUMENTS})
     endforeach()
 endforeach()
 add_custom_target(ps5lift_test_bridges ALL DEPENDS ${PS5LIFT_TEST_BRIDGES})
 
 add_test(NAME record_bridges
-        COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tools/ps5lift.py record-bridges --clang ${CMAKE_C_COMPILER})
+        COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tools/ps5lift.py record-bridges --clang ${CMAKE_C_COMPILER} ${PS5LIFT_LIBCLANG_ARGUMENTS})
 
 add_test(NAME libc_upstream_${PS5LIFT_HOST_ARCH}
         COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tools/ps5lift.py libc-tests
