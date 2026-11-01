@@ -15,6 +15,7 @@ std::uint16_t GuestCpuX87Status_nid_no_patch(void);
 void GuestCpuSetX87Status_nid_no_patch(std::uint16_t value);
 void GuestCpuX87Wait_nid_no_patch(void);
 std::uint32_t GuestCpuMxcsrMask_nid_no_patch(void);
+std::uint64_t GuestCpuReadTsc_nid_no_patch(void);
 }
 
 namespace GuestCpu {
@@ -28,6 +29,7 @@ inline void SetX87Status(const std::uint16_t value) { GuestCpuSetX87Status_nid_n
 inline void X87ClearExceptions() { SetX87Status(static_cast<std::uint16_t>(X87Status() & 0x7f00)); }
 inline void X87Wait() { GuestCpuX87Wait_nid_no_patch(); }
 inline std::uint32_t MxcsrMask() { return GuestCpuMxcsrMask_nid_no_patch(); }
+inline std::uint64_t ReadTsc() { return GuestCpuReadTsc_nid_no_patch(); }
 
 inline std::array<std::uint32_t, 7> X87Environment() {
     return {0xffff0000u | X87Control(), 0xffff0000u | X87Status(), 0xffffffffu, 0, 0, 0, 0xffff0000u};
@@ -42,9 +44,12 @@ inline void SetX87Environment(const std::array<std::uint32_t, 7>& environment) {
 
 #else
 
+#include <x86intrin.h>
 #include <xmmintrin.h>
 
 namespace GuestCpu {
+
+inline std::uint64_t ReadTsc() { return __rdtsc(); }
 
 inline std::uint32_t Mxcsr() { return _mm_getcsr(); }
 inline void SetMxcsr(const std::uint32_t value) { _mm_setcsr(value); }
