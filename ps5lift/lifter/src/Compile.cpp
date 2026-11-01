@@ -45,12 +45,12 @@ void Partition(const std::size_t image, const std::map<std::uint64_t, GuestFunct
     }
 }
 
-void WriteArchive(const std::string& path, const std::vector<llvm::SmallVector<char, 0>>& objects) {
+void WriteArchive(const std::string& path, const llvm::Triple& triple, const std::vector<llvm::SmallVector<char, 0>>& objects) {
     std::vector<std::string> names;
     for (std::size_t i = 0; i < objects.size(); ++i) names.push_back("part" + std::to_string(i) + ".o");
     std::vector<llvm::NewArchiveMember> members;
     for (std::size_t i = 0; i < objects.size(); ++i) members.emplace_back(llvm::MemoryBufferRef(llvm::StringRef(objects[i].data(), objects[i].size()), names[i]));
-    if (auto error = llvm::writeArchive(path, members, llvm::SymtabWritingMode::NormalSymtab, llvm::object::Archive::K_GNU, true, false))
+    if (auto error = llvm::writeArchive(path, members, llvm::SymtabWritingMode::NormalSymtab, triple.isOSDarwin() ? llvm::object::Archive::K_DARWIN : llvm::object::Archive::K_GNU, true, false))
         throw std::runtime_error("Cannot write " + path + ": " + llvm::toString(std::move(error)));
 }
 
@@ -88,7 +88,7 @@ LiftReport CompileProgram(const GuestProgram& program, const std::vector<std::ma
     for (std::size_t i = 0; i < std::min<std::size_t>(options.Jobs, tasks); ++i) threads.emplace_back(work);
     for (auto& thread : threads) thread.join();
     if (failure) std::rethrow_exception(failure);
-    if (!options.Archive.empty()) WriteArchive(options.Archive, objects);
+    if (!options.Archive.empty()) WriteArchive(options.Archive, codegen.Triple, objects);
 
     LiftReport report;
     for (const auto& part : reports) {

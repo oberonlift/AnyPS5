@@ -16,6 +16,7 @@
 #include "ShaderDiskCache.hpp"
 #include "prx/libc/include/GuestArena.hpp"
 #include "prx/libc/include/GuestWriteWatch.hpp"
+#include "prx/libc/include/HostThreadStack.hpp"
 #include <atomic>
 #include <cstdint>
 #include <cstdio>
@@ -30,8 +31,7 @@
 #endif
 #include <windows.h>
 #else
-#include <pthread.h>
-#include <sys/mman.h>
+#include "prx/libc/include/HostMapNoReplace.hpp"
 #endif
 
 namespace AgcDriver::DriverDetail {
@@ -74,7 +74,7 @@ void MapDriverMemory() {
     mapped = reinterpret_cast<void*>(DriverMemoryAddress);
     GuestArena::GuestArenaCommit_nid_postfix(mapped, DriverMemoryBytes, PAGE_READWRITE, DriverMemoryBytes);
 #else
-    mapped = mmap(reinterpret_cast<void*>(DriverMemoryAddress), DriverMemoryBytes, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED_NOREPLACE, -1, 0);
+    mapped = MapAnonymousNoReplace(reinterpret_cast<void*>(DriverMemoryAddress), DriverMemoryBytes, PROT_READ | PROT_WRITE);
     if (mapped == MAP_FAILED) throw std::system_error(errno, std::generic_category(), "map the AGC driver memory");
 #endif
     if (reinterpret_cast<std::uint64_t>(mapped) != DriverMemoryAddress) throw std::runtime_error("the AGC driver memory was not mapped at its fixed address");
@@ -97,30 +97,7 @@ void MapDriverMemory() {
 }
 
 bool StackHoldsImport() {
-#ifdef _WIN32
-    ULONG_PTR low = 0;
-    ULONG_PTR high = 0;
-    GetCurrentThreadStackLimits(&low, &high);
-#else
-    struct Bounds {
-        std::uintptr_t low = 0;
-        std::uintptr_t high = 0;
-        Bounds() {
-            pthread_attr_t attributes;
-            if (pthread_getattr_np(pthread_self(), &attributes) != 0) return;
-            void* base = nullptr;
-            std::size_t size = 0;
-            if (pthread_attr_getstack(&attributes, &base, &size) == 0 && base != nullptr) {
-                low = reinterpret_cast<std::uintptr_t>(base);
-                high = low + size;
-            }
-            pthread_attr_destroy(&attributes);
-        }
-    };
-    thread_local const Bounds bounds;
-    const auto low = bounds.low;
-    const auto high = bounds.high;
-#endif
+    const auto [low, high] = CurrentHostThreadStack();
     const auto frame = reinterpret_cast<std::uintptr_t>(__builtin_frame_address(0));
     return frame >= low && frame < high && frame - low >= InlineImportStackBytes;
 }

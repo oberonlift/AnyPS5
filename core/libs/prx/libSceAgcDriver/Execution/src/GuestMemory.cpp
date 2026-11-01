@@ -10,6 +10,7 @@
 #include "prx/libc/include/GuestWriteWatch.hpp"
 #include "prx/libc/include/HostThreadLocal.hpp"
 #include "prx/libc/include/HostThreadSlot.hpp"
+#include "prx/libc/include/HostThreadStack.hpp"
 #include <mutex>
 #include <array>
 #include <chrono>
@@ -51,7 +52,6 @@
 #include <cstdint>
 #include <fcntl.h>
 #include <fstream>
-#include <pthread.h>
 #include <sstream>
 #include <sys/ioctl.h>
 #include <sys/uio.h>
@@ -744,32 +744,9 @@ bool describePages(std::uintptr_t address, std::size_t bytes, Emit&& emit) {
 }
 
 bool onOwnLiveStack(std::uintptr_t address, std::size_t bytes) {
-    struct Bounds {
-        std::uintptr_t low = 0;
-        std::uintptr_t high = 0;
-        Bounds() {
-#ifdef _WIN32
-            ULONG_PTR lowLimit = 0;
-            ULONG_PTR highLimit = 0;
-            GetCurrentThreadStackLimits(&lowLimit, &highLimit);
-            low = static_cast<std::uintptr_t>(lowLimit);
-            high = static_cast<std::uintptr_t>(highLimit);
-#else
-            pthread_attr_t attributes;
-            if (pthread_getattr_np(pthread_self(), &attributes) != 0) return;
-            void* base = nullptr;
-            std::size_t size = 0;
-            if (pthread_attr_getstack(&attributes, &base, &size) == 0 && base != nullptr) {
-                low = reinterpret_cast<std::uintptr_t>(base);
-                high = low + size;
-            }
-            pthread_attr_destroy(&attributes);
-#endif
-        }
-    };
-    thread_local const Bounds bounds;
+    const auto [low, high] = CurrentHostThreadStack();
     const auto frame = reinterpret_cast<std::uintptr_t>(__builtin_frame_address(0));
-    return bounds.high != 0 && frame >= bounds.low && frame < bounds.high && address >= frame && address < bounds.high && bytes <= bounds.high - address;
+    return high != 0 && frame >= low && frame < high && address >= frame && address < high && bytes <= high - address;
 }
 
 #ifdef __linux__

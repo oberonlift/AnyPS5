@@ -6,9 +6,15 @@
 #include <pthread.h>
 #include <sched.h>
 #include <sys/random.h>
-#include <sys/auxv.h>
 #include <sys/mman.h>
 #include <unistd.h>
+#if defined(__APPLE__)
+#include <mach/mach.h>
+#include <mach/mach_vm.h>
+#include <sys/sysctl.h>
+#else
+#include <sys/auxv.h>
+#endif
 
 #include <algorithm>
 #include <cerrno>
@@ -22,12 +28,16 @@
 #include <immintrin.h>
 #endif
 
-extern "C" {
-__attribute__((weak)) bool GuestArenaContains_nid_postfix(const void* pointer, std::size_t bytes);
-__attribute__((weak)) void GuestArenaCommit_nid_postfix(void* pointer, std::size_t bytes, std::uint32_t protection, std::size_t granule);
-}
-
 namespace {
+
+#if defined(__APPLE__)
+bool HostFeature(const char* name) {
+    int value = 0;
+    std::size_t size = sizeof(value);
+    if (sysctlbyname(name, &value, &size, nullptr, 0) != 0) ps5lift_fail("cannot read the host CPU feature %s: %s", name, std::strerror(errno));
+    return value != 0;
+}
+#endif
 
 constexpr std::uint32_t ArenaReadWrite = 0x04;
 constexpr std::uint64_t GuestStackSize = 8ull << 20;
@@ -58,14 +68,22 @@ void MapSegments(const Ps5LiftImage& image) {
         end = std::max(end, (image.Segments[i].GuestAddress + image.Segments[i].MemorySize + page - 1) & ~(page - 1));
     }
     auto* const start = reinterpret_cast<void*>(begin);
-    if (GuestArenaContains_nid_postfix != nullptr && GuestArenaContains_nid_postfix(start, end - begin)) {
-        GuestArenaCommit_nid_postfix(start, end - begin, ArenaReadWrite, end - begin);
+    static auto* const arenaContains = Ps5Lift::AnyPs5Function<bool(const void*, std::size_t)>("GuestArenaContains_nid_postfix");
+    static auto* const arenaCommit = Ps5Lift::AnyPs5Function<void(void*, std::size_t, std::uint32_t, std::size_t)>("GuestArenaCommit_nid_postfix");
+    if (arenaContains != nullptr && arenaContains(start, end - begin)) {
+        arenaCommit(start, end - begin, ArenaReadWrite, end - begin);
         for (std::uint64_t i = 0; i < image.SegmentCount; ++i) std::memcpy(reinterpret_cast<void*>(image.Segments[i].GuestAddress), image.Segments[i].Data, image.Segments[i].FileSize);
         BindDataImports(image);
         return;
     }
+#if defined(__APPLE__)
+    mach_vm_address_t address = begin;
+    if (const kern_return_t result = mach_vm_allocate(mach_task_self(), &address, end - begin, VM_FLAGS_FIXED); result != KERN_SUCCESS)
+        ps5lift_fail("cannot map the guest image at 0x%" PRIx64 "-0x%" PRIx64 ": %s", begin, end, mach_error_string(result));
+#else
     auto* mapped = mmap(start, end - begin, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED_NOREPLACE, -1, 0);
     if (mapped != start) ps5lift_fail("cannot map the guest image at 0x%" PRIx64 "-0x%" PRIx64 ": %s", begin, end, std::strerror(errno));
+#endif
     for (std::uint64_t i = 0; i < image.SegmentCount; ++i) std::memcpy(reinterpret_cast<void*>(image.Segments[i].GuestAddress), image.Segments[i].Data, image.Segments[i].FileSize);
     BindDataImports(image);
 }
@@ -351,13 +369,22 @@ extern "C" void ps5lift_write_back_cache_line(const std::uint64_t address) {
 
 extern "C" std::uint64_t ps5lift_random(void) {
     std::uint64_t value = 0;
+#if defined(__APPLE__)
+    if (getentropy(&value, sizeof(value)) != 0) ps5lift_fail("rdrand: the host gave no random bytes: %s", std::strerror(errno));
+#else
     if (getrandom(&value, sizeof(value), 0) != static_cast<ssize_t>(sizeof(value))) ps5lift_fail("rdrand: the host gave no random bytes: %s", std::strerror(errno));
+#endif
     return value;
 }
 
 extern "C" std::uint32_t ps5lift_processor_id(void) {
+#if defined(__APPLE__)
+    std::size_t processor = 0;
+    if (const int error = pthread_cpu_number_np(&processor); error != 0) ps5lift_fail("rdpid: the host cannot tell which processor runs this thread: %s", std::strerror(error));
+#else
     const int processor = sched_getcpu();
     if (processor < 0) ps5lift_fail("rdpid: the host cannot tell which processor runs this thread: %s", std::strerror(errno));
+#endif
     return static_cast<std::uint32_t>(processor);
 }
 
@@ -544,8 +571,13 @@ namespace {
 // cpuid reports the AES-NI, PCLMULQDQ and crc32 of the PS5's Zen 2, and lifted code runs them on the host's own.
 void RequireHostFeatures() {
 #if defined(__aarch64__)
+#if defined(__APPLE__)
+    const bool present = HostFeature("hw.optional.arm.FEAT_AES") && HostFeature("hw.optional.arm.FEAT_PMULL") && HostFeature("hw.optional.armv8_crc32");
+#else
     constexpr unsigned long required = HWCAP_AES | HWCAP_PMULL | HWCAP_CRC32;
-    if ((getauxval(AT_HWCAP) & required) != required) ps5lift_fail("the host CPU lacks AES, PMULL or CRC32, which lifted AES-NI, PCLMULQDQ and crc32 use");
+    const bool present = (getauxval(AT_HWCAP) & required) == required;
+#endif
+    if (!present) ps5lift_fail("the host CPU lacks AES, PMULL or CRC32, which lifted AES-NI, PCLMULQDQ and crc32 use");
 #else
     if (!__builtin_cpu_supports("aes") || !__builtin_cpu_supports("pclmul") || !__builtin_cpu_supports("sse4.2")) ps5lift_fail("the host CPU lacks AES-NI, PCLMULQDQ or SSE4.2, which lifted code uses");
 #endif

@@ -7,7 +7,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from anyps5_build import LIBS, Build, compiler_arguments
+from anyps5_build import HOST_LIBRARIES, LIBS, Build, compiler_arguments
 from build_runtime import build as build_runtime, directory_for, link_arguments
 from run_fixture import ROOT, host_triple
 
@@ -73,8 +73,8 @@ def main():
     for test in tests:
         program = work / test
         libraries = [str(anyps5.library(name)) for name in TESTS[test]] + [str(anyps5.directory / archive) for archive in ARCHIVES.get(test, [])]
-        link = [args.clangxx, "-fuse-ld=lld", str(work / f"{test}.o"), str(stub), *libraries, *link_arguments(runtime), f"-Wl,-rpath,{anyps5.libraries_directory}",
-                "-latomic", "-pthread", "-ldl", "-o", str(program)]
+        link = [args.clangxx, str(work / f"{test}.o"), str(stub), *libraries, *link_arguments(triple, runtime), f"-Wl,-rpath,{anyps5.libraries_directory}",
+                *HOST_LIBRARIES, "-o", str(program)]
         linked = subprocess.run(link, capture_output=True, text=True)
         if linked.returncode != 0:
             print(f"FAIL {test}: link\n{linked.stderr[-2000:]}")

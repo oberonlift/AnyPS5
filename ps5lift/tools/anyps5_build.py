@@ -1,10 +1,15 @@
 import json
+import platform
 import shlex
-import struct
+import sys
 from pathlib import Path
 
 ANYPS5 = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ANYPS5 / "tools"))
+import import_audit
 LIBS = ANYPS5 / "core" / "libs"
+# What a program that links AnyPS5's libraries links from the host besides them; macOS's libSystem holds libatomic and libdl.
+HOST_LIBRARIES = ["-pthread"] if platform.system() == "Darwin" else ["-pthread", "-latomic", "-ldl"]
 DEPENDENCY_OPTIONS = {"-o", "-MF", "-MT", "-MQ"}
 
 
@@ -24,21 +29,7 @@ class Build:
         return path
 
     def library_exports(self, name):
-        data = self.library(name).read_bytes()
-        offset, = struct.unpack_from("<Q", data, 0x28)
-        size, count = struct.unpack_from("<HH", data, 0x3a)
-        sections = [struct.unpack_from("<IIQQQQIIQQ", data, offset + index * size) for index in range(count)]
-        for _, kind, _, _, symbols, length, link, _, _, _ in sections:
-            if kind != 11:
-                continue
-            strings = sections[link][4]
-            names = set()
-            for symbol in range(symbols + 24, symbols + length, 24):
-                name, info, _, section = struct.unpack_from("<IBBH", data, symbol)
-                if section != 0 and info >> 4 != 0:
-                    names.add(data[strings + name:data.index(b"\0", strings + name)].decode())
-            return names
-        raise SystemExit(f"{self.library(name)} has no dynamic symbol table")
+        return import_audit.read_exports(self.library(name))
 
     def library_sources(self, name):
         target = f"/CMakeFiles/{name}.dir/"

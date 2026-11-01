@@ -23,8 +23,10 @@
 #include <windows.h>
 #else
 #include <fcntl.h>
+#ifdef __linux__
 #include <linux/udmabuf.h>
 #include <sys/ioctl.h>
+#endif
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include <unistd.h>
@@ -515,7 +517,7 @@ bool releaseSettleRetired(HostImports& state, std::uint64_t begin, std::uint64_t
 }
 #endif
 
-#ifndef _WIN32
+#ifdef __linux__
 struct ImportFamilies {
     std::array<std::uint32_t, 3> indices{};
     std::uint32_t count = 0;
@@ -562,7 +564,7 @@ const char* bindImport(const Context& context, HostImport& entry, VkExternalMemo
     // INDIRECT_BUFFER: DISPATCH_INDIRECT group counts are read in place (VulkanDevice::DispatchIndirect).
     info.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT;
     info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-#ifndef _WIN32
+#ifdef __linux__
     ImportFamilies families;
     if (handleType == VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT) shareDmaBufImport(context, info, families, false);
 #endif
@@ -599,7 +601,7 @@ const char* createHostPointerImport(const Context& context, HostImport& entry, V
     return bindImport(context, entry, VK_EXTERNAL_MEMORY_HANDLE_TYPE_HOST_ALLOCATION_BIT_EXT, &import, pointer.memoryTypeBits, allocated, failure);
 }
 
-#ifndef _WIN32
+#ifdef __linux__
 int udmabufDevice() {
     static const int device = [] {
         const int result = open("/dev/udmabuf", O_RDWR | O_CLOEXEC);
@@ -641,7 +643,7 @@ const char* createDmaBufImport(const Context& context, HostImport& entry, int fi
 }
 #endif
 
-#ifndef _WIN32
+#ifdef __linux__
 constexpr std::uint64_t ImportChunkBytes = std::uint64_t{64} << 20u;
 constexpr VkBufferUsageFlags ChunkImportUsage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT;
 constexpr std::uint64_t SparseBlockBytes = 65536;
@@ -903,7 +905,9 @@ bool sharedBacking(const Context& context, std::uint64_t base, std::uint64_t byt
 bool sharedBacking(const Context& context, const HostImport& entry, BackingFile& backing) {
     return sharedBacking(context, entry.base, entry.bytes, backing);
 }
+#endif
 
+#ifdef __linux__
 const char* createBackingImport(const Context& context, HostImport& entry, BackingFile& backing, VkResult& failure) {
     bool fits = false;
     VkResult chunkFailure = VK_SUCCESS;
@@ -915,7 +919,7 @@ const char* createBackingImport(const Context& context, HostImport& entry, Backi
 
 const char* createImport(const Context& context, HostImport& entry, VkResult& failure) {
     const char* step = createHostPointerImport(context, entry, failure);
-#ifndef _WIN32
+#ifdef __linux__
     BackingFile backing;
     if (step != nullptr && sharedBacking(context, entry, backing)) step = createBackingImport(context, entry, backing, failure);
 #endif
@@ -1312,6 +1316,7 @@ void decideImportWatch(const Context& context, HostImports& state) {
         std::fprintf(stderr, "[write-watch] host imports resolve write protection: %s (%u of %u scratch pages written after a GPU read, %u after a GPU write, %u after the import); imported ranges %s\n", state.unwatchImports ? "yes" : "no", probe.writtenAfterSubmit, probe.pages, probe.writtenAfterFill, probe.writtenAtImport, state.unwatchImports ? "are compared" : "stay watched");
     }
     state.unwatchDmaBufImports = state.unwatchImports;
+#ifdef __linux__
     if (!context.dmaBufImport) return;
     const auto dmaBuf = ProbeDmaBufImportWriteProtection(context);
     if (dmaBuf.failure != nullptr) {
@@ -1321,6 +1326,7 @@ void decideImportWatch(const Context& context, HostImports& state) {
     }
     state.unwatchDmaBufImports = dmaBuf.writtenAfterSubmit != 0 || dmaBuf.writtenAfterFill != 0 || dmaBuf.writtenByCpu == 0;
     std::fprintf(stderr, "[write-watch] dma-buf imports keep write protection: %s (%u of %u scratch pages written after a GPU read, %u after a GPU write, %u after the import, %u seen after a CPU store); imported ranges %s\n", state.unwatchDmaBufImports ? "no" : "yes", dmaBuf.writtenAfterSubmit, dmaBuf.pages, dmaBuf.writtenAfterFill, dmaBuf.writtenAtImport, dmaBuf.writtenByCpu, state.unwatchDmaBufImports ? "are compared" : "stay watched");
+#endif
 #endif
 }
 
@@ -2186,7 +2192,7 @@ const HostImport* importRunAt(const Context& context, HostImports& state, Import
 #endif
         return step == nullptr;
     }, watchedHostPointer);
-#ifndef _WIN32
+#ifdef __linux__
     if (BackingFile backing; step != nullptr && watchedDmaBuf != watchedHostPointer && sharedBacking(context, entry, backing)) {
         GuestMemory::ImportWatched(base, bytes, [&] {
             step = createBackingImport(context, entry, backing, result);
@@ -4001,7 +4007,7 @@ ImportProbe ProbeImportWriteProtection(const Context& context) {
 
 ImportProbe ProbeDmaBufImportWriteProtection(const Context& context) {
     ImportProbe probe;
-#ifdef _WIN32
+#ifndef __linux__
     static_cast<void>(context);
     probe.failure = "the Linux write watch";
     return probe;

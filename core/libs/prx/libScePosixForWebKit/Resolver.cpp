@@ -5,6 +5,7 @@
 #include <winsock2.h>
 #include <ws2tcpip.h>
 #else
+#include <arpa/inet.h>
 #include <sys/socket.h>
 #include <netdb.h>
 #include <netinet/in.h>
@@ -25,6 +26,13 @@
 #include "GuestResolver.hpp"
 
 namespace {
+bool NumericNode(const char* node) {
+    const std::string address(node, std::strcspn(node, "%"));
+    in_addr v4{};
+    in6_addr v6{};
+    return inet_pton(AF_INET, node, &v4) == 1 || inet_pton(AF_INET6, address.c_str(), &v6) == 1;
+}
+
 struct HostLookup {
     GuestResolver::HostEntry entry{};
     std::string name;
@@ -288,6 +296,7 @@ int APS5_VABI getaddrinfo_nid_postfix(const char* node, const char* service,
     GuestResolver::AddressInfo* first = nullptr;
     auto** tail = &first;
     int failure = 0;
+    const bool numericCanonical = node && hints && (hints->flags & 2) && NumericNode(node);
     for (auto* item = native; item; item = item->ai_next) {
         if (item->ai_family != AF_INET && item->ai_family != AF_INET6) { failure = 5; break; }
         auto* converted = static_cast<GuestResolver::AddressInfo*>(std::calloc(1, sizeof(GuestResolver::AddressInfo)));
@@ -315,11 +324,11 @@ int APS5_VABI getaddrinfo_nid_postfix(const char* node, const char* service,
             std::memcpy(bytes + 8, &v6->sin6_addr, 16);
             std::memcpy(bytes + 24, &v6->sin6_scope_id, 4);
         }
-        if (item->ai_canonname) {
-            const auto size = std::strlen(item->ai_canonname) + 1;
+        if (const char* canonical = numericCanonical && item == native ? node : item->ai_canonname) {
+            const auto size = std::strlen(canonical) + 1;
             converted->canonicalName = static_cast<char*>(std::malloc(size));
             if (!converted->canonicalName) { failure = 6; break; }
-            std::memcpy(converted->canonicalName, item->ai_canonname, size);
+            std::memcpy(converted->canonicalName, canonical, size);
         }
     }
     ::freeaddrinfo(native);

@@ -18,9 +18,8 @@
 #ifndef _WIN32
 #include <pthread.h>
 #endif
-
-#ifndef _WIN32
-#include <pthread.h>
+#ifdef __APPLE__
+#include <mach/mach_types.h>
 #endif
 
 enum class MutexType : std::uint32_t {
@@ -151,9 +150,14 @@ struct PthreadPrivate {
     int scope = GUEST_SCOPE_SYSTEM;
     int cpuClockThread = 0;
     std::atomic<bool> initialThread{false};
-#ifndef _WIN32
+#ifdef __APPLE__
+    mach_port_t hostMachThread = MACH_PORT_NULL;
+    bool hostCpuClockBound = false;
+#elif !defined(_WIN32)
     clockid_t hostCpuClock{};
     bool hostCpuClockBound = false;
+#endif
+#ifndef _WIN32
     void* guestStack = nullptr;
     std::size_t guestStackBytes = 0;
     int hostTid = 0;

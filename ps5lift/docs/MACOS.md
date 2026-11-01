@@ -1,12 +1,12 @@
 # macOS
 
-A plan for running lifted programs natively on Apple Silicon Macs. Phase 1 is done; the rest is not built yet. The facts below were checked on 2026-10-29 on an M4 running macOS 27.2 with Xcode's toolchain and Homebrew's LLVM.
+A plan for running lifted programs natively on Apple Silicon Macs. Phases 1 to 4 are done; phase 5 is paused on the decision below, and the rest is not built yet. The facts below were checked on 2026-10-29 on an M4 running macOS 27.2 with Xcode's toolchain and Homebrew's LLVM.
 
 ## Goal
 
 The Mac becomes a second host next to the GB10: `ps5lift` builds and runs on it, lifts for `arm64-apple-macosx`, and the result runs natively, in this order:
 
-1. the twelve fixtures that need nothing from AnyPS5 (`basic`, `vector`, `float`, `threads`, `callbacks`, `x87`, `setjmp`, `cpu`, `mmx`, `modules`, `strings`, `sse41`);
+1. the thirteen fixtures that need nothing from AnyPS5 (`basic`, `vector`, `float`, `threads`, `callbacks`, `x87`, `setjmp`, `cpu`, `mmx`, `modules`, `strings`, `sse41`, `avx`);
 2. AnyPS5's PS5-style `import` and `tls` fixtures;
 3. the four that call AnyPS5's libraries through generated bridges (`libc`, `exceptions`, `kernel`, `fiber`), and upstream's libc tests;
 4. EVO Player, to its home screen.
@@ -17,7 +17,7 @@ Not goals: Intel Macs; running guest code under Rosetta, which AnyPS5's own macO
 
 ## What exists
 
-- **The CPU.** The M4 has every extension the runtime requires or uses: AES, PMULL, CRC32, SHA-256 and SHA-512, LSE and LSE2, LRCPC and LRCPC2, so TSO loads become `LDAPR` and `LDAPUR` as on the GB10, and FEAT_AFP, which exact DAZ and FTZ need. It has no SVE, so the `neoverse-v2` default CPU is wrong for it. Pages are 16 KiB, the PS5's own page size. A process can map up to `0x7ffffe000000`, 32 MiB short of 128 TiB. AnyPS5 bounds guest addresses at `0x7fff00000000` in libkernel's direct memory, which fits, and at `0x800000000000` in its POSIX memory calls, which does not quite. Below 448 GiB a process keeps its `__PAGEZERO` over the low 4 GiB, its executable just above, the shared region from 6 to 63 GiB (`mach/shared_region.h`) and a GPU carve-out from 64 to 448 GiB (`mach/arm/vm_param.h`).
+- **The CPU.** The M4 has every extension the runtime requires or uses: AES, PMULL, CRC32, SHA-256 and SHA-512, LSE and LSE2, LRCPC and LRCPC2, so TSO loads become `LDAPR` and `LDAPUR` as on the GB10, and FEAT_AFP, whose `FPCR.AH` the runtime leaves clear ([floating point](DESIGN.md#floating-point)). It has no SVE, so the `neoverse-v2` default CPU is wrong for it. Pages are 16 KiB, the PS5's own page size. A process can map up to `0x7ffffe000000`, 32 MiB short of 128 TiB. AnyPS5 bounds guest addresses at `0x7fff00000000` in libkernel's direct memory, which fits, and at `0x800000000000` in its POSIX memory calls, which does not quite. Below 448 GiB a process keeps its `__PAGEZERO` over the low 4 GiB, its executable just above, the shared region from 6 to 63 GiB (`mach/shared_region.h`) and a GPU carve-out from 64 to 448 GiB (`mach/arm/vm_param.h`).
 - **ps5lift** builds against Ubuntu's LLVM 18 and, since phase 1, Homebrew's LLVM 23. Its output depends on the platform in two places only: it writes a GNU-format archive, and `main.cpp` picks the default CPU from the triple. Hidden visibility, the only symbol attribute it sets, means the same in Mach-O. AnyPS5's ELF reader, its other dependency, is part of AnyPS5's relinker, which already builds on Apple Silicon.
 - **The runtime** makes four Linux calls: `mmap` with `MAP_FIXED_NOREPLACE` for the guest images, `getauxval` for the CPU features it checks at start, `sched_getcpu` for `rdpid` and `getrandom` for `rdrand`. FPCR, `cntvct_el0` and the `dc` cache maintenance instructions are AArch64, not Linux; whether macOS lets user code run `dc civac` is unchecked, and `sys_dcache_flush` is its documented interface.
 - **Linking.** `build_runtime.py` and the fixture runners link with ELF `lld` options (`--undefined-glob`, `--export-dynamic-symbol`, `-rpath $ORIGIN`) so that AnyPS5's libraries, which are shared objects, bind to the runtime's `GuestCpu*_nid_no_patch` functions in the executable.
@@ -32,7 +32,7 @@ Guest memory is identity mapped ([the design](DESIGN.md#machine-model)), and eve
 
 ### Target and CPU
 
-Lift for `arm64-apple-macosx`. The default CPU follows the triple: `apple-m1` for Apple triples, the baseline every Apple Silicon Mac runs, and `neoverse-v2` for Linux as now; tests keep using `--cpu native`. The archive format follows the triple too (Darwin's for Apple). The runtime already checks FEAT_AFP at start and falls back to flushing both ways without it, which is what an M1 gets.
+Lift for `arm64-apple-macosx`. The default CPU follows the triple: `apple-m1` for Apple triples, the baseline every Apple Silicon Mac runs, and `neoverse-v2` for Linux as now; tests keep using `--cpu native`. The archive format follows the triple too (Darwin's for Apple). The runtime does not use FEAT_AFP, so an M1, which lacks it, runs the same code.
 
 ### How AnyPS5's libraries reach the runtime
 
@@ -61,31 +61,47 @@ Each phase ends with something that runs, and Linux's ctest passes after every c
 
 Done on 2026-10-29. `ps5lift` builds against Homebrew's LLVM 23, and ctest on the Mac lifts every fixture for aarch64 and x86-64 Linux without running it (24 tests, under a minute). EVO Player lifts for `aarch64-unknown-linux-gnu` in 7 minutes 14 seconds with a 13.4 GB peak memory footprint, where the GB10 takes 2 minutes 24 seconds, and reports the same functions, instructions, jump tables and unsupported instructions as the GB10's last lift. It took three LLVM API changes between 18 and 23, one of them `getTerminator()`, which no longer says whether a block has a terminator and made every lifted module invalid; linking the shared `libLLVM`, since LLVM's static libraries name the z3 installed on the day they were built, which a Homebrew upgrade removes; `+crc32` for x86-64 output; and the x86-64 Linux sysroot above.
 
-### 2. Mach-O output and the runtime
+### 2. Mach-O output and the runtime (done)
 
-- `ps5lift`: the triple's default CPU and archive format.
-- The runtime: replace `MAP_FIXED_NOREPLACE` with a fixed `mach_vm_allocate`, which fails rather than replacing a mapping; `getauxval` with `sysctlbyname("hw.optional.arm.FEAT_*")`; `getrandom` with `getentropy`; `sched_getcpu` with `pthread_cpu_number_np`. Build it as the dynamic library described above.
-- `build_runtime.py`, `run_fixture.py` and `tests/CMakeLists.txt`: Apple triples, Xcode's linker and no qemu path.
+Done on 2026-10-30. The thirteen fixtures pass natively on the M4 at `-O0` to `-O3` in both memory models, `threads` with TSO, and ctest on the Mac runs them as well as lifting for both Linux targets (42 tests). It took:
 
-Done when the twelve fixtures that need no AnyPS5 pass on the Mac, at `-O0` to `-O3`, with `--memory tso` for `threads`.
+- `ps5lift`: `apple-m1` and Darwin's archive format for Apple triples, and the oldest macOS for the architecture (11.0 for arm64) when the triple names no version, since LLVM writes no platform load command without one.
+- The runtime: the four Linux calls as planned; native calls into guest code read the program counter from Darwin's signal context, and the trampoline uses Darwin's symbol names; the functions it uses from AnyPS5 when its libraries are loaded (the guest arena, the jump buffer's signal mask) are found with `dlsym`, since a weak reference on macOS names the library that must provide it; SoftFloat's state is declared `__thread` in C++, since `thread_local` makes Mach-O code call an initialization wrapper that C does not emit.
+- The bridges' guest `long double` (below): `Bridge::LongDouble`, whose arithmetic runs through the runtime's x87. A host `long double` crosses a bridge only on hosts where it holds every x87 value.
+- `FPCR.AH` left clear on every host: Homebrew's LLVM 23 builds constants with `FNEG`, which the bit stops from changing a NaN, so lifted constants such as `0x7fc00000` and 16-bit `0x7fff` came out wrong. `NanResult` fences the host's result, since LLVM 23 also drops the default NaN after a square root, which `AH` had put back by accident.
+- `build_runtime.py` and the fixture runners: Xcode's `ar` and linker for Apple triples, which need none of the ELF options, and `arm64-apple-macosx` as the Mac's host triple. The fixtures' test bridge reads the guard page below a guest stack with `mach_vm_region` instead of `/proc/self/maps`.
 
-### 3. The relinker's fixtures
+The runtime stayed a static library here; phase 4 builds it as the dynamic library above, since that is where AnyPS5's libraries first link against it.
 
-Build AnyPS5's relinker on the Mac (its relinker-only build already supports Apple Silicon) and run the `import` and `tls` fixtures, which the tests relink at 1008 GiB. Done when both pass.
+### 3. The relinker's fixtures (done)
 
-### 4. AnyPS5's libraries for a lifted guest on macOS
+Done on 2026-10-30, with no changes: AnyPS5's relinker-only build compiles natively on the Mac, and the `import` and `tls` fixtures, relinked at 1008 GiB, pass in both memory models. ctest builds the relinker that way on the Mac and runs both (44 tests).
 
-- AnyPS5's CMake accepts arm64 on macOS when `ANYPS5_GUEST_LIFTED` is set, and keeps requiring x86-64 for the Rosetta build.
-- Go through the 291 `__APPLE__` paths for what assumes x86-64 or guest code running natively under Rosetta (thread state, unwinding, fiber switching, signal contexts), and the 49 lifted-mode paths for what assumes Linux. Where they overlap, lifted mode's behaviour wins and the macOS system call underneath it stays: `sceKernelRaiseException`, guest threads and their stacks, libSceFiber's stack switch (whose assembly needs Darwin's symbol names and directives), libc's unwinder, which finds guest frames through `GuestCpuIterateImages`, `setjmp`, and the float and atomic builtins.
-- The guest `long double` type above.
-- AnyPS5's guest arena, which on macOS reserves from 8 GiB up to 1008 GiB and starts its allocations at 8 GiB: on arm64 that is inside the shared region and across the GPU carve-out, so the arena has to start above 448 GiB there or leave those ranges out.
-- The bridge generator on the Mac, against AnyPS5's macOS compile commands.
+### 4. AnyPS5's libraries for a lifted guest on macOS (done)
 
-Done when `libc`, `exceptions`, `kernel` and `fiber` pass and `run_libc_tests.py` passes the same seven upstream tests as on Linux.
+Done on 2026-10-31. `libc`, `exceptions`, `kernel` and `fiber` pass natively on the M4, as do all sixteen of upstream's libc tests that `run_libc_tests.py` runs, nine more than when this plan was written; ctest on the Mac runs 50 tests, and Linux's still passes. It took:
+
+- AnyPS5's CMake: arm64 on macOS when `ANYPS5_GUEST_LIFTED` is set, without what only Rosetta's natively running guests need: the Mach-O guest TLS registry, the walk over `__APS5DATA` images, whose `dl_iterate_phdr` the two-level namespace bound in place of the runtime's, and DWARF-only unwind tables, through which the host's C++ runtime could not unwind the libraries' own exceptions.
+- libkernel: macOS calls where upstream `main` calls Linux ones and no longer compiles on macOS; direct memory on an unlinked temporary file; guest thread stacks allocated as on Linux and retired once their Mach thread port is a dead name; module queries answered from the runtime's image list, on both hosts.
+- The runtime as a shared library on both hosts, which AnyPS5's libraries link (`ANYPS5_LIFTED_RUNTIME`), with `main` handing it the program's table.
+- The guest `long double` as decided, on both hosts, except that the class's arithmetic, square root, rounding and conversions call the runtime's x87 (`GuestCpuExtended*`) rather than SoftFloat directly. `strtold` and `scanf`'s `%Lf` parse with exact integer arithmetic, which matched glibc's x87 `strtold` in 58,244 cases on an x86-64 machine. The transcendental `l` functions still compute in the host's widest type, a `double` on macOS ([known gaps](DEBT.md)).
+- The bridge generator: Homebrew's libclang, given its resource directory, and a library's exports read from its Mach-O symbol table.
+- Upstream's tests: the library names a numeric host as its own canonical name, which macOS's `getaddrinfo` leaves out, and the formatting tests check x87 digits only where the host's `long double` holds them.
+
+Until phase 5 ported AnyPS5's GPU driver, the Mac built only the libraries the tests load.
 
 ### 5. EVO Player
 
 Build the rest of the libraries it imports (libSceAgcDriver and its shader recompiler on MoltenVK, libSceVideoOut, audio, pad, system service, networking), relink it at 1008 GiB, lift it, and run it in a Cocoa window rather than under Xvfb. Done when it reaches its home screen. A screen that matches the GB10's, with the same colour fringes, puts those fringes in the shared code, not in either platform's renderer.
+
+In progress since 2026-10-31. Every AnyPS5 library builds on the Mac, and ctest builds them all there, as on Linux. The GPU driver imports guest memory through host pointers, which MoltenVK 1.2.11 offers with `VK_EXT_external_memory_host`, since its dma-buf imports need Linux's `udmabuf`; the NID-patched libraries are signed again after patching, since Apple's linker signs every arm64 image; the import audit reads Mach-O libraries; and the bridge generator gives libclang the SDK Apple's compiler driver adds. EVO Player prepares, lifts for `arm64-apple-macosx` (8 minutes 27 seconds, 4.1 GB peak, 59,697 functions as on Linux), links and runs natively: it boots, brings up its video decoders and allocates above 448 GiB, then stops where the GPU driver maps its own memory at `0xfe0000000`.
+
+That address is the blocker. Every arm64 process on macOS 27 has the shared region from 6 to 63 GiB, an inaccessible reservation from 63 to 64 GiB and the GPU carve-out from 64 to 448 GiB, so a PS5 address in those ranges cannot be identity mapped. The driver keeps its memory at 63.5 GiB because a title's shaders name its FS table there. With the memory moved for a test, EVO goes on to the driver's guest memory queries, which exist for Linux (`/proc/self/maps`) and Windows only. Next:
+
+- Port the driver's guest memory queries to `mach_vm_region`.
+- SDL is linked into several libraries, and macOS warns that their Objective-C classes are defined more than once.
+
+Paused on 2026-10-31, with the address question measured. Of the five titles that run on the GB10, three map memory at fixed addresses between 64 and 68 GiB that they do not get from an earlier reservation, one reserves 512 GiB with a hint at 64 GiB, and one's shaders read the driver's table at its fixed address; only the test program asks for nothing there. macOS refuses to map over its reservations: `mmap` with `MAP_FIXED` fails with `EPERM`, and `mach_vm_deallocate` succeeds but leaves the range reserved. So on macOS a guest address cannot always be its host address. Lifted code would add a base to every guest memory access, and every guest pointer that crosses into AnyPS5's libraries, in arguments, results and the structures they read and write, would need translating. That design comes first when the port resumes.
 
 ### 6. Both hosts, documented
 
@@ -94,6 +110,7 @@ The README's build section for macOS (Xcode, Homebrew `llvm` and `lld`, MoltenVK
 ## Risks
 
 - **Low addresses.** A PS5 title that relies on its executable sitting below 4 GiB, if any, now breaks on every host, not only on macOS.
-- **Overlap of Rosetta and lifted code in AnyPS5.** The two were written apart; the overlap is where most of phase 4's time goes, and it is not sized beyond the counts above.
+- **Fixed PS5 addresses in macOS's reserved ranges.** Guest memory is identity mapped, and macOS keeps 6 to 448 GiB for itself (phase 5). The guest arena keeps out of those ranges on its own, but a PS5 address fixed inside them, such as the GPU driver's, cannot be mapped there.
+- **Overlap of Rosetta and lifted code in AnyPS5.** The two were written apart. Phase 4 met it in libc and libkernel (above); the libraries phase 5 adds have `__APPLE__` paths of their own, written for Rosetta.
 - **MoltenVK.** It ran AnyPS5's renderer under Rosetta, and the GPU side does not change with the CPU, but nothing has run on it from an arm64 process yet.
-- **Precision of the new long double.** Exact x87 rounding is the point, but it changes the lifted libc's results on Linux too; the libc fixtures' expected output has to be checked against a native x86-64 run, not just updated.
+- **Precision of the new long double.** Exact x87 rounding is the point, and it changed the lifted libc's results on Linux too. The libc fixtures' expected output did not change, and the parser and the bit operations matched x87 on an x86-64 machine.

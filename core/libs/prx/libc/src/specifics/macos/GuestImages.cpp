@@ -1,4 +1,4 @@
-#ifdef __APPLE__
+#if defined(__APPLE__) && !defined(ANYPS5_GUEST_LIFTED)
 
 #include "prx/libc/include/specifics/linux/ElfTypes.hpp"
 #include <mach-o/dyld.h>

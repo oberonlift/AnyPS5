@@ -59,19 +59,24 @@ def compiler_version(compiler):
 
 def build(triple, output_directory, clang, clangxx, jobs):
     output_directory = Path(output_directory)
-    library = output_directory / "libps5lift_runtime.so"
+    library = output_directory / f"libps5lift_runtime.{'dylib' if apple(triple) else 'so'}"
     main_library = output_directory / "libps5lift_main.a"
     target = [f"--target={triple}", "-O2", "-fPIC"]
     units = []
     for path in softfloat_sources():
         units.append(([clang, *target, *SOFTFLOAT_FLAGS], path, output_directory / "softfloat" / (path.stem + ".o")))
+    # SoftFloat's state is C's _Thread_local, which C++ spells __thread: thread_local would have Mach-O call an
+    # initialization wrapper for it that C does not emit.
     for relative in [*RUNTIME_SOURCES, MAIN_SOURCE]:
         path = ROOT / relative
-        units.append(([clangxx, *target, "-std=c++20", f"-I{ROOT / 'runtime' / 'include'}", f"-I{SOFTFLOAT / 'source' / 'include'}", "-DTHREAD_LOCAL=thread_local", "-DSOFTFLOAT_FAST_INT64", "-DLITTLEENDIAN=1"], path, output_directory / "runtime" / (path.stem + ".o")))
+        units.append(([clangxx, *target, "-std=c++20", f"-I{ROOT / 'runtime' / 'include'}", f"-I{SOFTFLOAT / 'source' / 'include'}", "-DTHREAD_LOCAL=__thread", "-DSOFTFLOAT_FAST_INT64", "-DLITTLEENDIAN=1"], path, output_directory / "runtime" / (path.stem + ".o")))
     versions = {compiler: compiler_version(compiler) for compiler in (clang, clangxx)}
     units = [(command, source, output, fingerprint(versions[command[0]], *command, source)) for command, source, output in units]
-    shared = [clangxx, f"--target={triple}", "-shared", "-fuse-ld=lld", f"-Wl,-soname,{library.name}", "-pthread", "-ldl"]
-    archiver = subprocess.run([clang, "--print-prog-name=llvm-ar"], capture_output=True, text=True, check=True).stdout.strip()
+    if apple(triple):
+        shared = [clangxx, f"--target={triple}", "-dynamiclib", "-install_name", f"@rpath/{library.name}"]
+    else:
+        shared = [clangxx, f"--target={triple}", "-shared", "-fuse-ld=lld", f"-Wl,-soname,{library.name}", "-pthread", "-ldl"]
+    archiver = subprocess.run([clang, f"--print-prog-name={'ar' if apple(triple) else 'llvm-ar'}"], capture_output=True, text=True, check=True).stdout.strip()
     outputs = ((library, units[:-1], lambda temporary, objects: [*shared, *objects, "-o", temporary]),
                (main_library, units[-1:], lambda temporary, objects: [archiver, "crs", temporary, *objects]))
     # Parallel tests share this directory: build under a lock, and replace outputs whole so a link never sees one missing.
@@ -95,8 +100,13 @@ def build(triple, output_directory, clang, clangxx, jobs):
     return library, main_library
 
 
-def link_arguments(library, main_library=None):
-    return [*([str(main_library)] if main_library else []), str(library), f"-Wl,-rpath,{library.parent}"]
+def apple(triple):
+    return "-apple-" in triple
+
+
+def link_arguments(triple, library, main_library=None):
+    arguments = [*([str(main_library)] if main_library else []), str(library), f"-Wl,-rpath,{library.parent}"]
+    return arguments if apple(triple) else ["-fuse-ld=lld", *arguments]
 
 
 def main():

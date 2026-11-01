@@ -594,6 +594,24 @@ static bool NativeIsPipe(int descriptor) {
     const auto handle = reinterpret_cast<HANDLE>(::_get_osfhandle(descriptor));
     return handle != INVALID_HANDLE_VALUE && ::GetFileType(handle) == FILE_TYPE_PIPE;
 }
+#elif defined(__APPLE__)
+#include <sys/mount.h>
+#include <sys/param.h>
+#include <sys/statvfs.h>
+static bool NativeIsPipe(int descriptor) {
+    struct stat file{};
+    char path[MAXPATHLEN];
+    return ::fstat(descriptor, &file) == 0 && S_ISFIFO(file.st_mode) && ::fcntl(descriptor, F_GETPATH, path) != 0;
+}
+
+static bool NativeNoExecute(int descriptor, int* error) {
+    struct statfs mount{};
+    if (::fstatfs(descriptor, &mount) != 0) {
+        *error = SceErrorFromErrno(errno) & 0xffff;
+        return false;
+    }
+    return (mount.f_flags & MNT_NOEXEC) != 0;
+}
 #else
 #include <sys/statvfs.h>
 #include <sys/vfs.h>
@@ -605,17 +623,35 @@ static bool NativeIsPipe(int descriptor) {
         && static_cast<long>(kind.f_type) == PipeFilesystem;
 }
 
+static bool NativeNoExecute(int descriptor, int* error) {
+    struct statvfs host{};
+    if (::fstatvfs(descriptor, &host) != 0) {
+        *error = SceErrorFromErrno(errno) & 0xffff;
+        return false;
+    }
+    return (host.f_flag & ST_NOEXEC) != 0;
+}
+#endif
+
+#ifndef _WIN32
 static int NativeFstatfs(int descriptor, KernelStatfs* fs) {
     struct stat file{};
     if (::fstat(descriptor, &file) != 0) return SceErrorFromErrno(errno) & 0xffff;
+#ifdef O_PATH
     if (S_ISSOCK(file.st_mode) && (::fcntl(descriptor, F_GETFL) & O_PATH) == 0) return GUEST_EINVAL;
+#else
+    if (S_ISSOCK(file.st_mode)) return GUEST_EINVAL;
+#endif
     if (NativeIsPipe(descriptor)) return GUEST_EINVAL;
     if (S_ISCHR(file.st_mode)) return DeviceFilesystem(fs);
     struct statvfs host{};
     if (::fstatvfs(descriptor, &host) != 0) return SceErrorFromErrno(errno) & 0xffff;
+    int noExecuteError = 0;
+    const bool noExecute = NativeNoExecute(descriptor, &noExecuteError);
+    if (noExecuteError != 0) return noExecuteError;
     if (host.f_flag & ST_RDONLY) fs->f_flags |= KERNEL_MNT_RDONLY;
     if (host.f_flag & ST_NOSUID) fs->f_flags |= KERNEL_MNT_NOSUID;
-    if (host.f_flag & ST_NOEXEC) fs->f_flags |= KERNEL_MNT_NOEXEC;
+    if (noExecute) fs->f_flags |= KERNEL_MNT_NOEXEC;
     fs->f_bsize = host.f_frsize != 0 ? host.f_frsize : host.f_bsize;
     fs->f_iosize = host.f_bsize;
     fs->f_blocks = host.f_blocks;
@@ -1205,6 +1241,8 @@ int APS5_VABI sceKernelFdatasync(int fd) {
     File::RefuseArchivedFile(fd, "fdatasync");
 #ifdef _WIN32
     if (NativeSync(fd) != 0) return SceErrorFromErrno(errno);
+#elif defined(__APPLE__)
+    if (::fsync(fd) != 0) return SceErrorFromErrno(errno);
 #else
     if (::fdatasync(fd) != 0) return SceErrorFromErrno(errno);
 #endif
@@ -1217,15 +1255,19 @@ int APS5_VABI sceKernelWriteThrottlingStatus(std::uint64_t* status) {
     return 0;
 }
 
-#ifdef _WIN32
+#if defined(_WIN32) || defined(__APPLE__)
 
 int APS5_VABI sceKernelGetdirentries(int fd, char* buf, int nbytes, int64_t* basep) {
     if (GuestSockets::IsOpen(fd)) return SceErrorFromErrno(GUEST_EINVAL);
     File::RefuseArchivedFile(fd, "getdirentries");
     if (buf == nullptr) return SceErrorFromErrno(GUEST_EFAULT);
     if (nbytes <= 0) return SceErrorFromErrno(GUEST_EINVAL);
-    if (!File::DirectoryDescriptorPath(fd)) {
+    if (!File::IsDirectoryDescriptor(fd)) {
+#ifdef _WIN32
         if (WithoutParameterHandler([fd] { return ::_get_osfhandle(fd); }) == -1) return SceErrorFromErrno(GUEST_EBADF);
+#else
+        if (::fcntl(fd, F_GETFD) == -1) return SceErrorFromErrno(GUEST_EBADF);
+#endif
         return SceErrorFromErrno(GUEST_EINVAL);
     }
     const GuestArena::HostWrite destination(buf, static_cast<std::size_t>(nbytes));

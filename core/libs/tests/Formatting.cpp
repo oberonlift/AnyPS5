@@ -9,6 +9,7 @@
 #include <utility>
 #include <iterator>
 #include <climits>
+#include <cfloat>
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
@@ -602,9 +603,11 @@ static void CheckDecimalFloat() {
     RequireFloat("[%.0f]", -0.0, "[-0]");
     RequireFloat("[%-12.3E]", -1.25e-5, "[-1.250E-05  ]");
     char buffer[64];
-    Require(snprintf_nid_postfix(buffer, sizeof(buffer), "[%.40Le]", 1.0L / 3) == 48 && std::strcmp(buffer, "[3.3333333333333333334000000000000000000000e-01]") == 0);
     Require(snprintf_nid_postfix(buffer, sizeof(buffer), "[%.2Lf]", 0.125L) == 6 && std::strcmp(buffer, "[0.13]") == 0);
+#if LDBL_MANT_DIG >= 64
+    Require(snprintf_nid_postfix(buffer, sizeof(buffer), "[%.40Le]", 1.0L / 3) == 48 && std::strcmp(buffer, "[3.3333333333333333334000000000000000000000e-01]") == 0);
     Require(snprintf_nid_postfix(buffer, sizeof(buffer), "[%.30Le]", 0x1p-16445L) == 40 && std::strcmp(buffer, "[3.645199531882474602528000000000e-4951]") == 0);
+#endif
     for (const char* format : {"%.2147483647e", "%+.2147483647E", "%.2147483647f", "% .2147483646F", "%#.2147483647g",
             "%.2147483643e", "x%.2147483645f", "x%-2147483647e", "%.2147483647Le"}) {
         bool rejected = false;
@@ -624,11 +627,13 @@ static void CheckLongDoubleHexFloat() {
         long double value;
         const char* expected;
     } cases[] = {
-        {"[%La]", 0.1L, "[0x1.999999999999999ap-4]"}, {"[%LA]", 1.0L, "[0X1P+0]"}, {"[%.3La]", 0.1L, "[0x1.99ap-4]"},
-        {"[%.0La]", 1.5L, "[0x2p+0]"}, {"[%#.0La]", 0.1L, "[0x2.p-4]"}, {"[%La]", 0.0L, "[0x0p+0]"}, {"[%La]", -0.0L, "[-0x0p+0]"},
+        {"[%LA]", 1.0L, "[0X1P+0]"}, {"[%.0La]", 1.5L, "[0x2p+0]"}, {"[%La]", 0.0L, "[0x0p+0]"}, {"[%La]", -0.0L, "[-0x0p+0]"},
+        {"[%-+12.2La]", -2.0L, "[-0x1.00p+1  ]"}, {"[%010La]", 1.5L, "[0x001.8p+0]"},
+#if LDBL_MANT_DIG >= 64
+        {"[%La]", 0.1L, "[0x1.999999999999999ap-4]"}, {"[%.3La]", 0.1L, "[0x1.99ap-4]"}, {"[%#.0La]", 0.1L, "[0x2.p-4]"},
         {"[%La]", 0x1p-16445L, "[0x1p-16445]"}, {"[%La]", 0x1.fffffffffffffffep16383L, "[0x1.fffffffffffffffep+16383]"},
-        {"[%.15La]", 0x1.fffffffffffffffep0L, "[0x2.000000000000000p+0]"}, {"[%-+12.2La]", -2.0L, "[-0x1.00p+1  ]"},
-        {"[%010La]", 1.5L, "[0x001.8p+0]"}, {"[%.20La]", 0.1L, "[0x1.999999999999999a0000p-4]"},
+        {"[%.15La]", 0x1.fffffffffffffffep0L, "[0x2.000000000000000p+0]"}, {"[%.20La]", 0.1L, "[0x1.999999999999999a0000p-4]"},
+#endif
     };
     for (const auto& item : cases) {
         char buffer[64];

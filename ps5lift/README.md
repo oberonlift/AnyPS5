@@ -20,7 +20,7 @@ ctest --test-dir build --output-on-failure
 
 When the tests run lifted code natively they lift it for the host CPU (`--cpu native`), since the `neoverse-v2` default uses SVE, which CPUs such as Apple's do not have; `run_fixture.py --cpu` lifts for another CPU. On an aarch64 host the test lifts the fixture and runs it natively; building the x86-64 guests there needs an x86-64 cross toolchain and libraries (`g++-x86-64-linux-gnu` on Ubuntu). On an x86-64 host it also runs it natively and, when `qemu-aarch64` and an aarch64 sysroot are installed (`qemu-user g++-aarch64-linux-gnu`), lifts it for aarch64 and runs it under qemu. AnyPS5 is built for the host, so the tests that use its libraries run for the host's architecture only. The libc tests reserve the PS5 user address range, about 1 TiB of address space, so they fail under a `ulimit -v` limit.
 
-On an Apple Silicon Mac `ps5lift` builds and lifts for Linux, but what it lifts still runs on Linux only ([the macOS plan](docs/MACOS.md)). Xcode's command-line tools and Homebrew's `llvm` and `lld` are the toolchain. The tests lift every fixture for aarch64 and x86-64 Linux without running the result, and leave out AnyPS5's build and the tests that use its libraries. The x86-64 guests that use threads or libc build against an x86-64 Linux sysroot: a directory holding `usr/x86_64-linux-gnu` and `usr/lib/gcc-cross/x86_64-linux-gnu` as Ubuntu's `g++-x86-64-linux-gnu` installs them, copied from such a machine.
+On an Apple Silicon Mac `ps5lift` builds, lifts for Linux and for `arm64-apple-macosx`, and every fixture runs natively, those that call AnyPS5's libraries included; AnyPS5's GPU driver does not build there yet, so titles still run on Linux only ([the macOS plan](docs/MACOS.md)). Xcode's command-line tools and Homebrew's `llvm` and `lld` are the toolchain, and Homebrew's libclang and its Python bindings generate the bridges. The tests run every fixture and upstream's libc tests for macOS, with the AnyPS5 libraries they load, and lift every fixture for aarch64 and x86-64 Linux without running the result. The x86-64 guests build against an x86-64 Linux sysroot: a directory holding `usr/x86_64-linux-gnu` and `usr/lib/gcc-cross/x86_64-linux-gnu` as Ubuntu's `g++-x86-64-linux-gnu` installs them, copied from such a machine.
 
 ```sh
 git submodule update --init --recursive 3rdparty/zydis 3rdparty/softfloat
@@ -51,7 +51,7 @@ clang++ -O2 -Iruntime/include guest.a bridges.cpp $L/libc.prx $L/libkernel.prx $
 ./guest
 ```
 
-The runtime is a shared library, which AnyPS5's libraries link too, so they reach its `GuestCpu` functions; the program's `main`, from `libps5lift_main.a`, hands it the lifted program.
+The runtime is a shared library, which AnyPS5's libraries link too, so they reach its `GuestCpu` functions on every host; the program's `main`, from `libps5lift_main.a`, hands it the lifted program. On a Mac the triple is `arm64-apple-macosx`, the runtime `libps5lift_runtime.dylib`, and Xcode's linker needs neither `-fuse-ld=lld` nor `-latomic` and `-ldl`.
 
 The lifted program reaches the network as AnyPS5 does. With `APS5_NETWORK=0` set when it starts, AnyPS5 gives it a console without a network connection, whose only interface is loopback. `APS5_NETWORK_ALLOW=github.com,...` limits the program to those domains and their subdomains, and `APS5_NETWORK_DENY=...` stops domains from resolving (see AnyPS5's [networking notes](../docs/dev/ARCHITECTURE.md#networking)).
 
@@ -59,7 +59,7 @@ The lifted program reaches the network as AnyPS5 does. With `APS5_NETWORK=0` set
 |---|---|---|
 | `--jobs` | the host's threads | Threads that lift and compile parts of the program at once. |
 | `--triple` | `aarch64-unknown-linux-gnu` | Target for the generated code, aarch64 or x86-64. |
-| `--cpu` | `neoverse-v2` on aarch64 | Target CPU; `native` uses the host CPU and features, and needs a triple of the host's architecture. |
+| `--cpu` | `neoverse-v2` for aarch64 Linux, `apple-m1` for macOS | Target CPU; `native` uses the host CPU and features, and needs a triple of the host's architecture. |
 | `--features` | none | LLVM target features, such as `-rcpc-immo`; they override the host's under `--cpu native`. An unknown CPU or feature stops `ps5lift` before it reads the input. |
 | `--memory tso\|relaxed` | `tso` | `tso` keeps x86 ordering with acquire loads and release stores; `relaxed` uses plain accesses and is only correct for single-threaded guests. |
 | `--float exact\|fast` | `exact` | `exact` reproduces x86 NaN, min/max, DAZ and conversion results bit for bit; `fast` leaves NaN payloads to the host. |

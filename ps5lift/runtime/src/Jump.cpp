@@ -1,3 +1,5 @@
+#include "Runtime.hpp"
+
 #include <ps5lift/State.h>
 
 #include <cstddef>
@@ -5,12 +7,10 @@
 #include <cstring>
 #include <iterator>
 
-extern "C" {
-__attribute__((weak)) void JumpBufferSaveMask_nid_no_patch(unsigned char* buffer);
-__attribute__((weak)) void JumpBufferRestoreMask_nid_no_patch(const unsigned char* buffer);
-}
-
 namespace {
+
+auto* const JumpBufferSaveMask = Ps5Lift::AnyPs5Function<void(unsigned char*)>("JumpBufferSaveMask_nid_no_patch");
+auto* const JumpBufferRestoreMask = Ps5Lift::AnyPs5Function<void(const unsigned char*)>("JumpBufferRestoreMask_nid_no_patch");
 
 constexpr std::size_t MaskSavedOffset = 88;
 constexpr int SavedRegisters[] = {PS5LIFT_RBX, PS5LIFT_RSP, PS5LIFT_RBP, PS5LIFT_R12, PS5LIFT_R13, PS5LIFT_R14, PS5LIFT_R15};
@@ -37,7 +37,7 @@ void Save(Ps5LiftState* state, const bool mask) {
     }
     Put(buffer, 64, ps5lift_read_mxcsr(state));
     Put(buffer, 68, state->X87Control);
-    if (mask && JumpBufferSaveMask_nid_no_patch != nullptr) JumpBufferSaveMask_nid_no_patch(buffer);
+    if (mask && JumpBufferSaveMask != nullptr) JumpBufferSaveMask(buffer);
     else Put(buffer, MaskSavedOffset, std::int32_t{0});
     state->Gpr[PS5LIFT_RAX] = 0;
 }
@@ -45,7 +45,7 @@ void Save(Ps5LiftState* state, const bool mask) {
 void Jump(Ps5LiftState* state, const bool mask) {
     const auto* buffer = reinterpret_cast<const unsigned char*>(state->Gpr[PS5LIFT_RDI]);
     const auto value = static_cast<std::uint32_t>(state->Gpr[PS5LIFT_RSI]);
-    if (mask && JumpBufferRestoreMask_nid_no_patch != nullptr) JumpBufferRestoreMask_nid_no_patch(buffer);
+    if (mask && JumpBufferRestoreMask != nullptr) JumpBufferRestoreMask(buffer);
     for (std::size_t i = 0; i < std::size(SavedRegisters); ++i) state->Gpr[SavedRegisters[i]] = Get<std::uint64_t>(buffer, 8 + 8 * i);
     state->Gpr[PS5LIFT_RAX] = value != 0 ? value : 1;
     state->Mxcsr = Get<std::uint32_t>(buffer, 64);

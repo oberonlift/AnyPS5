@@ -79,6 +79,11 @@ int main(int argc, char** argv) {
         return 2;
     }
 
+    // Mach-O objects record the oldest macOS they run on, and LLVM records none for a triple without a version, so an
+    // Apple triple without one gets the oldest macOS for its architecture and links into a program for any later one.
+    if (codegen.Triple.isOSDarwin() && codegen.Triple.getOSMajorVersion() == 0)
+        codegen.Triple.setOSName((llvm::Triple::getOSTypeName(codegen.Triple.getOS()) + codegen.Triple.getMinimumSupportedOSVersion().getAsString()).str());
+
     if (codegen.Cpu == "native") {
         if (llvm::Triple(llvm::sys::getProcessTriple()).getArch() != codegen.Triple.getArch()) {
             std::cerr << "ps5lift: --cpu native describes this " << llvm::sys::getProcessTriple() << " host, which cannot run " << codegen.Triple.str() << " code\n";
@@ -89,7 +94,7 @@ int main(int argc, char** argv) {
         for (const auto& feature : Ps5Lift::HostCpuFeatures()) host += (host.empty() ? "" : ",") + std::string(feature.getValue() ? "+" : "-") + feature.getKey().str();
         codegen.Features = codegen.Features.empty() ? host : host + "," + codegen.Features;
     } else if (codegen.Cpu.empty()) {
-        codegen.Cpu = codegen.Triple.isAArch64() ? "neoverse-v2" : "generic";
+        codegen.Cpu = !codegen.Triple.isAArch64() ? "generic" : codegen.Triple.isOSDarwin() ? "apple-m1" : "neoverse-v2";
     }
 
     try {

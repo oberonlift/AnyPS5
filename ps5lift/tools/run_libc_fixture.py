@@ -10,7 +10,7 @@ import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from anyps5_build import Build
+from anyps5_build import HOST_LIBRARIES, Build
 from run_fixture import FIXTURES, GUEST_BASE, GUEST_FLAGS, ROOT, compare, host_triple, lifter_target, run, runner_for, runtime_link_arguments
 
 IMPORTS = ["printf", "snprintf", "vsnprintf", "sscanf", "puts", "strtold", "strtod", "modfl", "fabsl", "fprintf", "_Stdout", "div", "ldiv", "lldiv", "imaxdiv"]
@@ -31,21 +31,29 @@ def compute_nid(name):
     return nid(name)
 
 
+def sysroot(args):
+    return [f"--sysroot={args.guest_sysroot}"] if args.guest_sysroot else []
+
+
+def guest_flags(args):
+    return [*GUEST_FLAGS, *sysroot(args)]
+
+
 def build_libc_guest(args, work, optimization):
     header = "".join(f'#define NID_{name} "{compute_nid(name)}"\n' for name in IMPORTS)
     (work / "libc_nids.h").write_text(header)
     native_library = work / "libhostlibc.so"
     if not native_library.exists():
-        run([args.clang, "--target=x86_64-unknown-linux-gnu", "-O2", "-fPIC", "-shared", "-fuse-ld=lld", f"-I{work}", FIXTURES / "libc_native.c", "-o", native_library])
+        run([args.clang, "--target=x86_64-unknown-linux-gnu", *sysroot(args), "-O2", "-fPIC", "-shared", "-fuse-ld=lld", f"-I{work}", FIXTURES / "libc_native.c", "-o", native_library])
     guest = work / f"libc{optimization}"
-    run([args.clang, optimization, *GUEST_FLAGS, "-fno-vectorize", "-fno-slp-vectorize", f"-I{work}", f"-I{FIXTURES}", "-fpie", *GUEST_LINK,
+    run([args.clang, optimization, *guest_flags(args), "-fno-vectorize", "-fno-slp-vectorize", f"-I{work}", f"-I{FIXTURES}", "-fpie", *GUEST_LINK,
          FIXTURES / "libc.c", f"-L{work}", "-lhostlibc", "-o", guest])
     return guest, False, [FIXTURES / "host_bridge.cpp"], []
 
 
 def build_exceptions_guest(args, work, optimization):
     guest = work / f"exceptions{optimization}"
-    run([args.clangxx, optimization, *GUEST_FLAGS, "-fno-vectorize", "-fno-slp-vectorize", "-fexceptions", "-fpie", *GUEST_LINK,
+    run([args.clangxx, optimization, *guest_flags(args), "-fno-vectorize", "-fno-slp-vectorize", "-fexceptions", "-fpie", *GUEST_LINK,
          FIXTURES / "exceptions.cpp", "-lstdc++", "-lc", "-lgcc_s", "-o", guest])
     return guest, True, [], ["--import-nids"]
 
@@ -56,9 +64,9 @@ def build_stubbed_guest(args, work, optimization, fixture, imports, modules=()):
     stub.write_text("".join(f'void stub_{index}(void) __asm__("{compute_nid(name)}");\nvoid stub_{index}(void) {{}}\n' for index, name in enumerate(imports)))
     library = work / f"lib{fixture}stub.so"
     if not library.exists():
-        run([args.clang, *GUEST_FLAGS, "-O2", "-fPIC", "-shared", stub, "-o", library])
+        run([args.clang, *guest_flags(args), "-O2", "-fPIC", "-shared", stub, "-o", library])
     guest = work / f"{fixture}{optimization}"
-    run([args.clang, optimization, *GUEST_FLAGS, "-fno-vectorize", "-fno-slp-vectorize", f"-I{work}", "-fpie", *GUEST_LINK,
+    run([args.clang, optimization, *guest_flags(args), "-fno-vectorize", "-fno-slp-vectorize", f"-I{work}", "-fpie", *GUEST_LINK,
          FIXTURES / f"{fixture}.c", f"-L{work}", f"-l{fixture}stub", *(f"-l{module}" for module in modules), "-o", guest])
     return guest, False, [], []
 
@@ -66,7 +74,7 @@ def build_stubbed_guest(args, work, optimization, fixture, imports, modules=()):
 def build_kernel_guest(args, work, optimization):
     module = work / "libkernelmodule.so"
     if not module.exists():
-        run([args.clang, *GUEST_FLAGS, "-O2", "-fPIC", "-shared", "-Wl,-soname,$ORIGIN/libkernelmodule.so", FIXTURES / "kernel_module.c", "-o", module])
+        run([args.clang, *guest_flags(args), "-O2", "-fPIC", "-shared", "-Wl,-soname,$ORIGIN/libkernelmodule.so", FIXTURES / "kernel_module.c", "-o", module])
     return build_stubbed_guest(args, work, optimization, "kernel", KERNEL_IMPORTS, ["kernelmodule"])
 
 
@@ -86,6 +94,8 @@ def main():
     parser.add_argument("--anyps5-build", required=True, help="AnyPS5's build directory, configured with ANYPS5_GUEST_LIFTED")
     parser.add_argument("--fixture", choices=sorted(GUESTS), default="libc")
     parser.add_argument("--optimization", action="append")
+    parser.add_argument("--guest-sysroot", help="x86-64 Linux sysroot to build the guests against; the compiler's own by default")
+    parser.add_argument("--libclang", help="the libclang library the bridge generator parses with; the bindings find one by default")
     parser.add_argument("--keep", action="store_true")
     args = parser.parse_args()
 
@@ -99,7 +109,8 @@ def main():
     failures = 0
     try:
         bridges = work / "bridges.cpp"
-        run([sys.executable, ROOT / "tools" / "generate_bridges.py", *LIBRARIES[args.fixture], "--anyps5-build", args.anyps5_build, "-o", bridges])
+        run([sys.executable, ROOT / "tools" / "generate_bridges.py", *LIBRARIES[args.fixture], "--anyps5-build", args.anyps5_build,
+             *(["--libclang", args.libclang] if args.libclang else []), "-o", bridges])
         libraries = [anyps5.library(name) for name in LIBRARIES[args.fixture]]
         runtime = runtime_link_arguments(args.ps5lift, triple, args.clang, args.clangxx)
         for optimization in args.optimization or ["-O0", "-O2"]:
@@ -110,8 +121,8 @@ def main():
             lifted = work / f"{guest.name}.a"
             report = run([args.ps5lift, guest, "-o", lifted, "--triple", triple, *lift_flags, *lifter_target(triple, runner)]).stderr
             program = work / f"{guest.name}-lifted"
-            run([args.clangxx, f"--target={triple}", "-std=c++20", "-O1", f"-I{ROOT / 'runtime' / 'include'}", "-fuse-ld=lld", lifted, bridges, *host_sources,
-                 *libraries, *runtime, f"-Wl,-rpath,{anyps5.libraries_directory}", "-latomic", "-pthread", "-ldl", "-o", program])
+            run([args.clangxx, f"--target={triple}", "-std=c++20", "-O1", f"-I{ROOT / 'runtime' / 'include'}", lifted, bridges, *host_sources,
+                 *libraries, *runtime, f"-Wl,-rpath,{anyps5.libraries_directory}", *HOST_LIBRARIES, "-o", program])
             result = subprocess.run([*runner, program], capture_output=True, text=True, timeout=600)
             ended = result.returncode == 0 if stop is None else result.returncode != 0 and stop in result.stderr
             ok = ended and compare(expected, LOG_LINE.sub("", result.stdout), label)
