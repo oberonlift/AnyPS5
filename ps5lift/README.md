@@ -53,7 +53,6 @@ clang++ -O2 -Iruntime/include guest.a bridges.cpp $L/libc.prx $L/libkernel.prx $
 
 The runtime is a shared library, which AnyPS5's libraries link too, so they reach its `GuestCpu` functions; the program's `main`, from `libps5lift_main.a`, hands it the lifted program.
 
-The lifted program runs offline: AnyPS5 gives it a console without a network connection, whose only interface is loopback, unless `APS5_NETWORK=1` is set when it starts. With it, `APS5_NETWORK_ALLOW=github.com,...` limits the program to those domains and their subdomains, and `APS5_NETWORK_DENY=...` stops domains from resolving (see AnyPS5's [networking notes](../docs/dev/ARCHITECTURE.md#networking)).
 
 | Option | Default | Effect |
 |---|---|---|
