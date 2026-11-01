@@ -17,7 +17,7 @@ if(NOT CMAKE_SYSTEM_NAME STREQUAL "Linux")
         string(REGEX REPLACE "-.*" "" arch ${triple})
         foreach(fixture IN LISTS PS5LIFT_FIXTURES)
             add_test(NAME lift_${fixture}_${arch}
-                    COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tools/run_fixture.py
+                    COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tools/ps5lift.py fixture
                             --ps5lift $<TARGET_FILE:ps5lift>
                             --clang ${CMAKE_C_COMPILER}
                             --clangxx ${CMAKE_CXX_COMPILER}
@@ -27,7 +27,7 @@ if(NOT CMAKE_SYSTEM_NAME STREQUAL "Linux")
                             --lift-only)
         endforeach()
         add_test(NAME lift_basic_unoptimized_${arch}
-                COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tools/run_fixture.py
+                COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tools/ps5lift.py fixture
                         --ps5lift $<TARGET_FILE:ps5lift>
                         --clang ${CMAKE_C_COMPILER}
                         --clangxx ${CMAKE_CXX_COMPILER}
@@ -61,7 +61,7 @@ foreach(triple IN LISTS PS5LIFT_TEST_TRIPLES)
             set(memory_models --memory tso)
         endif()
         add_test(NAME fixture_${fixture}_${arch}
-                COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tools/run_fixture.py
+                COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tools/ps5lift.py fixture
                         --ps5lift $<TARGET_FILE:ps5lift>
                         --clang ${CMAKE_C_COMPILER}
                         --clangxx ${CMAKE_CXX_COMPILER}
@@ -70,7 +70,7 @@ foreach(triple IN LISTS PS5LIFT_TEST_TRIPLES)
                         ${memory_models})
     endforeach()
     add_test(NAME fixture_basic_unoptimized_${arch}
-            COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tools/run_fixture.py
+            COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tools/ps5lift.py fixture
                     --ps5lift $<TARGET_FILE:ps5lift>
                     --clang ${CMAKE_C_COMPILER}
                     --clangxx ${CMAKE_CXX_COMPILER}
@@ -86,14 +86,14 @@ include(ExternalProject)
 set(PS5LIFT_HOST_TRIPLE ${PS5LIFT_HOST_ARCH}-unknown-linux-gnu)
 set(PS5LIFT_HOST_RUNTIME ${CMAKE_BINARY_DIR}/runtime-${PS5LIFT_HOST_TRIPLE}/libps5lift_runtime.so)
 add_custom_target(ps5lift_host_runtime
-        COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tools/build_runtime.py --triple ${PS5LIFT_HOST_TRIPLE}
+        COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tools/ps5lift.py runtime --triple ${PS5LIFT_HOST_TRIPLE}
                 --output ${CMAKE_BINARY_DIR}/runtime-${PS5LIFT_HOST_TRIPLE} --clang ${CMAKE_C_COMPILER} --clangxx ${CMAKE_CXX_COMPILER}
         BYPRODUCTS ${PS5LIFT_HOST_RUNTIME}
         VERBATIM)
 
 set(PS5LIFT_ANYPS5_BUILD ${CMAKE_BINARY_DIR}/anyps5)
 # The libraries share the process with lifted code and the runtime, so they are built for the CPU both are built for
-# (tools/build_runtime.py).
+# (tools/ps5lift.py runtime).
 set(PS5LIFT_ANYPS5_CPU_FLAGS)
 if(PS5LIFT_HOST_ARCH STREQUAL "aarch64")
     set(PS5LIFT_ANYPS5_CPU_FLAGS -DCMAKE_C_FLAGS=-mcpu=neoverse-v2 -DCMAKE_CXX_FLAGS=-mcpu=neoverse-v2)
@@ -115,7 +115,7 @@ foreach(triple IN LISTS PS5LIFT_TEST_TRIPLES)
     string(REGEX REPLACE "-.*" "" arch ${triple})
     foreach(fixture import tls)
         add_test(NAME ps5_${fixture}_${arch}
-                COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tools/run_ps5_fixture.py
+                COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tools/ps5lift.py ps5-fixture
                         --ps5lift $<TARGET_FILE:ps5lift>
                         --relinker ${PS5LIFT_ANYPS5_BUILD}/core/relinker/relinker
                         --clang ${CMAKE_C_COMPILER}
@@ -134,7 +134,7 @@ if(NOT PS5LIFT_LIBCLANG_PYTHON EQUAL 0)
 endif()
 foreach(fixture libc exceptions kernel fiber)
     add_test(NAME ${fixture}_${PS5LIFT_HOST_ARCH}
-            COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tools/run_libc_fixture.py
+            COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tools/ps5lift.py libc-fixture
                     --ps5lift $<TARGET_FILE:ps5lift>
                     --anyps5-build ${PS5LIFT_ANYPS5_BUILD}
                     --clang ${CMAKE_C_COMPILER}
@@ -143,10 +143,10 @@ foreach(fixture libc exceptions kernel fiber)
 endforeach()
 
 add_test(NAME record_bridges
-        COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tools/check_record_bridges.py --clang ${CMAKE_C_COMPILER})
+        COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tools/ps5lift.py record-bridges --clang ${CMAKE_C_COMPILER})
 
 add_test(NAME libc_upstream_${PS5LIFT_HOST_ARCH}
-        COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tools/run_libc_tests.py
+        COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tools/ps5lift.py libc-tests
                 --anyps5-build ${PS5LIFT_ANYPS5_BUILD}
                 --clang ${CMAKE_C_COMPILER}
                 --clangxx ${CMAKE_CXX_COMPILER}
