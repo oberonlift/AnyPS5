@@ -8,7 +8,7 @@ Status: **milestone 2 in progress**. Guest code built for Zen 2, including SSE, 
 
 Requirements: CMake 3.22+, Ninja, Clang and LLD, LLVM 18 or newer with development files (`llvm-18-dev libzstd-dev zlib1g-dev` on Ubuntu 24.04 / DGX OS), Python 3. The build also builds AnyPS5 for a lifted guest, which has [its own requirements](../docs/dev/BUILD.md#requirements), among them SDL's X11, Wayland and audio development files. The bridge generator, and with it the tests, needs the libclang Python bindings (`python3-clang-18`); without them, configure with `-DBUILD_TESTING=OFF`.
 
-ps5lift lives in [oberonlift/AnyPS5](https://github.com/oberonlift/AnyPS5), a fork of AnyPS5 whose patches build AnyPS5's libraries for a lifted guest; the tests build that tree around it. From the repository's root:
+The build compiles AnyPS5's libraries for a lifted guest (`ANYPS5_GUEST_LIFTED`) from the tree around `ps5lift/`. From the repository's root:
 
 ```sh
 git submodule update --init --recursive
