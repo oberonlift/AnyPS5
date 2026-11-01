@@ -3,9 +3,16 @@
 
 #include <ps5lift/State.h>
 
+#include <dlfcn.h>
+
 #include <cstdint>
 
 namespace Ps5Lift {
+
+template <typename TFunction>
+TFunction* AnyPs5Function(const char* name) {
+    return reinterpret_cast<TFunction*>(dlsym(RTLD_DEFAULT, name));
+}
 
 const Ps5LiftProgram& Program();
 

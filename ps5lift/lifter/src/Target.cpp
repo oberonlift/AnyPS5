@@ -85,6 +85,8 @@ void Target::Configure(llvm::Module& module) const {
 Target ResolveTarget(const llvm::Triple& triple, const std::string& cpu, const std::string& features, const bool optimize) {
     if (!triple.isAArch64() && triple.getArch() != llvm::Triple::x86_64) throw std::runtime_error("ps5lift lifts for aarch64 and x86-64, not " + triple.str());
     Target target{triple, cpu, features, "", optimize};
+    if (triple.isOSDarwin() && triple.getOSMajorVersion() == 0)
+        target.Triple.setOSName((llvm::Triple::getOSTypeName(triple.getOS()) + triple.getMinimumSupportedOSVersion().getAsString()).str());
     if (cpu == "native") {
         if (llvm::Triple(llvm::sys::getProcessTriple()).getArch() != triple.getArch())
             throw std::runtime_error("--cpu native describes this " + llvm::sys::getProcessTriple() + " host, which cannot run " + triple.str() + " code");
@@ -92,9 +94,9 @@ Target ResolveTarget(const llvm::Triple& triple, const std::string& cpu, const s
         const auto host = HostFeatures();
         target.Features = features.empty() ? host : host + "," + features;
     } else if (cpu.empty()) {
-        target.Cpu = triple.isAArch64() ? "neoverse-v2" : "generic";
+        target.Cpu = !triple.isAArch64() ? "generic" : triple.isOSDarwin() ? "apple-m1" : "neoverse-v2";
     }
-    Validate(triple, target.Cpu, target.Features);
+    Validate(target.Triple, target.Cpu, target.Features);
     const std::string required = triple.isAArch64() ? "+aes,+crc" : "+aes,+pclmul,+sse4.2,+crc32";
     target.Features = target.Features.empty() ? required : target.Features + "," + required;
     target.DataLayout = target.Machine()->createDataLayout().getStringRepresentation();

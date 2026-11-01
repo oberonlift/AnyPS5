@@ -58,8 +58,18 @@ def run(command, **kwargs):
     return result
 
 
+def apple(triple):
+    return "-apple-" in triple
+
+
+def linker(triple):
+    return [] if apple(triple) else ["-fuse-ld=lld"]
+
+
 def host_triple():
     machine = platform.machine()
+    if platform.system() == "Darwin" and machine == "arm64":
+        return "arm64-apple-macosx"
     if machine in ("aarch64", "arm64"):
         return "aarch64-unknown-linux-gnu"
     if machine in ("x86_64", "AMD64"):
@@ -68,9 +78,9 @@ def host_triple():
 
 
 def runner_for(triple):
-    if triple.startswith(platform.machine()) or (triple.startswith("aarch64") and platform.machine() == "arm64"):
+    if triple == host_triple():
         return []
-    if triple.startswith("aarch64"):
+    if triple.startswith("aarch64") and platform.system() == "Linux":
         qemu = shutil.which("qemu-aarch64") or shutil.which("qemu-aarch64-static")
         if qemu is None:
             raise SystemExit("running aarch64 code on this host needs qemu-aarch64")
@@ -264,7 +274,7 @@ def cpu_flags(triple, cpu):
 
 def build_runtime(triple, cpu, output_directory, clang, clangxx, jobs):
     output_directory = Path(output_directory)
-    library = output_directory / "libps5lift_runtime.so"
+    library = output_directory / f"libps5lift_runtime.{'dylib' if apple(triple) else 'so'}"
     main_library = output_directory / "libps5lift_main.a"
     target = [f"--target={triple}", "-O2", "-fPIC", *cpu_flags(triple, cpu)]
     units = []
@@ -272,11 +282,14 @@ def build_runtime(triple, cpu, output_directory, clang, clangxx, jobs):
         units.append(([clang, *target, *SOFTFLOAT_FLAGS], path, output_directory / "softfloat" / (path.stem + ".o")))
     for relative in [*RUNTIME_SOURCES, MAIN_SOURCE]:
         path = ROOT / relative
-        units.append(([clangxx, *target, "-std=c++20", f"-I{ROOT / 'runtime' / 'include'}", f"-I{SOFTFLOAT / 'source' / 'include'}", "-DTHREAD_LOCAL=thread_local", "-DSOFTFLOAT_FAST_INT64", "-DLITTLEENDIAN=1"], path, output_directory / "runtime" / (path.stem + ".o")))
+        units.append(([clangxx, *target, "-std=c++20", f"-I{ROOT / 'runtime' / 'include'}", f"-I{SOFTFLOAT / 'source' / 'include'}", "-DTHREAD_LOCAL=__thread", "-DSOFTFLOAT_FAST_INT64", "-DLITTLEENDIAN=1"], path, output_directory / "runtime" / (path.stem + ".o")))
     versions = {compiler: compiler_version(compiler) for compiler in (clang, clangxx)}
     units = [(command, source, output, fingerprint(versions[command[0]], *command, source)) for command, source, output in units]
-    shared = [clangxx, f"--target={triple}", "-shared", "-fuse-ld=lld", f"-Wl,-soname,{library.name}", "-pthread", "-ldl"]
-    archiver = subprocess.run([clang, "--print-prog-name=llvm-ar"], capture_output=True, text=True, check=True).stdout.strip()
+    if apple(triple):
+        shared = [clangxx, f"--target={triple}", "-dynamiclib", "-install_name", f"@rpath/{library.name}"]
+    else:
+        shared = [clangxx, f"--target={triple}", "-shared", "-fuse-ld=lld", f"-Wl,-soname,{library.name}", "-pthread", "-ldl"]
+    archiver = subprocess.run([clang, f"--print-prog-name={'ar' if apple(triple) else 'llvm-ar'}"], capture_output=True, text=True, check=True).stdout.strip()
     outputs = ((library, units[:-1], lambda temporary, objects: [*shared, *objects, "-o", temporary]),
                (main_library, units[-1:], lambda temporary, objects: [archiver, "crs", temporary, *objects]))
     output_directory.mkdir(parents=True, exist_ok=True)
@@ -346,12 +359,12 @@ def runtime_sve_command(args):
     return 1 if found else 0
 
 
-def link_arguments(library, main_library=None):
-    return [*([str(main_library)] if main_library else []), str(library), f"-Wl,-rpath,{library.parent}"]
+def link_arguments(triple, library, main_library=None):
+    return [*linker(triple), *([str(main_library)] if main_library else []), str(library), f"-Wl,-rpath,{library.parent}"]
 
 
 def runtime_link_arguments(ps5lift, triple, cpu, clang, clangxx):
-    return link_arguments(*build_runtime(triple, cpu, runtime_directory(Path(ps5lift).resolve().parent.parent, triple, cpu), clang, clangxx, os.cpu_count()))
+    return link_arguments(triple, *build_runtime(triple, cpu, runtime_directory(Path(ps5lift).resolve().parent.parent, triple, cpu), clang, clangxx, os.cpu_count()))
 
 
 NID_SUFFIX = bytes([0x51, 0x8D, 0x64, 0xA6, 0x35, 0xDE, 0xD8, 0xC1, 0xE6, 0xB0, 0x39, 0xB1, 0xC3, 0xE5, 0x52, 0x30])
@@ -935,7 +948,7 @@ def game_command(args):
     anyps5_build = AnyPS5Build(anyps5)
     game = out / "game"
     print(f"linking {game}")
-    link_lifted(clangxx, triple, game, [archive, bridges, *anyps5_build.linked_libraries(libraries)], link_arguments(runtime, main_library))
+    link_lifted(clangxx, triple, game, [archive, bridges, *anyps5_build.linked_libraries(libraries)], link_arguments(triple, runtime, main_library))
     directory = out / "run"
     directory.mkdir(exist_ok=True)
     for name, target in (("app0", dump), ("game", game)):
@@ -965,7 +978,7 @@ def lift(ps5lift, guest, lifted, triple, flags):
 
 
 def link_lifted(clangxx, triple, program, inputs, runtime):
-    run([clangxx, f"--target={triple}", "-std=c++20", "-O1", f"-I{ROOT / 'runtime' / 'include'}", "-fuse-ld=lld", *inputs, *runtime, "-pthread", "-o", program])
+    run([clangxx, f"--target={triple}", "-std=c++20", "-O1", f"-I{ROOT / 'runtime' / 'include'}", *inputs, *runtime, "-pthread", "-o", program])
 
 
 def run_lifted(runner, program, label, timeout=PROGRAM_TIMEOUT, cwd=None):
@@ -1253,7 +1266,7 @@ def libc_tests_command(args):
     for test in tests:
         program = work / test
         archives = [anyps5.directory / archive for archive in LIBC_TEST_ARCHIVES.get(test, [])]
-        link = [args.clangxx, "-fuse-ld=lld", work / f"{test}.o", empty_program, *anyps5.linked_libraries(LIBC_TESTS[test]), *archives, *link_arguments(runtime), "-pthread", "-o", program]
+        link = [args.clangxx, work / f"{test}.o", empty_program, *anyps5.linked_libraries(LIBC_TESTS[test]), *archives, *link_arguments(triple, runtime), "-pthread", "-o", program]
         linked = subprocess.run(link, capture_output=True, text=True)
         if linked.returncode != 0:
             print(f"FAIL {test}: link\n{linked.stderr[-2000:]}")
@@ -1394,7 +1407,7 @@ def bench_command(args):
             flags = [] if vectorize else ["-fno-vectorize", "-fno-slp-vectorize"]
             cpu_flag = [] if runner else cpu_flags(args.triple, "native")
             programs[name] = work / name
-            run([args.clang, f"--target={args.triple}", "-O2", *cpu_flag, *flags, *scale, FIXTURES / "bench.c", FIXTURES / "host_native.c", "-fuse-ld=lld", "-o", programs[name]])
+            run([args.clang, f"--target={args.triple}", "-O2", *cpu_flag, *flags, *scale, FIXTURES / "bench.c", FIXTURES / "host_native.c", *linker(args.triple), "-o", programs[name]])
         for memory, suffix in (("relaxed", ""), ("tso", ""), ("tso", "-vec")):
             name = f"lifted-{memory}{suffix}"
             lifted = work / f"{name}.a"
