@@ -1073,8 +1073,11 @@ def libc_fixture_command(args):
     work = Path(tempfile.mkdtemp(prefix=f"ps5lift-{args.fixture}-"))
     failures = 0
     try:
-        bridges = work / "bridges.cpp"
-        generate_bridges(GUEST_LIBRARIES[args.fixture], args.anyps5_build, bridges)
+        if args.bridges:
+            bridges = args.bridges.resolve()
+        else:
+            bridges = work / "bridges.cpp"
+            generate_bridges(GUEST_LIBRARIES[args.fixture], args.anyps5_build, bridges)
         libraries = [anyps5.library(name) for name in GUEST_LIBRARIES[args.fixture]]
         runtime = runtime_link_arguments(args.ps5lift, triple, args.clang, args.clangxx)
         for optimization in args.optimization or ["-O0", "-O2"]:
@@ -1452,6 +1455,7 @@ def main():
     libc_fixture.add_argument("--clangxx", required=True)
     libc_fixture.add_argument("--anyps5-build", required=True, help="AnyPS5's build directory, configured with ANYPS5_GUEST_LIFTED")
     libc_fixture.add_argument("--fixture", choices=sorted(LIBRARY_GUESTS), default="libc")
+    libc_fixture.add_argument("--bridges", type=Path, help="bridges generated for the fixture's libraries; generated here when absent")
     libc_fixture.add_argument("--optimization", action="append")
     libc_fixture.add_argument("--keep", action="store_true")
     libc_fixture.set_defaults(handler=libc_fixture_command)
