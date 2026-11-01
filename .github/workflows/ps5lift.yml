@@ -2,7 +2,7 @@ name: ps5lift
 
 on:
   push:
-    branches: [main, lifter]
+    branches: [main]
   pull_request:
     paths:
       - ps5lift/**
