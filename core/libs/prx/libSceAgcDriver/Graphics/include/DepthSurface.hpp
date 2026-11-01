@@ -34,6 +34,7 @@ bool SampleLocationsCompatibleDepth(const Context& context, VkFormat format, std
 std::uint64_t DepthSurfacesSerial();
 std::uint64_t DepthSurfacesReleased();
 std::uint64_t DepthSliceBytes(VkExtent2D extent, std::uint32_t bytesPerTexel);
+std::uint64_t DepthPlaneBytes(const DepthTarget& target, std::uint32_t bytesPerTexel);
 bool DirectDepthCopy(const Context& context, VkFormat depthFormat, VkImageAspectFlagBits aspect, VkFormat colorFormat);
 void SetDirectDepthCopy(bool enabled);
 std::uint64_t DirectDepthCopyCount();
