@@ -10,6 +10,12 @@ class DecodeError(Exception):
     pass
 
 
+class RejectedEncoding(DecodeError):
+    def __init__(self, index, encoding, status):
+        super().__init__(f"cannot decode {encoding}: status {status}")
+        self.index = index
+
+
 @dataclass(frozen=True)
 class DecodedOperand:
     type: str
@@ -47,7 +53,7 @@ class Decoder:
         self.executable = executable
 
     def decode(self, encodings):
-        """Decodes each encoding; the result lists them in order. An encoding Zydis rejects raises DecodeError."""
+        """Decodes each encoding; the result lists them in order. An encoding Zydis rejects raises RejectedEncoding."""
         lines = [encoding.hex(" ") for encoding in encodings]
         stdin = "".join(line + "\n" for line in lines)
         completed = subprocess.run([self.executable], input=stdin, capture_output=True, text=True, check=True)
@@ -55,10 +61,10 @@ class Decoder:
         if len(outputs) != len(lines):
             raise DecodeError(f"{self.executable} answered {len(outputs)} lines for {len(lines)} encodings")
         decoded = []
-        for line, output in zip(lines, outputs):
+        for index, (line, output) in enumerate(zip(lines, outputs)):
             fields = json.loads(output)
             if "error" in fields:
-                raise DecodeError(f"cannot decode {line}: status {fields['error']}")
+                raise RejectedEncoding(index, line, fields["error"])
             decoded.append(_parse(fields))
         return decoded
 

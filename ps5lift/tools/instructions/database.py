@@ -75,6 +75,9 @@ class Definition:
     cpl: Optional[int]
     opsize_map: Optional[str]
     undefined_flags: frozenset
+    prefix_flags: frozenset
+    flags: frozenset
+    mask_mode: Optional[str]
     sibling_claims: frozenset
 
 
@@ -110,6 +113,9 @@ def _definition(index, row):
         cpl=row.get("cpl"),
         opsize_map=row.get("opsize_map"),
         undefined_flags=frozenset(flag for flag, effect in flags.items() if effect == "u"),
+        prefix_flags=frozenset(row.get("prefix_flags", ())),
+        flags=frozenset(row.get("flags", ())),
+        mask_mode=row.get("evex", {}).get("mask_mode"),
         sibling_claims=frozenset(),
     )
 
