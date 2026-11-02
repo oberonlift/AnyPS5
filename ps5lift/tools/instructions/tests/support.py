@@ -1,17 +1,8 @@
-from collections import defaultdict
-
-from instructions import cases, database, decoder
-from instructions.database import Group
+from instructions import decoder, suite
 
 
 def generate():
-    forms = [form for form in database.forms(database.load()) if database.classify(form.definition) is Group.SET]
-    instances = cases.instances(forms, decoder.from_environment())
-    by_group = defaultdict(list)
-    for instance in instances:
-        by_group[database.test_group(instance.form)].append(instance)
-    specs = {group: cases.case_specs(members) for group, members in by_group.items()}
-    return forms, dict(by_group), specs
+    return suite.generate(decoder.from_environment())
 
 
 _GENERATED = []

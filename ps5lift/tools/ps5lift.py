@@ -24,6 +24,8 @@ import sys
 import tempfile
 from pathlib import Path
 
+from instructions import suite
+
 ROOT = Path(__file__).resolve().parent.parent
 ANYPS5 = ROOT.parent
 LIBS = ANYPS5 / "core" / "libs"
@@ -1601,6 +1603,16 @@ def main():
     survey.add_argument("--library", action="append")
     survey.add_argument("--json", help="also write the results to this file")
     survey.set_defaults(handler=survey_command)
+
+    bundle = commands.add_parser("instructions-bundle", help="pack the instruction cases for a recording host", description="Generate every instruction test group, link its guest program and the native driver for x86-64, and write them with their inputs, the self-test, record.py and groups.json into OUTPUT, a new directory to copy to an x86-64 Linux host and run record.py there. ps5lift_decode comes from PS5LIFT_DECODE.")
+    bundle.add_argument("--output", type=Path, required=True)
+    bundle.add_argument("--clang", required=True)
+    bundle.add_argument("--group", action="append", help="a test group to bundle; every group with cases to record by default")
+    bundle.set_defaults(handler=lambda args: suite.bundle_command(args, GUEST_FLAGS, GUEST_BASE))
+
+    importer = commands.add_parser("instructions-import", help="check a recording and compress it into the repository", description="Check the results record.py wrote into BUNDLE/results against the bundle, and write each group's as tests/instructions/recordings/GROUP.results.xz")
+    importer.add_argument("bundle", type=Path, help="the bundle directory, with the recording host's results/ copied into it")
+    importer.set_defaults(handler=suite.import_command)
 
     args = parser.parse_args()
     return args.handler(args)

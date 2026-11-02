@@ -1,9 +1,18 @@
-"""The binary formats the instruction tests share, and the C header generated from them.
+"""The binary formats the instruction tests share, the protocol between the runner and the drivers, and the C header
+generated from them.
 
 The slot is the guest memory image that generated code loads its initial state from and stores its final state into. The
 table is the guest program's index of its slots, memory block and instances, which the drivers read. The input file
-lists the cases, and the result file records what each one did. Everything is little-endian. `header_text`
-emits `records.h` for the drivers, so the C and Python sides cannot drift apart."""
+lists the cases, and the result file records what each one did. Everything is little-endian. A result's slot words leave
+out `UNRECORDED_SLOT_RANGES`, the bytes of the stored FXSAVE image that no comparison reads (the pointer fields,
+MXCSR_MASK, the XMM area, which the YMM slots hold, and the reserved area): a driver copies the input's bytes over them
+before it compares the slots. A fault's result holds no words. A console-defined case's result says so, followed by the
+values the console defines for its inputs; the native driver knows none, and gives none.
+
+A driver reads the input file that `INPUTS_VARIABLE` names, starting at the case at the position `FIRST_VARIABLE` gives,
+and appends each case's result to the result file that `RESULTS_VARIABLE` names, whose header the runner writes. It exits
+with `DRIVER_FAILED` when it cannot run cases at all. `header_text` emits `records.h` for the drivers, so the C and
+Python sides cannot drift apart."""
 import struct
 from dataclasses import dataclass
 from enum import IntEnum
@@ -19,11 +28,14 @@ FX_SIZE = 512
 FX_FCW = 0
 FX_FSW = 2
 FX_FTW = 4
+FX_FOP = 6
 FX_MXCSR = 24
+FX_MXCSR_MASK = 28
 FX_ST = 32
 FX_ST_STRIDE = 16
 FX_XMM = 160
 FX_XMM_STRIDE = 16
+FX_RESERVED = 416
 YMM_OFFSET = 512
 YMM_STRIDE = 32
 YMM_COUNT = 16
@@ -39,6 +51,12 @@ PATH = 1159
 PATH_UNSET = 0xFF
 SLOT_SIZE = 1168
 SLOT_ALIGNMENT = 64
+UNRECORDED_SLOT_RANGES = (
+    (FX_OFFSET + FX_FOP, FX_OFFSET + FX_MXCSR),
+    (FX_OFFSET + FX_MXCSR_MASK, FX_OFFSET + FX_ST),
+    (FX_OFFSET + FX_XMM, FX_OFFSET + FX_RESERVED),
+    (FX_OFFSET + FX_RESERVED, FX_OFFSET + FX_SIZE),
+)
 
 BLOCK_SIZE = 4096
 BLOCK_END_ALIGNMENT = 64 * 1024
@@ -48,6 +66,11 @@ TABLE_MAGIC = b"PS5LTAB1"
 INPUT_MAGIC = b"PS5LIN01"
 RESULT_MAGIC = b"PS5LRES1"
 FINGERPRINT_SIZE = 32
+
+INPUTS_VARIABLE = "PS5LIFT_INSTRUCTION_INPUTS"
+RESULTS_VARIABLE = "PS5LIFT_INSTRUCTION_RESULTS"
+FIRST_VARIABLE = "PS5LIFT_INSTRUCTION_FIRST"
+DRIVER_FAILED = 2
 
 FLAG_NAMES = ("CF", "PF", "AF", "ZF", "SF", "OF", "DF")
 _AH_BITS = {"CF": 0, "PF": 2, "AF": 4, "ZF": 6, "SF": 7}
@@ -184,6 +207,10 @@ class RecordError(Exception):
     pass
 
 
+class TruncatedRecord(RecordError):
+    pass
+
+
 @dataclass(frozen=True)
 class Header:
     program: bytes
@@ -276,7 +303,7 @@ class _Reader:
     def take(self, size):
         end = self.position + size
         if end > len(self.data):
-            raise RecordError(f"the file ends at {len(self.data)}, {end - len(self.data)} bytes short")
+            raise TruncatedRecord(f"the file ends at {len(self.data)}, {end - len(self.data)} bytes short")
         chunk = self.data[self.position:end]
         self.position = end
         return chunk
@@ -296,8 +323,8 @@ def _unpack_header(reader, magic, count_name):
     return Header(program, inputs), count
 
 
-def write_inputs(path, header, inputs):
-    out = bytearray(_pack_header(INPUT_MAGIC, header, len(inputs)))
+def pack_input_records(inputs):
+    out = bytearray()
     for case in inputs:
         if len(case.slot) != SLOT_SIZE:
             raise RecordError(f"case {case.case}: the slot is {len(case.slot)} bytes, not {SLOT_SIZE}")
@@ -306,8 +333,12 @@ def write_inputs(path, header, inputs):
         out += _PATCH_COUNT.pack(len(case.patches))
         for offset, data in case.patches:
             out += _PATCH_HEAD.pack(offset, len(data)) + data
+    return bytes(out)
+
+
+def write_inputs(path, header, inputs):
     with open(path, "wb") as file:
-        file.write(out)
+        file.write(_pack_header(INPUT_MAGIC, header, len(inputs)) + pack_input_records(inputs))
 
 
 def read_inputs(path):
@@ -332,45 +363,74 @@ def _pack_words(words):
     return b"".join(_WORD.pack(offset, value) for offset, value in sorted(words.items()))
 
 
-def write_results(header, results):
-    out = bytearray(_pack_header(RESULT_MAGIC, header, len(results)))
-    for result in results:
-        out += _RESULT_HEAD.pack(
-            result.case,
-            result.outcome,
-            result.expected is not None,
-            result.detail,
-            len(result.slot_words),
-            len(result.memory_words),
-            result.address,
-            result.data,
-        )
-        out += _pack_words(result.slot_words) + _pack_words(result.memory_words)
-        if result.expected is not None:
-            out += _EXPECTED_COUNT.pack(len(result.expected))
-            out += b"".join(struct.pack("<Q", value) for value in result.expected)
+def result_file_header(header, count):
+    return _pack_header(RESULT_MAGIC, header, count)
+
+
+def pack_result(result):
+    out = bytearray(_RESULT_HEAD.pack(
+        result.case,
+        result.outcome,
+        result.expected is not None,
+        result.detail,
+        len(result.slot_words),
+        len(result.memory_words),
+        result.address,
+        result.data,
+    ))
+    out += _pack_words(result.slot_words) + _pack_words(result.memory_words)
+    if result.expected is not None:
+        out += _EXPECTED_COUNT.pack(len(result.expected))
+        out += b"".join(struct.pack("<Q", value) for value in result.expected)
     return bytes(out)
+
+
+def write_results(header, results):
+    return result_file_header(header, len(results)) + b"".join(pack_result(result) for result in results)
 
 
 def _read_words(reader, count):
     return dict(reader.unpack(_WORD) for _ in range(count))
 
 
+_OUTCOMES = frozenset(Outcome)
+
+
+def _read_result(reader):
+    case, outcome, console_defined, detail, slot_count, memory_count, address, value = reader.unpack(_RESULT_HEAD)
+    if outcome not in _OUTCOMES:
+        raise RecordError(f"case {case} has outcome {outcome}, which is none of {[item.value for item in Outcome]}")
+    slot_words = _read_words(reader, slot_count)
+    memory_words = _read_words(reader, memory_count)
+    expected = None
+    if console_defined:
+        (expected_count,) = reader.unpack(_EXPECTED_COUNT)
+        expected = struct.unpack(f"<{expected_count}Q", reader.take(8 * expected_count))
+    return Result(case, Outcome(outcome), detail, address, value, slot_words, memory_words, expected)
+
+
 def read_results(data):
     reader = _Reader(data)
     header, count = _unpack_header(reader, RESULT_MAGIC, "result")
-    results = []
-    for _ in range(count):
-        case, outcome, console_defined, detail, slot_count, memory_count, address, value = reader.unpack(_RESULT_HEAD)
-        slot_words = _read_words(reader, slot_count)
-        memory_words = _read_words(reader, memory_count)
-        expected = None
-        if console_defined:
-            (expected_count,) = reader.unpack(_EXPECTED_COUNT)
-            expected = struct.unpack(f"<{expected_count}Q", reader.take(8 * expected_count))
-        results.append(Result(case, Outcome(outcome), detail, address, value, slot_words, memory_words, expected))
+    results = [_read_result(reader) for _ in range(count)]
     reader.finish()
     return header, results
+
+
+def read_result_prefix(data):
+    reader = _Reader(data)
+    header, count = _unpack_header(reader, RESULT_MAGIC, "result")
+    results = []
+    end = reader.position
+    while reader.position < len(data):
+        try:
+            results.append(_read_result(reader))
+        except TruncatedRecord:
+            break
+        end = reader.position
+    if len(results) > count:
+        raise RecordError(f"the result file holds {len(results)} results, more than the {count} its header gives")
+    return header, results, end
 
 
 _C_TEMPLATE = """#ifndef PS5LIFT_INSTRUCTION_RECORDS_H
@@ -401,6 +461,16 @@ static inline void Ps5LiftFillBlock(uint8_t* block, uint64_t seed)
     }}
 }}
 
+static inline void Ps5LiftRestoreUnrecordedSlotBytes(uint8_t* output, const uint8_t* input)
+{{
+    static const uint16_t ranges[][2] = {{{unrecorded}}};
+    for (size_t i = 0; i < sizeof(ranges) / sizeof(ranges[0]); ++i) {{
+        for (size_t j = ranges[i][0]; j < ranges[i][1]; ++j) {{
+            output[j] = input[j];
+        }}
+    }}
+}}
+
 #endif
 """
 
@@ -412,11 +482,14 @@ def _defines():
         "FX_FCW": FX_FCW,
         "FX_FSW": FX_FSW,
         "FX_FTW": FX_FTW,
+        "FX_FOP": FX_FOP,
         "FX_MXCSR": FX_MXCSR,
+        "FX_MXCSR_MASK": FX_MXCSR_MASK,
         "FX_ST": FX_ST,
         "FX_ST_STRIDE": FX_ST_STRIDE,
         "FX_XMM": FX_XMM,
         "FX_XMM_STRIDE": FX_XMM_STRIDE,
+        "FX_RESERVED": FX_RESERVED,
         "YMM": YMM_OFFSET,
         "YMM_STRIDE": YMM_STRIDE,
         "YMM_COUNT": YMM_COUNT,
@@ -437,11 +510,14 @@ def _defines():
         "BLOCK_END_ALIGNMENT": BLOCK_END_ALIGNMENT,
         "GUARD_SIZE": GUARD_SIZE,
         "FINGERPRINT_SIZE": FINGERPRINT_SIZE,
+        "DRIVER_FAILED": DRIVER_FAILED,
     }
     lines = [f"#define PS5LIFT_INSTRUCTION_{name} {value}" for name, value in values.items()]
     lines.append(f'#define PS5LIFT_INSTRUCTION_TABLE_MAGIC "{TABLE_MAGIC.decode()}"')
     lines.append(f'#define PS5LIFT_INSTRUCTION_INPUT_MAGIC "{INPUT_MAGIC.decode()}"')
     lines.append(f'#define PS5LIFT_INSTRUCTION_RESULT_MAGIC "{RESULT_MAGIC.decode()}"')
+    for name, variable in (("INPUTS", INPUTS_VARIABLE), ("RESULTS", RESULTS_VARIABLE), ("FIRST", FIRST_VARIABLE)):
+        lines.append(f'#define PS5LIFT_INSTRUCTION_{name}_VARIABLE "{variable}"')
     lines += [f"#define PS5LIFT_INSTRUCTION_OUTCOME_{outcome.name} {outcome.value}" for outcome in Outcome]
     return "\n".join(lines)
 
@@ -452,4 +528,5 @@ def header_text():
         structs="\n\n".join(record.c_text() for record in RECORDS),
         zero_seed=_FILL_ZERO_SEED,
         multiplier=_FILL_MULTIPLIER,
+        unrecorded=", ".join(f"{{{start}, {end}}}" for start, end in UNRECORDED_SLOT_RANGES),
     )

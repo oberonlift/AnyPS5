@@ -29,7 +29,11 @@ holds 0 until the guest program's code loads the address (`fixup_register` names
 the case's inputs patch. `x87` is the FXSAVE image up to the XMM registers, with MXCSR in `mxcsr` instead. A case's
 `changeable_words` counts the 8-byte words of the result slot and of the block that it can change, which
 `projected_recording_bytes` turns into the size of its result in a recording. Every random value derives from `SEED`,
-the form's key, the instance's place among its form's instances and the case's place in its schedule."""
+the form's key, the instance's place among its form's instances and the case's place in its schedule.
+
+`expectation_written` names the forms whose expectations are written from AMD's manual instead of recorded on Intel
+hardware, because Intel runs their bytes as other instructions: SSE4A, which Intel lacks, and the 16-bit near branches
+of AMD's branch mode, which Intel runs as 64-bit ones. Their cases are left out of the recording."""
 import re
 import struct
 from dataclasses import dataclass, replace
@@ -186,6 +190,9 @@ _XGETBV_REGISTERS = (0, 1)
 _LOOP_COUNTS = (0, 1, 2, 1 << 32)
 _REP_COUNTS = (0, 1, 2, 7, 64)
 _REP_LIMIT = 64
+_WRITTEN_GROUPS = frozenset({"sse4a"})
+_NEAR_BRANCH_CATEGORIES = frozenset({"COND_BR", "UNCOND_BR", "CALL", "RET"})
+_SHORT_BRANCH_SIZE = 16
 _BASE, _RANDOM, _MEMORY_CASE, _X87_CASE, _EXTRA_CASE, _VARIANT, _STATE = range(1, 8)
 
 
@@ -233,6 +240,12 @@ def _expression_offset(expression):
     if match is None:
         raise CaseError(f"{expression!r} names no block offset")
     return int(match.group(1))
+
+
+def expectation_written(form):
+    if test_group(form) in _WRITTEN_GROUPS:
+        return True
+    return form.definition.category in _NEAR_BRANCH_CATEGORIES and form.operand_size == _SHORT_BRANCH_SIZE
 
 
 def _model(form):
@@ -815,7 +828,7 @@ def _abridged_tags(top, valid):
 
 def _x87_image(case):
     if not case.model.x87 and not case.model.mmx:
-        return _DEFAULT_X87_IMAGE
+        return DEFAULT_X87_IMAGE
     image = bytearray(_X87_IMAGE_SIZE)
     struct.pack_into("<HHB", image, records.FX_FCW, case.fcw, case.fsw, _abridged_tags(case.top, case.valid))
     for number, value in enumerate(case.st):
@@ -830,7 +843,7 @@ def _default_x87_image():
     return bytes(image)
 
 
-_DEFAULT_X87_IMAGE = _default_x87_image()
+DEFAULT_X87_IMAGE = _default_x87_image()
 
 
 def _target_choice(instance):

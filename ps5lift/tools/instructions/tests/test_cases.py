@@ -27,6 +27,10 @@ X87_CONTROL_PAIRS = frozenset((precision, rounding) for precision in (0, 2, 3) f
 STACK_MARGIN = 512
 IMPLICIT_BASES = {"si": 6, "di": 7, "bx": 3, "bp": 5, "sp": 4}
 MASK64 = 2**64 - 1
+NEAR_BRANCHES = frozenset(
+    "jmp call ret jo jno jb jnb jz jnz jbe jnbe js jns jp jnp jl jnl jle jnle".split()
+)
+SSE4A_FORMS = 6
 
 
 def _ieee_edges(bits, exponent_bits):
@@ -363,10 +367,27 @@ class CasesTest(unittest.TestCase):
         self.assertEqual(completed.returncode, 0, completed.stderr)
 
     def test_projected_recording_size(self):
-        _, _, specs = generated()
-        recorded = [group_specs for group, group_specs in specs.items() if group != "sse4a"]
-        total = sum(cases.projected_recording_bytes(group_specs) for group_specs in recorded)
-        self.assertLessEqual(total, BUDGET)
+        _, instances, specs = generated()
+        recorded = [
+            spec for group, group_specs in specs.items() for spec in group_specs
+            if not cases.expectation_written(instances[group][spec.instance].form)
+        ]
+        self.assertLessEqual(cases.projected_recording_bytes(recorded), BUDGET)
+
+    def test_written_expectations(self):
+        forms = generated()[0]
+        written = {form.key for form in forms if cases.expectation_written(form)}
+        sse4a = {form.key for form in forms if database.test_group(form) == "sse4a"}
+        branches = {
+            form.key for form in forms
+            if form.definition.mnemonic in NEAR_BRANCHES and form.operand_size == 16
+        }
+        self.assertEqual(written, sse4a | branches)
+        self.assertEqual(len(sse4a), SSE4A_FORMS)
+        self.assertTrue({"jmp", "call", "jz"} <= {key.split(".")[0] for key in branches}, sorted(branches))
+        self.assertIn(self.form("jmp", 16, feature_amd="1").key, written)
+        self.assertNotIn(self.form("jmp", 64, feature_amd="1").key, written)
+        self.assertNotIn(self.form("ret", 64, opcode=0xC3).key, written)
 
 
 if __name__ == "__main__":
