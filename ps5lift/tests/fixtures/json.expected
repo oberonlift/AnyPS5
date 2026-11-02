@@ -1,0 +1,2 @@
+json initialize 0, allocated from the title's allocator 1
+json terminate 0, every call reached the title's allocator with its own pointers 1

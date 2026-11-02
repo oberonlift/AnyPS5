@@ -1179,6 +1179,8 @@ KERNEL_IMPORTS = ["printf", "exit", "scePthreadCreate", "scePthreadJoin", "scePt
 FIBER_IMPORTS = ["printf", "fflush", "exit", "_sceFiberInitializeImpl", "sceFiberFinalize", "sceFiberRun", "sceFiberSwitch", "sceFiberReturnToThread", "sceFiberGetSelf",
                  "scePthreadCreate", "scePthreadJoin"]
 LOADER_IMPORTS = ["printf", "exit", "dlopen", "sceKernelGetExecutableModuleHandle", "sceKernelLoadStartModule", "sceKernelDlsym"]
+JSON_IMPORTS = ["printf", "exit", "_ZN3sce4Json14InitParameter2C1Ev", "_ZN3sce4Json14InitParameter212setAllocatorEPNS0_12MemAllocatorEPv",
+                "_ZN3sce4Json11InitializerC1Ev", "_ZN3sce4Json11Initializer10initializeEPKNS0_14InitParameter2E", "_ZN3sce4Json11Initializer9terminateEv"]
 UNCONVERTED_IMPORTS = ["printf", "fflush", "exit", "pthread_mutexattr_init"]
 TRANSLATION_IMPORTS = ["printf", "fflush", "exit", "mmap", "munmap", "strlen", "strchr", "strtol", "qsort", "writev", "pthread_mutex_lock",
                        "pthread_mutex_unlock", "scePthreadMutexLock", "scePthreadMutexUnlock", "pthread_mutexattr_init", "scePthreadMutexattrSettype",
@@ -1249,14 +1251,18 @@ def build_translation_guest(args, work, optimization):
     return build_stubbed_guest(args, work, optimization, "translation", TRANSLATION_IMPORTS)
 
 
+def build_json_guest(args, work, optimization):
+    return build_stubbed_guest(args, work, optimization, "json", JSON_IMPORTS)
+
+
 def build_unconverted_guest(args, work, optimization):
     return build_stubbed_guest(args, work, optimization, "unconverted", UNCONVERTED_IMPORTS)
 
 
 LIBRARY_GUESTS = {"libc": build_libc_guest, "exceptions": build_exceptions_guest, "kernel": build_kernel_guest, "fiber": build_fiber_guest,
-                  "loader": build_loader_guest, "translation": build_translation_guest, "unconverted": build_unconverted_guest}
+                  "loader": build_loader_guest, "translation": build_translation_guest, "unconverted": build_unconverted_guest, "json": build_json_guest}
 GUEST_LIBRARIES = {"libc": ["libc"], "exceptions": ["libc"], "kernel": ["libc", "libkernel", "libkernel_sys"], "fiber": ["libc", "libkernel", "libSceFiber"],
-                   "loader": ["libc", "libkernel"], "translation": ["libc", "libkernel"], "unconverted": ["libc", "libkernel"]}
+                   "loader": ["libc", "libkernel"], "translation": ["libc", "libkernel"], "unconverted": ["libc", "libkernel"], "json": ["libc", "libkernel", "libSceJson2"]}
 
 
 def libc_fixture_command(args):

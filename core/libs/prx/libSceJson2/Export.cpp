@@ -106,8 +106,8 @@ struct AllocParamRtti {
 };
 
 struct AllocationContext {
-    void* allocator = nullptr;
-    void* userData = nullptr;
+    GuestArena::GuestPointer<void> allocator = nullptr;
+    GuestArena::GuestPointer<void> userData = nullptr;
     std::size_t fileBufferSize = 0;
 };
 static_assert(sizeof(AllocationContext) == 24);
@@ -211,19 +211,31 @@ AllocParamRtti RttiCallbacks() {
     return state.rtti;
 }
 
+void* GuestForm(const void* pointer) {
+    return reinterpret_cast<void*>(GuestArena::HostToGuest(pointer));
+}
+
+void* HostForm(void* pointer) {
+    return GuestArena::GuestToHost(reinterpret_cast<std::uint64_t>(pointer));
+}
+
+void* const* AllocatorTable(const void* allocator) {
+    return static_cast<void* const*>(GuestArena::StoredPointer(allocator));
+}
+
 void* Allocate(const AllocationContext& context, std::size_t size) {
-    auto* const* table = *static_cast<void* const* const*>(context.allocator);
+    auto* const* table = AllocatorTable(context.allocator);
     const auto allocate = reinterpret_cast<void* (APS5_VABI*)(void*, std::size_t, void*)>(table[2]);
     void* memory;
     {
         AllocatorCallbackScope scope;
-        memory = allocate(context.allocator, size, context.userData);
+        memory = HostForm(allocate(GuestForm(context.allocator), size, GuestForm(context.userData)));
     }
     if (!memory) {
         const auto notify = reinterpret_cast<void (APS5_VABI*)(void*, int, std::size_t, void*)>(table[4]);
         {
             AllocatorCallbackScope scope;
-            notify(context.allocator, JsonErrorOutOfMemory, size, context.userData);
+            notify(GuestForm(context.allocator), JsonErrorOutOfMemory, size, GuestForm(context.userData));
         }
         auto& state = State();
         std::lock_guard lock(state.mutex);
@@ -233,10 +245,10 @@ void* Allocate(const AllocationContext& context, std::size_t size) {
 }
 
 void Release(const AllocationContext& context, void* memory) {
-    auto* const* table = *static_cast<void* const* const*>(context.allocator);
+    auto* const* table = AllocatorTable(context.allocator);
     const auto free = reinterpret_cast<void (APS5_VABI*)(void*, void*, void*)>(table[3]);
     AllocatorCallbackScope scope;
-    free(context.allocator, memory, context.userData);
+    free(GuestForm(context.allocator), GuestForm(memory), GuestForm(context.userData));
 }
 
 struct FileReader {
@@ -1553,9 +1565,9 @@ int InitializeResources(void* self, const void* parameter, std::int32_t format, 
     auto& state = State();
     AllocationContext context;
     std::memcpy(&context, parameter, offsetof(AllocationContext, fileBufferSize));
-    auto* const* table = *static_cast<void* const* const*>(context.allocator);
+    auto* const* table = AllocatorTable(context.allocator);
     const auto allocate = reinterpret_cast<void* (APS5_VABI*)(void*, std::size_t, void*)>(table[2]);
-    auto* allocation = static_cast<AllocationContext*>(allocate(context.allocator, sizeof(AllocationContext), context.userData));
+    auto* allocation = static_cast<AllocationContext*>(HostForm(allocate(GuestForm(context.allocator), sizeof(AllocationContext), GuestForm(context.userData))));
     if (!allocation) return JsonErrorOutOfMemory;
     std::memcpy(&context.fileBufferSize, static_cast<const std::byte*>(parameter) + offsetof(AllocationContext, fileBufferSize), sizeof(context.fileBufferSize));
     *allocation = context;

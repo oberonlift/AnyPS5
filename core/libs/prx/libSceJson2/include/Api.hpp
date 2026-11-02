@@ -61,14 +61,14 @@ struct Pair {
 };
 
 struct InitParameterRtti {
-    void* allocParam;
-    void* userData;
+    GuestArena::GuestPointer<void> allocParam;
+    GuestArena::GuestPointer<void> userData;
     std::size_t fileBufferSize;
 };
 
 struct InitParameter2 {
-    void* allocator;
-    void* userData;
+    GuestArena::GuestPointer<void> allocator;
+    GuestArena::GuestPointer<void> userData;
     std::size_t fileBufferSize;
     std::int32_t specialFloatFormatType;
     std::uint32_t reserved[3];
