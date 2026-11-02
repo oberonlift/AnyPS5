@@ -107,12 +107,14 @@ static Fault RunCase(const Ps5LiftInstructionTableEntry* entry)
     return (Fault){.Outcome = PS5LIFT_INSTRUCTION_OUTCOME_COMPLETED};
 }
 
-static uint8_t NoConsoleValues(const Case* item, const Ps5LiftInstructionTableEntry* entry, uint64_t* values)
+static bool NoConsoleValues(const Case* item, const Ps5LiftInstructionTableEntry* entry, uint64_t* values,
+                            uint8_t* count)
 {
     (void)item;
     (void)entry;
     (void)values;
-    return 0;
+    *count = 0;
+    return true;
 }
 
 int host_run_instructions(const void* table)

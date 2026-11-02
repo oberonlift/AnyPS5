@@ -235,7 +235,7 @@ def _block_expression(offset):
     return f"{BLOCK}+{offset}"
 
 
-def _expression_offset(expression):
+def expression_offset(expression):
     match = re.fullmatch(rf"{BLOCK}\+(\d+)", expression)
     if match is None:
         raise CaseError(f"{expression!r} names no block offset")
@@ -248,7 +248,7 @@ def expectation_written(form):
     return form.definition.category in _NEAR_BRANCH_CATEGORIES and form.operand_size == _SHORT_BRANCH_SIZE
 
 
-def _model(form):
+def form_model(form):
     definition = form.definition
     rule = _STRING_RULE if definition.category == "STRINGOP" else _RULES.get(definition.mnemonic, _NO_RULE)
     return Model(form, rule)
@@ -540,7 +540,7 @@ def _plans(model):
 def instances(forms, decoder):
     planned = []
     for form in forms:
-        model = _model(form)
+        model = form_model(form)
         for role, operands, prefixes in _plans(model):
             planned.append((form, model.shape, role, operands, prefixes, tuple(encode(form, operands, prefixes))))
     batch = [(form, operands, prefixes, encoded) for form, _, _, operands, prefixes, encoded in planned]
@@ -622,7 +622,7 @@ class _Layout:
         accesses = model.accesses_memory and operand_type not in _NO_ACCESS_TYPES
         self.widths[position] = model.memory_width(operand) if accesses else 0
         if memory.base in ("rip", None):
-            self.accesses[position], self.targets[position] = "fixed", _expression_offset(memory.displacement)
+            self.accesses[position], self.targets[position] = "fixed", expression_offset(memory.displacement)
         elif operand_type in VSIB_KINDS:
             self.accesses[position], self.targets[position] = "vsib", _GATHER_BASE
         else:
@@ -998,7 +998,7 @@ def case_specs(group_instances):
         end = start
         while end < len(group_instances) and group_instances[end].form.key == form.key:
             end += 1
-        specs += _form_specs(_model(form), group_instances[start:end], len(specs))
+        specs += _form_specs(form_model(form), group_instances[start:end], len(specs))
         start = end
     return specs
 

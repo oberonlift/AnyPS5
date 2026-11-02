@@ -51,7 +51,8 @@ typedef struct Case {
 typedef struct DriverHooks {
     bool (*InstallHandlers)(void);
     Fault (*RunCase)(const Ps5LiftInstructionTableEntry* entry);
-    uint8_t (*ConsoleValues)(const Case* item, const Ps5LiftInstructionTableEntry* entry, uint64_t* values);
+    bool (*ConsoleValues)(const Case* item, const Ps5LiftInstructionTableEntry* entry, uint64_t* values,
+                          uint8_t* count);
 } DriverHooks;
 
 static uint8_t initialBlock[PS5LIFT_INSTRUCTION_BLOCK_SIZE];
@@ -303,7 +304,8 @@ static bool RunCases(const void* table, const DriverHooks* hooks)
         const Ps5LiftInstructionTableEntry entry = Entry(&program, item.Head.Instance);
         const Fault outcome = hooks->RunCase(&entry);
         uint64_t values[MaximumConsoleValues];
-        const uint8_t valueCount = item.Head.ConsoleDefined ? hooks->ConsoleValues(&item, &entry, values) : 0;
+        uint8_t valueCount = 0;
+        if (item.Head.ConsoleDefined && !hooks->ConsoleValues(&item, &entry, values, &valueCount)) return false;
         if (!WriteResult(results, &program, &item, outcome, values, valueCount)) return false;
     }
     if (cursor.Position != cursor.Size) return Fail("%zu bytes follow the last case", cursor.Size - cursor.Position);

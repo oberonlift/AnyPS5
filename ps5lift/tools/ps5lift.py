@@ -24,7 +24,8 @@ import sys
 import tempfile
 from pathlib import Path
 
-from instructions import suite
+from instructions import lifted, suite
+from instructions.compare import FLOAT_MODES
 
 ROOT = Path(__file__).resolve().parent.parent
 ANYPS5 = ROOT.parent
@@ -1475,6 +1476,17 @@ def survey_command(args):
     return 0
 
 
+def instructions_command(args):
+    runner = runner_for(args.triple)
+    cpu = lifted_cpu(runner, None)
+    toolchain = lifted.Toolchain(
+        ps5lift=Path(args.ps5lift), clang=args.clang, clangxx=args.clangxx, triple=args.triple, guest_flags=tuple(GUEST_FLAGS),
+        guest_base=GUEST_BASE, runner=tuple(runner), lift_flags=tuple(lifter_target(args.triple, runner, cpu)),
+        runtime=tuple(runtime_link_arguments(args.ps5lift, args.triple, cpu, args.clang, args.clangxx)), include=ROOT / "runtime" / "include",
+    )
+    return lifted.instructions_command(args, toolchain)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     commands = parser.add_subparsers(dest="command", required=True)
@@ -1613,6 +1625,17 @@ def main():
     importer = commands.add_parser("instructions-import", help="check a recording and compress it into the repository", description="Check the results record.py wrote into BUNDLE/results against the bundle, and write each group's as tests/instructions/recordings/GROUP.results.xz")
     importer.add_argument("bundle", type=Path, help="the bundle directory, with the recording host's results/ copied into it")
     importer.set_defaults(handler=suite.import_command)
+
+    instructions = commands.add_parser("instructions", help="test: run the instruction cases lifted and judge them", description="Generate instruction test groups, link each guest program as the recording host ran it, lift it for --triple in each --float mode, link it with the lifted driver and the runtime, run every case and judge it against its recording. Prints one PASS or FAIL line per form, then the failing cases, and exits 0 only when every case passes. ps5lift_decode comes from PS5LIFT_DECODE.")
+    instructions.add_argument("--ps5lift", required=True)
+    instructions.add_argument("--clang", required=True)
+    instructions.add_argument("--clangxx", required=True)
+    instructions.add_argument("--triple", default=host_triple())
+    instructions.add_argument("--group", action="append", help="a test group to run; every group by default")
+    instructions.add_argument("--float", action="append", choices=FLOAT_MODES, help="a floating-point mode to lift with; both by default")
+    instructions.add_argument("--unoptimized-lift", action="store_true", help="lift with ps5lift -O0, which skips LLVM's optimizations")
+    instructions.add_argument("--keep", action="store_true", help="keep the work directory")
+    instructions.set_defaults(handler=instructions_command)
 
     args = parser.parse_args()
     return args.handler(args)

@@ -12,7 +12,8 @@ same way in `self-test/`, with `expected.json`; `record.py` with the `instructio
 `import_bundle` checks the results in the bundle's `results/` against the bundle: each group's results carry its inputs'
 fingerprints, hold one result for each of its cases in order, with each case's console-defined flag, and none crashed,
 timed out or ended by a host signal. Only when every group passes does it write each group's results as
-`<group>.results.xz` among the recordings."""
+`<group>.results.xz` among the recordings. `read_recording` reads one back, refusing it unless it carries the
+fingerprints of the program and inputs it is to be compared with."""
 import hashlib
 import json
 import lzma
@@ -132,7 +133,7 @@ def _cpu_flags(group):
     return list(CPU_FLAGS[group])
 
 
-def _compile_driver(clang, work):
+def compile_native_driver(clang, work):
     (work / "records.h").write_text(records.header_text())
     driver = work / DRIVER
     command = [str(clang), *DRIVER_FLAGS, f"-I{work}", str(NATIVE_DRIVER), "-o", str(driver)]
@@ -161,7 +162,7 @@ def _write_bundle(output, clang, flags, generated, decode, guest_flags, guest_ba
     counts = {}
     with tempfile.TemporaryDirectory(prefix="ps5lift-bundle-") as work:
         work = Path(work)
-        driver = _compile_driver(clang, work)
+        driver = compile_native_driver(clang, work)
         for group in flags:
             _, counts[group] = _write_program(clang, work, driver, output / group, group, group, instances[group],
                                               specs[group], guest_flags, guest_base)
@@ -253,6 +254,15 @@ def import_bundle(bundle_directory, recordings):
         path.write_bytes(lzma.compress(data, preset=RECORDING_PRESET))
         sizes[group] = path.stat().st_size
     return sizes
+
+
+def read_recording(path, header):
+    found, results = records.read_results(lzma.decompress(Path(path).read_bytes()))
+    if found.program != header.program:
+        raise SuiteError(f"record again: the guest program differs from the recording's ({path})")
+    if found.inputs != header.inputs:
+        raise SuiteError(f"record again: the program's layout differs from the recording's ({path})")
+    return {result.case: result for result in results}
 
 
 def bundle_command(args, guest_flags, guest_base):
