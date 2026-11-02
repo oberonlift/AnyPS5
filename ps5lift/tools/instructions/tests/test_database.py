@@ -131,6 +131,20 @@ class DatabaseTest(unittest.TestCase):
     def test_knc_rows_dropped(self):
         self.assertFalse([definition for definition in self.definitions if definition.mnemonic == "popcnt" and definition.extension == "KNC"])
 
+    def test_operand_size_encodings(self):
+        def encodings(mnemonic, **conditions):
+            return [
+                (choice.size, choice.operand_size_prefix, choice.w)
+                for choice in database.operand_size_encodings(self.find(mnemonic, **conditions))
+            ]
+
+        self.assertEqual(encodings("add", opcode=0x01, modrm_mod="3"), [(32, False, 0), (16, True, 0), (64, False, 1), (64, True, 1)])
+        self.assertEqual(encodings("push", opcode=0x50), [(64, False, 0), (16, True, 0), (64, False, 1), (64, True, 1)])
+        self.assertEqual(encodings("mov", opcode=0x22), [(64, False, 0), (64, True, 0), (64, False, 1), (64, True, 1)])
+        self.assertEqual(encodings("in", opcode=0xE5, operand_size="64"), [(32, False, 1), (32, True, 1)])
+        self.assertEqual(encodings("bsf", modrm_mod="3", mandatory_prefix="none"), [(32, False, 0), (64, False, 1)])
+        self.assertEqual(encodings("vaddps", encoding="vex", vector_length="256", modrm_mod="3"), [(32, False, 0), (64, False, 1)])
+
     def test_undefined_flags(self):
         bsf = self.find("bsf", modrm_mod="3", mandatory_prefix="ignore")
         self.assertEqual(bsf.undefined_flags, frozenset({"cf", "pf", "af", "sf", "of"}))

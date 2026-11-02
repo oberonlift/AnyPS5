@@ -1,7 +1,8 @@
 """Read Zydis's instruction database and classify every definition into the PS5 set or one of four groups outside it.
 
 It keeps the rows that the lifter's Zydis decoder modes select, and gives each definition the forms that its own row
-decodes: an operand size whose bytes Zydis gives to another row is not a form of this one."""
+decodes: an operand size that no prefix and W reach, or whose bytes Zydis gives to another row, is not a form of this
+one. It is the one source of the operand-size rules, which Zydis's tables for 64-bit mode define."""
 import dataclasses
 import enum
 import json
@@ -35,6 +36,7 @@ FEATURE_FILTER = "feature_"
 MODRM_FIELD_VALUES = frozenset("01234567")
 SPECIFIC_MANDATORY_PREFIXES = frozenset({"none", "66", "f3", "f2"})
 PREFIXES_WITHOUT_OPERAND_SIZE = frozenset({"66", "none"})
+OPERAND_SIZE_FILTER_VALUES = {(False, 0): "32", (True, 0): "16", (False, 1): "64", (True, 1): "64"}
 HINT_OPCODES = frozenset({0x0D, *range(0x18, 0x20)})
 UNMARKED_CPL0_MNEMONICS = frozenset({"lgdt"})
 IO_MNEMONICS = frozenset("in out insb insw insd outsb outsw outsd cli sti rdpmc".split())
@@ -44,20 +46,27 @@ FAR_INDIRECT = {"call": "3", "jmp": "5"}
 FAR_RET_OPCODES = frozenset({0xCA, 0xCB})
 SEGMENT_REGISTERS_PUSHED = frozenset({"fs", "gs"})
 
-OPERAND_SIZES = (16, 32, 64)
-OPSIZE_MAP_SIZES = {
-    "default64": {16, 64},
-    "force64": {64},
-    "ignore66": {32, 64},
-    "force32_or_64": {32, 64},
-    "force32_or_rexw": {32, 64},
-}
 OPERAND_TYPE_SIZES = {
     "gpr16_32_64": {16, 32, 64},
     "gpr16_32_32": {16, 32},
     "gpr32_32_64": {32, 64},
 }
-FILTERED_OUT_SIZE = {"!16": 16, "!64": 64}
+
+
+def _size_map(plain, prefixed, wide, wide_prefixed):
+    return {(False, 0): plain, (True, 0): prefixed, (False, 1): wide, (True, 1): wide_prefixed}
+
+
+OPERAND_SIZE_MAPS = {
+    None: _size_map(32, 16, 64, 64),
+    "byteop": _size_map(32, 16, 64, 64),
+    "ignore66": _size_map(32, 32, 64, 64),
+    "rexw32": _size_map(32, 16, 32, 32),
+    "default64": _size_map(64, 16, 64, 64),
+    "force64": _size_map(64, 64, 64, 64),
+    "force32_or_rexw": _size_map(32, 32, 64, 64),
+    "force32_or_64": _size_map(64, 64, 64, 64),
+}
 
 
 @dataclass(frozen=True)
@@ -94,6 +103,13 @@ class Form:
     definition: Definition
     operand_size: Optional[int]
     key: str
+
+
+@dataclass(frozen=True)
+class OperandSizeEncoding:
+    size: int
+    operand_size_prefix: bool
+    w: int
 
 
 def _definition(index, row):
@@ -185,9 +201,42 @@ def claimed_by_sibling(definition, prefix, modrm_reg):
     return (prefix, None) in definition.sibling_claims or (prefix, modrm_reg) in definition.sibling_claims
 
 
-def takes_operand_size_prefix(definition):
+def filter_matches(condition, value):
+    return condition[1:] != value if condition.startswith("!") else condition == value
+
+
+def _takes_operand_size_prefix(definition):
     mandatory_prefix = definition.filters.get("mandatory_prefix")
     return definition.encoding is None and mandatory_prefix not in PREFIXES_WITHOUT_OPERAND_SIZE
+
+
+def _size_rule(definition, table, name):
+    value = getattr(definition, name)
+    if value not in table:
+        raise ValueError(f"{definition.mnemonic}.{definition.index}: no rule for {name} {value!r}")
+    return table[value]
+
+
+def operand_size_encodings(definition):
+    filters = definition.filters
+    size_map = _size_rule(definition, OPERAND_SIZE_MAPS, "opsize_map")
+    result = []
+    for w in (0, 1):
+        for prefix in (False, True):
+            if prefix and not _takes_operand_size_prefix(definition):
+                continue
+            if "rex_w" in filters and int(filters["rex_w"]) != w:
+                continue
+            size_filter_value = OPERAND_SIZE_FILTER_VALUES[(prefix, w)]
+            if "operand_size" in filters and not filter_matches(filters["operand_size"], size_filter_value):
+                continue
+            result.append(OperandSizeEncoding(size_map[(prefix, w)], prefix, w))
+    return result
+
+
+def operand_size_encoding(definition, operand_size):
+    choices = operand_size_encodings(definition)
+    return next((choice for choice in choices if operand_size is None or choice.size == operand_size), None)
 
 
 def load(path=DATABASE):
@@ -244,42 +293,25 @@ def _depends_on_operand_size(definition):
     )
 
 
-def _operand_sizes(definition):
-    sizes = set(OPERAND_SIZES)
-    sizes &= OPSIZE_MAP_SIZES.get(definition.opsize_map, sizes)
+def _form_sizes(definition):
+    if not _depends_on_operand_size(definition):
+        return [None] if operand_size_encoding(definition, None) is not None else []
+    sizes = {choice.size for choice in operand_size_encodings(definition)}
     for operand in definition.operands:
         sizes &= OPERAND_TYPE_SIZES.get(operand["operand_type"], sizes)
-    operand_size = definition.filters.get("operand_size")
-    if operand_size in FILTERED_OUT_SIZE:
-        sizes.discard(FILTERED_OUT_SIZE[operand_size])
-    elif operand_size is not None:
-        sizes &= {int(operand_size)}
-    rex_w = definition.filters.get("rex_w")
-    if rex_w == "1":
-        sizes &= {64}
-    elif rex_w == "0":
-        sizes.discard(64)
-    if not sizes:
-        raise ValueError(f"{definition.mnemonic}.{definition.index} encodes in no operand size")
     return sorted(sizes)
 
 
-def _needs_operand_size_prefix(definition, operand_size):
-    return operand_size == 16 or definition.filters.get("operand_size") == "16"
-
-
 def _decodes_from_own_row(definition, operand_size):
-    needs_prefix = _needs_operand_size_prefix(definition, operand_size)
-    if needs_prefix and not takes_operand_size_prefix(definition):
-        return False
-    return not claimed_by_sibling(definition, "66" if needs_prefix else "none", None)
+    prefix = "66" if operand_size_encoding(definition, operand_size).operand_size_prefix else "none"
+    return not claimed_by_sibling(definition, prefix, None)
 
 
 def forms(definitions):
     result = []
     for definition in definitions:
         base = f"{definition.mnemonic}.{definition.index}"
-        sizes = _operand_sizes(definition) if _depends_on_operand_size(definition) else [None]
+        sizes = _form_sizes(definition)
         for size in sizes:
             if _decodes_from_own_row(definition, size):
                 result.append(Form(definition, size, f"{base}.o{size}" if len(sizes) > 1 else base))

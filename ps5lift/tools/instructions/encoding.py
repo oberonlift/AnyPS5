@@ -1,4 +1,4 @@
-"""Encode instances of Zydis database definitions as x86-64 bytes, and check each encoding by decoding it with Zydis.
+"""Encode instances of Zydis database definitions as x86-64 bytes.
 
 An instance is a form plus one operand choice for each of its definition's operands that has an `encoding`, in order;
 implicit and hidden operands follow from the definition. `Reg` names a register by its Zydis name. `Mem` is a memory
@@ -9,19 +9,22 @@ reaches.
 An encoding is a list of byte strings and `Field`s. A field is `size` bytes that the assembler computes from
 `expression`, less the address of the instruction's end when it is relative, so branch targets, RIP-relative
 displacements and absolute addresses stay symbolic. A database value without a rule here raises `EncodingError` naming
-the form and the value.
+the form and the value. Operand and address sizes follow the rules in `database`.
 
 `default_operands` picks the first legal register of each class, [rbx] for memory (or the base a `modrm_rm` filter
-fixes), 0 for immediates and moffs addresses, and the label "target" for branches. `verify_all` decodes a batch of
-(form, operands, prefixes, encoded) instances with the lifter's Zydis settings in one call, and raises `EncodingError`
-naming each form whose encoding does not decode to that form with those operands and prefixes."""
+fixes), 0 for immediates and moffs addresses, and the label "target" for branches."""
 from dataclasses import dataclass, field
 from typing import List, NamedTuple, Optional, Union
 
 from .database import (
-    DECODER_MODES, FEATURE_FILTER, MODRM_FIELD_VALUES, claimed_by_sibling, takes_operand_size_prefix,
+    DECODER_MODES,
+    FEATURE_FILTER,
+    MODRM_FIELD_VALUES,
+    OPERAND_SIZE_MAPS,
+    claimed_by_sibling,
+    filter_matches,
+    operand_size_encoding,
 )
-from .decoder import RejectedEncoding
 
 
 class EncodingError(Exception):
@@ -87,7 +90,8 @@ _REGISTER_FILES = {
 _HIGH_BYTE_REGISTERS = ["ah", "ch", "dh", "bh"]
 _REX_BYTE_REGISTERS = frozenset({"spl", "bpl", "sil", "dil"})
 _DISTINCT_KINDS = frozenset({"xmm", "ymm", "zmm", "tmm"})
-_DISTINCT_REGISTER_FLAGS = frozenset({"is_gather", "no_source_dest_match", "no_source_source_match"})
+_SIZED_IMPLICIT_PREFIXES = ("osz_", "asz_", "ssz_")
+_STACK_SIZE = 64
 
 
 @dataclass(frozen=True)
@@ -123,22 +127,7 @@ _FILTERS = {
     "force_modrm_rm": {True},
     **{FEATURE_FILTER + mode: {"1" if enabled else "0"} for mode, enabled in DECODER_MODES.items()},
 }
-
-
-def _size_map(plain, prefixed, wide, wide_prefixed):
-    return {(False, 0): plain, (True, 0): prefixed, (False, 1): wide, (True, 1): wide_prefixed}
-
-
-_OPERAND_SIZE_MAPS = {
-    None: _size_map(32, 16, 64, 64),
-    "byteop": _size_map(32, 16, 64, 64),
-    "ignore66": _size_map(32, 32, 64, 64),
-    "rexw32": _size_map(32, 16, 32, 32),
-    "default64": _size_map(64, 16, 64, 64),
-    "force64": _size_map(64, 64, 64, 64),
-    "force32_or_rexw": _size_map(32, 32, 64, 64),
-    "force32_or_64": _size_map(64, 64, 64, 64),
-}
+_DISTINCT_REGISTER_FLAGS = frozenset({"is_gather", "no_source_dest_match", "no_source_source_match"})
 
 _SIZED_REGISTER_TYPES = {
     "gpr16_32_64": {16: "gpr16", 32: "gpr32", 64: "gpr64"},
@@ -165,10 +154,10 @@ _BRANCH_ENCODINGS = {
     "jimm32": {16: 4, 32: 4, 64: 4},
     "jimm16_32_32": {16: 2, 32: 4, 64: 4},
 }
-_SIZED_IMPLICIT_PREFIXES = ("osz_", "asz_", "ssz_")
 _SCALES = {1: 0, 2: 1, 4: 2, 8: 3}
 _MODS = {0: 0, 8: 1, 32: 2}
 
+_LEGACY_ENCODINGS = frozenset({None, "3dnow"})
 _LEGACY_MAPS = {None: b"", "0f": b"\x0f", "0f38": b"\x0f\x38", "0f3a": b"\x0f\x3a"}
 _THREE_DNOW_MAPS = {"0f0f": b"\x0f\x0f"}
 _VEX_MAPS = {"0f": 1, "0f38": 2, "0f3a": 3}
@@ -187,19 +176,6 @@ _PREFIXES = {
 }
 _GROUP1_MANDATORY_PREFIXES = {"f2": 0xF2, "f3": 0xF3}
 _GROUP1_PREFIX_NAMES = {0xF2: "f2", 0xF3: "f3"}
-_GROUP1_WORDS = {
-    0xF2: (
-        ("accepts_repnerepnz", "repne", False),
-        ("accepts_xacquire", "xacquire", True),
-        ("accepts_bound", "bnd", False),
-    ),
-    0xF3: (
-        ("accepts_rep", "rep", False),
-        ("accepts_reperepz", "repe", False),
-        ("accepts_xrelease", "xrelease", True),
-    ),
-}
-_PRINTED_PREFIXES = frozenset({"xacquire", "xrelease", "lock", "bnd", "notrack", "rep", "repe", "repne"})
 _DEFAULT_TARGET = "target"
 
 
@@ -253,10 +229,6 @@ def _rule(form, table, value, what):
     return table[value]
 
 
-def _matches(condition, value):
-    return condition[1:] != value if condition.startswith("!") else condition == value
-
-
 def _bit(number, position):
     return (number >> position) & 1
 
@@ -292,14 +264,16 @@ def _category(form, operand):
 
 
 def _check_definition(form):
-    filters = form.definition.filters
+    definition = form.definition
+    filters = definition.filters
     for name, value in filters.items():
         if value not in _rule(form, _FILTERS, name, "filter"):
             raise EncodingError(f"{form.key}: no rule for filter {name} {value!r}")
     for forced, field_name in (("force_modrm_reg", "modrm_reg"), ("force_modrm_rm", "modrm_rm")):
         if forced in filters and filters.get(field_name) not in MODRM_FIELD_VALUES:
             raise EncodingError(f"{form.key}: {forced} needs a fixed {field_name}, not {filters.get(field_name)!r}")
-    for operand in form.definition.operands:
+    _rule(form, OPERAND_SIZE_MAPS, definition.opsize_map, "opsize_map")
+    for operand in definition.operands:
         _category(form, operand)
 
 
@@ -314,27 +288,15 @@ def _pairs(form, operands):
     return [(operand, _category(form, operand), choice) for operand, choice in zip(explicit, operands)]
 
 
-def _operand_sizes(form):
-    definition = form.definition
-    filters = definition.filters
-    size_map = _rule(form, _OPERAND_SIZE_MAPS, definition.opsize_map, "opsize_map")
-    for w in (0, 1):
-        for prefix in (False, True):
-            if form.operand_size is not None and size_map[(prefix, w)] != form.operand_size:
-                continue
-            if prefix and not takes_operand_size_prefix(definition):
-                continue
-            if "rex_w" in filters and int(filters["rex_w"]) != w:
-                continue
-            size_index = "64" if w else "16" if prefix else "32"
-            if "operand_size" in filters and not _matches(filters["operand_size"], size_index):
-                continue
-            return size_map[(prefix, w)], prefix, w
-    raise EncodingError(f"{form.key}: no operand-size prefix and W give operand size {form.operand_size} "
-                        "under its filters")
+def _operand_size(form):
+    choice = operand_size_encoding(form.definition, form.operand_size)
+    if choice is None:
+        raise EncodingError(f"{form.key}: no operand-size prefix and W give operand size {form.operand_size} "
+                            "under its filters")
+    return choice
 
 
-def _address_size(form, pairs):
+def _requested_address_size(form, pairs):
     sizes = set()
     required = form.definition.filters.get("address_size")
     if required in ("32", "64"):
@@ -358,8 +320,8 @@ def _address_size(form, pairs):
 
 
 def _sizes(form, pairs):
-    operand, prefix, w = _operand_sizes(form)
-    return _Sizes(operand, prefix, w, _address_size(form, pairs))
+    choice = _operand_size(form)
+    return _Sizes(choice.size, choice.operand_size_prefix, choice.w, _requested_address_size(form, pairs))
 
 
 def _register_kind(form, operand, operand_size, address_size):
@@ -551,7 +513,7 @@ def _modrm(form, parts):
         raise EncodingError(f"{form.key}: no rule for a ModRM without an r/m operand "
                             f"under modrm_mod {filters.get('modrm_mod')!r}")
     for name, value in (("modrm_mod", mod), ("modrm_reg", reg & 7), ("modrm_rm", rm & 7)):
-        if name in filters and not _matches(filters[name], str(value)):
+        if name in filters and not filter_matches(filters[name], str(value)):
             raise EncodingError(f"{form.key}: {name} {value} contradicts its filter {filters[name]!r}")
     result = [bytes([mod << 6 | (reg & 7) << 3 | (rm & 7)])]
     if parts.memory is not None:
@@ -602,7 +564,7 @@ def _extensions(form, parts):
         rm = next((number for number in (parts.rm, parts.opcode_register) if number is not None), 0)
         x, b, index_top = _bit(rm, 4), _bit(rm, 3), 0
     if index_top and parts.vvvv is not None:
-        raise EncodingError(f"{form.key}: EVEX.V' cannot extend both the VSIB index and vvvv")
+        raise EncodingError(f"{form.key}: V' cannot extend both the VSIB index and vvvv")
     extensions = _Extensions(_bit(reg, 3), x, b, _bit(reg, 4), _bit(vvvv, 4) | index_top, vvvv)
     extended = extensions.r2 or extensions.v2 or parts.aaa or (parts.memory is None and x)
     if form.definition.encoding != "evex" and extended:
@@ -735,9 +697,32 @@ def placeholder(encoded):
     return b"".join(piece if isinstance(piece, bytes) else bytes(piece.size) for piece in encoded)
 
 
-def _first_register(form, kind, encoding, used, candidate):
+def effective_sizes(form, operands):
+    sizes = _sizes(form, _pairs(form, operands))
+    return sizes.operand, sizes.address
+
+
+def carried_prefixes(form, prefixes):
+    lock, group1 = _requested_prefixes(form, prefixes)
+    if group1 is None and form.definition.encoding in _LEGACY_ENCODINGS:
+        group1 = _GROUP1_MANDATORY_PREFIXES.get(form.definition.filters.get("mandatory_prefix"))
+    return lock, group1
+
+
+def implicit_register(form, name, operand_size, address_size):
+    for prefix, size in zip(_SIZED_IMPLICIT_PREFIXES, (operand_size, address_size, _STACK_SIZE)):
+        if name.startswith(prefix):
+            base = name[len(prefix):]
+            if base not in _LEGACY_GPRS:
+                raise EncodingError(f"{form.key}: no rule for implicit register {name!r}")
+            return _REGISTER_FILES[f"gpr{size}"][_LEGACY_GPRS.index(base)]
+    return name
+
+
+def _first_register(form, kind, operand, used, candidate):
     definition = form.definition
     filters = definition.filters
+    encoding = operand.get("encoding")
     for register in _CANDIDATES[kind]:
         if used is not None and kind in _DISTINCT_KINDS and register.number in used:
             continue
@@ -747,7 +732,7 @@ def _first_register(form, kind, encoding, used, candidate):
             continue
         if encoding == "opcode" and "rex_b" in filters and _bit(register.number, 3) != int(filters["rex_b"]):
             continue
-        if encoding in filters and not _matches(filters[encoding], str(register.number & 7)):
+        if encoding in filters and not filter_matches(filters[encoding], str(register.number & 7)):
             continue
         if encoding == "mask" and definition.mask_mode == "required" and register.number == 0:
             continue
@@ -761,23 +746,23 @@ def _default_memory(form, operand, address_size, used, candidate):
     rm = form.definition.filters.get("modrm_rm")
     number = 3 if rm in (None, "4") else int(rm)
     vsib_kind = _VSIB_INDEX_KINDS.get(operand["operand_type"])
-    index = _first_register(form, vsib_kind, None, used, candidate).name if vsib_kind else None
+    index = _first_register(form, vsib_kind, {}, used, candidate).name if vsib_kind else None
     return Mem(_REGISTER_FILES[f"gpr{address_size}"][number], index, displacement_size=8 if number == 5 else 0)
 
 
 def default_operands(form):
     definition = form.definition
     _check_definition(form)
-    operand_size, operand_prefix, _ = _operand_sizes(form)
-    candidate = "66" if operand_prefix else "none"
+    choice = _operand_size(form)
+    candidate = "66" if choice.operand_size_prefix else "none"
     address_size = 32 if definition.filters.get("address_size") == "32" else 64
     used = set() if definition.flags & _DISTINCT_REGISTER_FLAGS else None
     choices = []
     for operand in _explicit_operands(definition):
         category = _category(form, operand)
         if category == "register":
-            kind = _register_kind(form, operand, operand_size, address_size)
-            choices.append(Reg(_first_register(form, kind, operand["encoding"], used, candidate).name))
+            kind = _register_kind(form, operand, choice.size, address_size)
+            choices.append(Reg(_first_register(form, kind, operand, used, candidate).name))
         elif category == "memory":
             choices.append(_default_memory(form, operand, address_size, used, candidate))
         elif category == "moffs":
@@ -787,126 +772,3 @@ def default_operands(form):
         else:
             choices.append(Target(_DEFAULT_TARGET))
     return choices
-
-
-def _implicit_choice(form, operand, sizes):
-    operand_type = operand["operand_type"]
-    if operand_type == "implicit_imm1":
-        return Imm(1)
-    if operand_type != "implicit_reg":
-        raise EncodingError(f"{form.key}: no rule for a visible {operand_type} operand")
-    name = operand["register"]
-    for prefix, size in zip(_SIZED_IMPLICIT_PREFIXES, (sizes.operand, sizes.address, 64)):
-        if name.startswith(prefix):
-            base = name[len(prefix):]
-            if base not in _LEGACY_GPRS:
-                raise EncodingError(f"{form.key}: no rule for implicit register {name!r}")
-            return Reg(_REGISTER_FILES[f"gpr{size}"][_LEGACY_GPRS.index(base)])
-    return Reg(name)
-
-
-def _expected_operands(form, operands):
-    sizes = _sizes(form, _pairs(form, operands))
-    choices = iter(operands)
-    expected = []
-    for operand in form.definition.operands:
-        if "encoding" in operand:
-            expected.append(next(choices))
-        elif operand.get("visible", True):
-            expected.append(_implicit_choice(form, operand, sizes))
-    return expected
-
-
-def _operand_matches(expected, decoded):
-    if isinstance(expected, Reg):
-        return decoded.type == "register" and decoded.register == expected.name
-    if isinstance(expected, Mem):
-        return (
-            decoded.type == "memory"
-            and decoded.base == (expected.base or "none")
-            and decoded.index == (expected.index or "none")
-            and decoded.scale == (expected.scale if expected.index else 0)
-            and decoded.displacement == (expected.displacement if isinstance(expected.displacement, int) else 0)
-            and decoded.displacement_size == expected.displacement_size
-        )
-    if isinstance(expected, Imm):
-        return decoded.type == "immediate" and decoded.immediate == expected.value
-    return decoded.type == "immediate" and decoded.immediate == 0
-
-
-def _described(decoded):
-    if decoded.type == "register":
-        return decoded.register
-    if decoded.type == "memory":
-        return (f"[{decoded.base} + {decoded.index}*{decoded.scale} + {decoded.displacement}] "
-                f"with displacement size {decoded.displacement_size}")
-    if decoded.type == "immediate":
-        return f"immediate {decoded.immediate}"
-    return decoded.type
-
-
-def _expected_prefixes(form, prefixes):
-    definition = form.definition
-    lock, group1 = _requested_prefixes(form, prefixes)
-    if group1 is None:
-        group1 = _GROUP1_MANDATORY_PREFIXES.get(definition.filters.get("mandatory_prefix"))
-    words = {"lock"} if lock else set()
-    hle = lock or "accepts_lockless_hle" in definition.prefix_flags
-    for flag, word, needs_hle in _GROUP1_WORDS.get(group1, ()):
-        if flag in definition.prefix_flags and (hle or not needs_hle):
-            words.add(word)
-            break
-    return words
-
-
-def _printed_prefixes(text):
-    words = set()
-    for word in text.split():
-        if word not in _PRINTED_PREFIXES:
-            break
-        words.add(word)
-    return words
-
-
-def _mismatch(form, operands, prefixes, encoding, decoded):
-    problems = []
-    if decoded.length != len(encoding):
-        problems.append(f"length {decoded.length}, not {len(encoding)}")
-    if decoded.mnemonic != form.definition.mnemonic:
-        problems.append(f"mnemonic {decoded.mnemonic}, not {form.definition.mnemonic}")
-    expected = _expected_operands(form, operands)
-    visible = [operand for operand in decoded.operands if operand.visibility != "hidden"]
-    if len(visible) != len(expected):
-        problems.append(f"{len(visible)} visible operands, not {len(expected)}")
-    else:
-        for position, (want, got) in enumerate(zip(expected, visible)):
-            if not _operand_matches(want, got):
-                problems.append(f"operand {position} is {_described(got)}, not {want}")
-    if form.operand_size is not None and decoded.operand_width != form.operand_size:
-        problems.append(f"operand width {decoded.operand_width}, not {form.operand_size}")
-    printed, wanted = _printed_prefixes(decoded.text), _expected_prefixes(form, prefixes)
-    if printed != wanted:
-        problems.append(f"prefixes {sorted(printed)}, not {sorted(wanted)}")
-    if not problems:
-        return None
-    return f"{form.key}: {encoding.hex(' ')} decodes as '{decoded.text}': {'; '.join(problems)}"
-
-
-def verify_all(decoder, instances):
-    instances = list(instances)
-    encodings = [placeholder(encoded) for _, _, _, encoded in instances]
-    try:
-        results = decoder.decode(encodings)
-    except RejectedEncoding as error:
-        raise EncodingError(f"{instances[error.index][0].key}: {error}") from error
-    mismatches = [
-        _mismatch(form, operands, prefixes, encoding, decoded)
-        for (form, operands, prefixes, _), encoding, decoded in zip(instances, encodings, results)
-    ]
-    mismatches = [mismatch for mismatch in mismatches if mismatch is not None]
-    if mismatches:
-        raise EncodingError("\n".join(mismatches))
-
-
-def verify(decoder, form, operands, prefixes, encoded):
-    verify_all(decoder, [(form, operands, prefixes, encoded)])
