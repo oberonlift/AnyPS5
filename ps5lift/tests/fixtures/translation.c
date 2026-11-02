@@ -24,11 +24,23 @@ int guest_pthread_equal(void* left, void* right) __asm__(NID_pthread_equal);
 unsigned long guest_mbsrtowcs(unsigned short* destination, const char** source, unsigned long count, void* state) __asm__(NID_mbsrtowcs);
 int guest_query_protection(void* address, void** start, void** end, int* protection) __asm__(NID_sceKernelQueryMemoryProtection);
 int guest_virtual_query(const void* address, int flags, void* info, unsigned long size) __asm__(NID_sceKernelVirtualQuery);
+int guest_pool_reserve(void* address, unsigned long length, unsigned long alignment, int flags, void** reserved) __asm__(NID_sceKernelMemoryPoolReserve);
+int guest_pool_batch(const void* entries, int count, int* done, int flags) __asm__(NID_sceKernelMemoryPoolBatch);
 
 struct guest_query_info {
     char* start;
     char* end;
     unsigned char rest[112];
+};
+
+struct guest_pool_commit {
+    unsigned op;
+    unsigned flags;
+    void* address;
+    unsigned long length;
+    unsigned char protection;
+    unsigned char type;
+    unsigned char padding[6];
 };
 
 struct guest_iovec {
@@ -124,6 +136,16 @@ int main(void) {
     query.start = 0, query.end = 0;
     const int virtual_queried = guest_virtual_query(map + 100, 0, &query, sizeof(query));
     guest_printf("sceKernelVirtualQuery %d: start at the map %d, end at its end %d\n", virtual_queried, query.start == Fixed, query.end == Fixed + MapBytes);
+
+    void* pool = 0;
+    const int pool_reserved = guest_pool_reserve(0, 0x400000, 0x200000, 0, &pool);
+    struct guest_pool_commit commit;
+    commit.op = 1, commit.flags = 0, commit.address = pool, commit.length = 0x10000, commit.protection = 3, commit.type = 0;
+    int committed = 0;
+    const int pool_batched = guest_pool_batch(&commit, 1, &committed, 0);
+    volatile int* pooled = (volatile int*)pool;
+    pooled[0] = 42;
+    guest_printf("memory pool: reserve %d, batch commit %d done %d, write reads back %d\n", pool_reserved, pool_batched, committed, pooled[0] == 42);
 
     const char* cursor = text;
     const unsigned long converted = guest_mbsrtowcs((unsigned short*)(map + 4096), &cursor, 2, 0);

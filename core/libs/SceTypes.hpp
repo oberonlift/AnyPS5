@@ -119,29 +119,29 @@ struct KernelMemoryPoolBatchEntry {
     std::uint32_t flags;
     union {
         struct {
-            void* addr;
+            GuestArena::GuestPointer<void> addr;
             std::uint64_t len;
             std::uint8_t prot;
             std::uint8_t type;
         } commit;
         struct {
-            void* addr;
+            GuestArena::GuestPointer<void> addr;
             std::uint64_t len;
         } decommit;
         struct {
-            void* addr;
+            GuestArena::GuestPointer<void> addr;
             std::uint64_t len;
             std::uint8_t prot;
         } protect;
         struct {
-            void* addr;
+            GuestArena::GuestPointer<void> addr;
             std::uint64_t len;
             std::uint8_t prot;
             std::uint8_t type;
         } type_protect;
         struct {
-            void* dst;
-            void* src;
+            GuestArena::GuestPointer<void> dst;
+            GuestArena::GuestPointer<void> src;
             std::uint64_t len;
         } move;
         std::uintptr_t padding[3];
