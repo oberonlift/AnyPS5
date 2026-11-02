@@ -23,6 +23,7 @@
 #include "prx/libSceVideoOut/include/HostHdrProbe.hpp"
 #endif
 #include "prx/libSceVideoOut/include/BufferReuseTracker.hpp"
+#include "prx/libc/include/GuestArena.hpp"
 #include "prx/libc/include/Shutdown.hpp"
 #include "prx/libkernel/Time/include/TimedWait.hpp"
 
@@ -125,6 +126,25 @@ struct EventRegistration {
     uint64_t generation = 0;
 };
 
+#ifdef ANYPS5_TRANSLATED_GUEST
+inline constexpr std::size_t GuestLabelPageBytes = 16384;
+static_assert(VIDEO_OUT_BUFFER_NUM_MAX * sizeof(std::uint64_t) <= GuestLabelPageBytes);
+
+class GuestLabelArray {
+public:
+    GuestLabelArray();
+    ~GuestLabelArray();
+    GuestLabelArray(const GuestLabelArray&) = delete;
+    GuestLabelArray& operator=(const GuestLabelArray&) = delete;
+
+    std::uint64_t& operator[](const std::size_t index) { return _labels[index]; }
+    std::uint64_t* data() { return _labels; }
+
+private:
+    std::uint64_t* _labels;
+};
+#endif
+
 struct VideoOutConfig {
     std::mutex mutex;
     std::condition_variable_any vblankCond;
@@ -156,7 +176,11 @@ struct VideoOutConfig {
     VideoOutVblankStatus preVblankStatus{};
 
     std::array<VideoOutBuffer, VIDEO_OUT_BUFFER_NUM_MAX> buffers{};
+#ifdef ANYPS5_TRANSLATED_GUEST
+    GuestLabelArray bufferLabels;
+#else
     alignas(std::atomic_ref<std::uint64_t>::required_alignment) std::array<std::uint64_t, VIDEO_OUT_BUFFER_NUM_MAX> bufferLabels{};
+#endif
     std::array<uint32_t, VIDEO_OUT_BUFFER_NUM_MAX> bufferPending{};
     std::array<BufferReuseTracker, VIDEO_OUT_BUFFER_NUM_MAX> bufferReuse;
     std::array<BufferAttributeGroup, VIDEO_OUT_BUFFER_ATTRIBUTE_NUM_MAX> groups{};

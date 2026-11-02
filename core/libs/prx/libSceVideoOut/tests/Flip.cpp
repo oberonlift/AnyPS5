@@ -987,7 +987,8 @@ void testLabels(bool overlay) {
     auto cfg = VideoOutDriver::Get().GetConfig(handle);
     check(sceVideoOutGetBufferLabelAddress(handle, &address) == VIDEO_OUT_BUFFER_NUM_MAX, "label query returned the wrong count");
     check(address != 0 && address % std::atomic_ref<std::uint64_t>::required_alignment == 0, "label array is absent or unaligned");
-    auto* labels = reinterpret_cast<std::uint64_t*>(address);
+    check(address >> 48 == 0, "label array is not at an address GPU packets can hold");
+    auto* labels = static_cast<std::uint64_t*>(GuestArena::GuestToHost(address));
     for (int i = 0; i < VIDEO_OUT_BUFFER_NUM_MAX; ++i) check(std::atomic_ref(labels[i]).load() == 0, "new port has a nonzero label");
     alignas(std::uintptr_t) std::array<std::byte, sizeof(address) + 2> unaligned;
     unaligned.fill(std::byte{0x5a});
@@ -1037,7 +1038,7 @@ void testLabels(bool overlay) {
     check(sceVideoOutGetBufferLabelAddress(handle, &repeated) == VIDEO_OUT_ERROR_INVALID_HANDLE && repeated == 0x1234, "closed label query changed its output");
     const int reopened = sceVideoOutOpen(255, bus, 0, nullptr);
     check(sceVideoOutGetBufferLabelAddress(reopened, &repeated) == VIDEO_OUT_BUFFER_NUM_MAX && repeated != address, "reopened port shares live old-generation labels");
-    auto* fresh = reinterpret_cast<std::uint64_t*>(repeated);
+    auto* fresh = static_cast<std::uint64_t*>(GuestArena::GuestToHost(repeated));
     for (int i = 0; i < VIDEO_OUT_BUFFER_NUM_MAX; ++i) check(std::atomic_ref(fresh[i]).load() == 0, "reopened port retained an old label");
     check(std::atomic_ref(labels[15]).load() == 55, "reopening changed old-generation labels");
     sceVideoOutClose(reopened);

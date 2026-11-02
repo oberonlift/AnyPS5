@@ -327,6 +327,17 @@ void FlipRequest::Fail(std::exception_ptr error) noexcept {
     queue->changed.NotifyAll();
 }
 
+#ifdef ANYPS5_TRANSLATED_GUEST
+GuestLabelArray::GuestLabelArray() : _labels(static_cast<std::uint64_t*>(GuestArena::GuestArenaAllocate_nid_postfix(GuestLabelPageBytes, GuestLabelPageBytes))) {
+    if (_labels == nullptr) throw std::runtime_error("VideoOut: the guest arena has no page left for a port's buffer labels");
+    GuestArena::GuestArenaCommit_nid_postfix(_labels, GuestLabelPageBytes, 0x04, GuestLabelPageBytes);
+}
+
+GuestLabelArray::~GuestLabelArray() {
+    GuestArena::GuestArenaRelease_nid_postfix(_labels, GuestLabelPageBytes);
+}
+#endif
+
 VideoOutDriver& VideoOutDriver::Get() {
     static VideoOutDriver instance;
     return instance;
