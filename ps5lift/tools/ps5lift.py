@@ -108,7 +108,6 @@ def compare(expected, actual, label):
 
 
 def stop_matches(result, stop, native):
-    """Whether a finished program ended as its fixture expects: cleanly when it has no stop, else by a signal (native) or exit 70 naming the stop (lifted; an uncaught exception from an AnyPS5 library aborts instead)."""
     if stop is None:
         return result.returncode == 0
     if native:

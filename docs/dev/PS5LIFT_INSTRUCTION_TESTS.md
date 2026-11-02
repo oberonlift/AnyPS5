@@ -6,7 +6,7 @@ Design for a test suite that proves ps5lift's translation of every x86-64 instru
 
 ps5lift translates guest code one instruction at a time, so a lifted program is only as correct as each instruction's translation. The tests today are whole C programs (`tests/fixtures`), built at `-O0` to `-O3` and lifted with and without LLVM's optimization. They show that the common paths work, but they cannot show that a given form is right for a given input: that `vpsignw` handles a zero element, or that `cvttps2dq` converts a NaN to the integer indefinite value. A translation and a hand-written test of it share their author's reading of the manual, so a misreading passes both. A lifted video decoder that produces corrupt output with every lifter version so far is most likely such a case.
 
-The lifter also has no translation for part of the instruction set. A lifted program that reaches one of those instructions stops (`ps5lift_unsupported`). Lifted titles reach a few such Zen 2 instructions today, and every new title can bring others.
+The lifter also has no translation for part of the instruction set. A lifted program that reaches one of those instructions stops (`ps5lift_stop`). Lifted titles reach a few such Zen 2 instructions today, and every new title can bring others.
 
 ## Goal
 
