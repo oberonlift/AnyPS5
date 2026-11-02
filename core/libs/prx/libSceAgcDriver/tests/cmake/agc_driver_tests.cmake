@@ -27,6 +27,12 @@ if(BUILD_TESTING)
         set_tests_properties(agc_driver_readonly_resummarize agc_driver_eop_interrupts PROPERTIES ENVIRONMENT_MODIFICATION
             "PATH=path_list_prepend:$<TARGET_FILE_DIR:libc>")
     endif()
+    add_test(NAME agc_driver_guest_form_multi_submits COMMAND agc_driver_tests --guest-form-multi-submits)
+    set_tests_properties(agc_driver_guest_form_multi_submits PROPERTIES TIMEOUT 30 SKIP_RETURN_CODE 77)
+    if(WIN32)
+        set_tests_properties(agc_driver_guest_form_multi_submits PROPERTIES ENVIRONMENT_MODIFICATION
+            "PATH=path_list_prepend:$<TARGET_FILE_DIR:libc>")
+    endif()
     add_test(NAME agc_driver_small_copy_sync COMMAND agc_driver_tests --small-copy-sync)
     set_tests_properties(agc_driver_small_copy_sync PROPERTIES TIMEOUT 30 ENVIRONMENT "APS5_COPY_SYNC=1" SKIP_RETURN_CODE 77)
     if(WIN32)

@@ -9,6 +9,7 @@
 #include "prx/libSceAgcDriver/Execution/include/Driver/Synchronization/SynchronizationStatistics.hpp"
 #include "prx/libSceAgcDriver/Execution/include/VulkanDevice.hpp"
 #include "prx/libSceAgcDriver/Graphics/include/GuestBufferMemory.hpp"
+#include "prx/libc/include/GuestArena.hpp"
 #include "prx/libc/include/GuestHeap.hpp"
 #include "prx/libc/include/Shutdown.hpp"
 #include "prx/libSceAgcDriver/Submit/include/Dcb.hpp"
@@ -565,7 +566,7 @@ void testMultiAcbs() {
     alignas(64) static volatile std::uint32_t value = 0, done = 0, gate = 0;
     check(sceAgcDriverSubmitMultiAcbs(0x20, nullptr, nullptr, 0) == 0, "empty multi-ACB submit failed");
     auto write = writeData(&value, 1);
-    std::array<std::uint32_t*, 1> addresses{write.data()};
+    std::array<GuestArena::GuestPointer<std::uint32_t>, 1> addresses{write.data()};
     std::array<std::uint32_t, 1> sizes{static_cast<std::uint32_t>(write.size())};
     expectFailure([&] { sceAgcDriverSubmitMultiAcbs(0x1f, addresses.data(), sizes.data(), 1); });
     expectFailure([&] { sceAgcDriverSubmitMultiAcbs(0x58, addresses.data(), sizes.data(), 1); });
@@ -573,7 +574,7 @@ void testMultiAcbs() {
     check(sceAgcDriverSubmitMultiAcbs(0, nullptr, nullptr, 0) == 0, "empty multi-ACB submit checked its queue");
     expectFailure([&] { sceAgcDriverSubmitMultiAcbs(0x20, nullptr, sizes.data(), 1); });
     expectFailure([&] { sceAgcDriverSubmitMultiAcbs(0x20, addresses.data(), nullptr, 1); });
-    std::array<std::uint32_t*, 1> nullAcbs{nullptr};
+    std::array<GuestArena::GuestPointer<std::uint32_t>, 1> nullAcbs{nullptr};
     std::array<std::uint32_t, 1> nonZeroAcbSizes{4};
     expectFailure([&] { sceAgcDriverSubmitMultiAcbs(0x20, nullAcbs.data(), nonZeroAcbSizes.data(), 1); });
     check(value == 0, "a rejected multi-ACB submit ran a command buffer");
@@ -583,7 +584,7 @@ void testMultiAcbs() {
         auto first = writeData(&value, 1);
         auto second = writeData(&value, 2);
         auto third = writeData(&done, 1);
-        std::array<std::uint32_t*, 3> buffers{first.data(), second.data(), third.data()};
+        std::array<GuestArena::GuestPointer<std::uint32_t>, 3> buffers{first.data(), second.data(), third.data()};
         std::array<std::uint32_t, 3> lengths{static_cast<std::uint32_t>(first.size()), static_cast<std::uint32_t>(second.size()), static_cast<std::uint32_t>(third.size())};
         check(sceAgcDriverSubmitMultiAcbs(queue, buffers.data(), lengths.data(), 3) == 0, "multi-ACB submit failed");
         waitFor(&done, 1, "the last ACB of a multi-ACB submit never ran");
@@ -594,7 +595,7 @@ void testMultiAcbs() {
     value = 0;
     auto wait = waitEqual(&gate, 1);
     auto finish = writeData(&done, 1);
-    std::array<std::uint32_t*, 2> buffers{wait.data(), finish.data()};
+    std::array<GuestArena::GuestPointer<std::uint32_t>, 2> buffers{wait.data(), finish.data()};
     std::array<std::uint32_t, 2> lengths{static_cast<std::uint32_t>(wait.size()), static_cast<std::uint32_t>(finish.size())};
     check(sceAgcDriverSubmitMultiAcbs(0x21, buffers.data(), lengths.data(), 2) == 0, "waiting multi-ACB submit failed");
     submit(0x21, commands(writeData(&value, 1)));
@@ -604,6 +605,39 @@ void testMultiAcbs() {
     waitFor(&value, 1, "a submission queued behind a multi-ACB submit never ran");
     check(done == 1, "a multi-ACB submit did not run before a later submission on its queue");
     AgcDriverWaitIdle_nid_postfix();
+}
+
+std::array<std::uint32_t, 5> guestWriteData(volatile std::uint32_t* address, std::uint32_t value) {
+    const auto target = GuestArena::HostToGuest(address);
+    return {0xc0033700, 0x00100200, static_cast<std::uint32_t>(target), static_cast<std::uint32_t>(target >> 32u), value};
+}
+
+void testGuestFormMultiSubmits() {
+    auto* const memory = static_cast<std::uint32_t*>(GuestArena::GuestArenaAllocate_nid_postfix(16384, 16384));
+    check(memory != nullptr, "the guest arena has no memory for the multi-submit test");
+    GuestArena::GuestArenaCommit_nid_postfix(memory, 16384, 0x04, 16384);
+    volatile std::uint32_t* const value = memory;
+    volatile std::uint32_t* const done = memory + 1;
+    std::uint32_t* const buffers = memory + 64;
+    const auto first = guestWriteData(value, 1);
+    const auto second = guestWriteData(value, 2);
+    const auto third = guestWriteData(done, 1);
+    std::copy(first.begin(), first.end(), buffers);
+    std::copy(second.begin(), second.end(), buffers + 8);
+    std::copy(third.begin(), third.end(), buffers + 16);
+    const std::array<GuestArena::GuestPointer<std::uint32_t>, 3> addresses{buffers, buffers + 8, buffers + 16};
+    const std::array<std::uint32_t, 3> sizes{5, 5, 5};
+    for (std::uint32_t queue : {0u, 0x20u}) {
+        *value = 0;
+        *done = 0;
+        const int result = queue == 0 ? sceAgcDriverSubmitMultiDcbs(addresses.data(), sizes.data(), 3)
+                                      : sceAgcDriverSubmitMultiAcbs(queue, addresses.data(), sizes.data(), 3);
+        check(result == 0, "a multi-submit of guest command buffer addresses failed");
+        waitFor(done, 1, "the last command buffer of a guest multi-submit never ran");
+        check(*value == 2, "a guest multi-submit did not run its command buffers in order");
+        AgcDriverWaitIdle_nid_postfix();
+    }
+    GuestArena::GuestArenaRelease_nid_postfix(memory, 16384);
 }
 
 void testWaitFreeSubmissionTheCpuWaitsFor() {
@@ -625,13 +659,13 @@ void testMultiSubmissions() {
     check(sceAgcDriverSubmitMultiDcbs(nullptr, nullptr, 0) == 0, "empty multi-DCB submit failed");
     check(sceAgcDriverAgrSubmitMultiDcbs(nullptr, nullptr, 0) == 0, "empty AGR multi-DCB submit failed");
     std::array<std::uint32_t, 3> invalid{0xc0017600, 0x20c, 0};
-    std::array<std::uint32_t*, 1> invalidAddresses{invalid.data()};
+    std::array<GuestArena::GuestPointer<std::uint32_t>, 1> invalidAddresses{invalid.data()};
     std::array<std::uint32_t, 1> invalidSizes{2};
     expectFailure([&] { sceAgcDriverSubmitMultiDcbs(nullptr, invalidSizes.data(), 1); });
     expectFailure([&] { sceAgcDriverAgrSubmitMultiDcbs(invalidAddresses.data(), nullptr, 1); });
     expectFailure([&] { sceAgcDriverSubmitMultiDcbs(invalidAddresses.data(), invalidSizes.data(), 1); });
     expectFailure([&] { sceAgcDriverAgrSubmitMultiDcbs(invalidAddresses.data(), invalidSizes.data(), 1); });
-    std::array<std::uint32_t*, 1> nullAddresses{nullptr};
+    std::array<GuestArena::GuestPointer<std::uint32_t>, 1> nullAddresses{nullptr};
     std::array<std::uint32_t, 1> nonZeroSizes{4};
     expectFailure([&] { sceAgcDriverSubmitMultiDcbs(nullAddresses.data(), nonZeroSizes.data(), 1); });
     expectFailure([&] { sceAgcDriverAgrSubmitMultiDcbs(nullAddresses.data(), nonZeroSizes.data(), 1); });
@@ -642,7 +676,7 @@ void testMultiSubmissions() {
         auto first = writeData(&value, 1);
         auto second = writeData(&value, 2);
         auto third = writeData(&done, 1);
-        std::array<std::uint32_t*, 3> addresses{first.data(), second.data(), third.data()};
+        std::array<GuestArena::GuestPointer<std::uint32_t>, 3> addresses{first.data(), second.data(), third.data()};
         std::array<std::uint32_t, 3> sizes{static_cast<std::uint32_t>(first.size()), static_cast<std::uint32_t>(second.size()), static_cast<std::uint32_t>(third.size())};
         const int result = agr ? sceAgcDriverAgrSubmitMultiDcbs(addresses.data(), sizes.data(), 3) : sceAgcDriverSubmitMultiDcbs(addresses.data(), sizes.data(), 3);
         check(result == 0, "multi-DCB submit failed");
@@ -1122,6 +1156,12 @@ int main(int argc, char** argv) {
         }
         const auto device = OpenVulkanTestDevice();
         if (!device) return VulkanTestSkipped;
+        if (argc == 2 && std::string_view(argv[1]) == "--guest-form-multi-submits") {
+            testGuestFormMultiSubmits();
+            LibcRunShutdown_nid_postfix();
+            std::puts("Multi-submits of guest command buffer addresses passed");
+            return 0;
+        }
         if (argc == 2 && std::string_view(argv[1]) == "--small-copy-sync") {
             testHeaderWithoutProgramAddress();
             testSmallCopyBehindPendingSource();

@@ -65,7 +65,7 @@ void CheckCommandBufferSubmission() {
     Require(sceAgcDriverSubmitCommandBuffer(&graphicsCtx, nullptr) == 22, "null packet submit must return EINVAL");
     Require(sceAgcDriverSubmitMultiCommandBuffers(nullptr, nullptr, nullptr, 0) == 0, "count 0 multi submit must return 0");
 
-    std::uint32_t* cmdBufs[] = {nullptr};
+    GuestArena::GuestPointer<std::uint32_t> cmdBufs[] = {nullptr};
     const std::uint32_t cmdSizes[] = {0};
     Require(sceAgcDriverSubmitMultiCommandBuffers(nullptr, cmdBufs, cmdSizes, 1) == 22, "null context multi submit must return EINVAL");
     Require(sceAgcDriverSubmitMultiCommandBuffers(&graphicsCtx, nullptr, cmdSizes, 1) == 22, "null cmdBufs multi submit must return EINVAL");

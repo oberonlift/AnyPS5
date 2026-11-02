@@ -13,13 +13,13 @@
 #include "SceTypes.hpp"
 #include "prx/libc/include/General.hpp"
 
-int AgcDriver::SubmitMany(std::uint32_t* const* addresses, const std::uint32_t* sizes, std::uint32_t count, std::uint32_t queue) {
+int AgcDriver::SubmitMany(const GuestArena::GuestPointer<std::uint32_t>* addresses, const std::uint32_t* sizes, std::uint32_t count, std::uint32_t queue) {
     if (count == 0) return 0;
     if (count > std::numeric_limits<std::uint32_t>::max() / sizeof(std::uint32_t*)) {
         throw std::runtime_error("AGC driver: multi-submit count overflow");
     }
     if (!addresses || !sizes) throw std::runtime_error("AGC driver: null multi-submit arrays");
-    AgcDriver::GuestMemory::CheckRange(addresses, count * sizeof(*addresses), alignof(std::uint32_t*));
+    AgcDriver::GuestMemory::CheckRange(addresses, count * sizeof(*addresses), alignof(GuestArena::GuestPointer<std::uint32_t>));
     AgcDriver::GuestMemory::CheckRange(sizes, count * sizeof(*sizes), alignof(std::uint32_t));
     for (std::uint32_t i = 0; i < count; ++i) {
         if (sizes[i] != 0 && addresses[i] == nullptr) {
@@ -155,7 +155,7 @@ int APS5_VABI sceAgcDriverSubmitDcb(const Packet* packet) {
     return 0;
 }
 
-int APS5_VABI sceAgcDriverSubmitMultiDcbs(std::uint32_t* const* dcbGpuAddrs, const std::uint32_t* dcbSizesInDwords, std::uint32_t count) {
+int APS5_VABI sceAgcDriverSubmitMultiDcbs(const GuestArena::GuestPointer<std::uint32_t>* dcbGpuAddrs, const std::uint32_t* dcbSizesInDwords, std::uint32_t count) {
     return AgcDriver::SubmitMany(dcbGpuAddrs, dcbSizesInDwords, count, 0);
 }
 
@@ -164,7 +164,7 @@ int APS5_VABI sceAgcDriverAgrSubmitDcb(const Packet* packet) {
     return 0;
 }
 
-int APS5_VABI sceAgcDriverAgrSubmitMultiDcbs(std::uint32_t* const* dcbGpuAddrs, const std::uint32_t* dcbSizesInDwords, std::uint32_t count) {
+int APS5_VABI sceAgcDriverAgrSubmitMultiDcbs(const GuestArena::GuestPointer<std::uint32_t>* dcbGpuAddrs, const std::uint32_t* dcbSizesInDwords, std::uint32_t count) {
     return AgcDriver::SubmitMany(dcbGpuAddrs, dcbSizesInDwords, count, 0);
 }
 
