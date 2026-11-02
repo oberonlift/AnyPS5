@@ -23,6 +23,13 @@ void* guest_pthread_self(void) __asm__(NID_pthread_self);
 int guest_pthread_equal(void* left, void* right) __asm__(NID_pthread_equal);
 unsigned long guest_mbsrtowcs(unsigned short* destination, const char** source, unsigned long count, void* state) __asm__(NID_mbsrtowcs);
 int guest_query_protection(void* address, void** start, void** end, int* protection) __asm__(NID_sceKernelQueryMemoryProtection);
+int guest_virtual_query(const void* address, int flags, void* info, unsigned long size) __asm__(NID_sceKernelVirtualQuery);
+
+struct guest_query_info {
+    char* start;
+    char* end;
+    unsigned char rest[112];
+};
 
 struct guest_iovec {
     const void* base;
@@ -112,6 +119,11 @@ int main(void) {
     int protection = 0;
     const int queried = guest_query_protection(map + 100, &start, &stop, &protection);
     guest_printf("sceKernelQueryMemoryProtection %d: start at the map %d, end past the address %d\n", queried, start == Fixed, (char*)stop > map + 100);
+
+    struct guest_query_info query;
+    query.start = 0, query.end = 0;
+    const int virtual_queried = guest_virtual_query(map + 100, 0, &query, sizeof(query));
+    guest_printf("sceKernelVirtualQuery %d: start at the map %d, end at its end %d\n", virtual_queried, query.start == Fixed, query.end == Fixed + MapBytes);
 
     const char* cursor = text;
     const unsigned long converted = guest_mbsrtowcs((unsigned short*)(map + 4096), &cursor, 2, 0);

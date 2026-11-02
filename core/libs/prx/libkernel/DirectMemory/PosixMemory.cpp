@@ -91,7 +91,7 @@ void SetError(int error) {
 
 bool Mapped(std::uintptr_t address) {
     VirtualQueryInfo info{};
-    return sceKernelVirtualQuery(reinterpret_cast<const void*>(address), 0, &info, sizeof(info)) == 0;
+    return DoVirtualQuery(reinterpret_cast<const void*>(address), 0, &info, sizeof(info)) == 0;
 }
 
 #ifdef _WIN32
@@ -381,7 +381,7 @@ int APS5_VABI mincore_nid_postfix(const void* address, std::size_t length, char*
         const auto chunkEnd = cursor + chunkPages * PS5_PAGE_SIZE;
         for (auto pageCursor = cursor; pageCursor < chunkEnd;) {
             VirtualQueryInfo info{};
-            sceKernelVirtualQuery(reinterpret_cast<const void*>(pageCursor), 0, &info, sizeof(info));
+            DoVirtualQuery(reinterpret_cast<const void*>(pageCursor), 0, &info, sizeof(info));
             const auto extentEnd = std::min<std::uintptr_t>(info.end, chunkEnd);
             std::fill_n(chunk.data() + (pageCursor - cursor) / PS5_PAGE_SIZE,
                         (extentEnd - pageCursor) / PS5_PAGE_SIZE,

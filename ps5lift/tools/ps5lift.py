@@ -1183,7 +1183,7 @@ UNCONVERTED_IMPORTS = ["printf", "fflush", "exit", "pthread_mutexattr_init"]
 TRANSLATION_IMPORTS = ["printf", "fflush", "exit", "mmap", "munmap", "strlen", "strchr", "strtol", "qsort", "writev", "pthread_mutex_lock",
                        "pthread_mutex_unlock", "scePthreadMutexLock", "scePthreadMutexUnlock", "pthread_mutexattr_init", "scePthreadMutexattrSettype",
                        "pthread_mutexattr_gettype", "pthread_mutexattr_getkind_np", "pthread_mutexattr_destroy", "pthread_self", "pthread_equal",
-                       "mbsrtowcs", "sceKernelQueryMemoryProtection"]
+                       "mbsrtowcs", "sceKernelQueryMemoryProtection", "sceKernelVirtualQuery"]
 LOG_LINE = re.compile(r"^\[[^\]\s]+:\d+ [^\]]+\] .*\n", re.MULTILINE)
 GUEST_LINK = ["-no-pie", f"-Wl,--image-base={GUEST_BASE:#x}", "-Wl,--dynamic-linker=/lib64/ld-linux-x86-64.so.2"]
 LIBRARY_PROGRAM_TIMEOUT = 600

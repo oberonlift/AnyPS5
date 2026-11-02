@@ -14,5 +14,6 @@ pthread_equal on its own handle 1
 %p prints the guest address 1000000000
 mmap failure returns MAP_FAILED 1
 sceKernelQueryMemoryProtection 0: start at the map 1, end past the address 1
+sceKernelVirtualQuery 0: start at the map 1, end at its end 1
 mbsrtowcs converted 2, source advanced by 2
 munmap 0

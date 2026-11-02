@@ -223,6 +223,101 @@ void ReleaseFlexibleMappingRange(std::uintptr_t address, size_t len) {
     _releaseFlexible(address, len);
 }
 
+int DoVirtualQuery(const void* addr, int flags, VirtualQueryInfo* info, uint64_t info_size) {
+ if (!info || info_size < sizeof(VirtualQueryInfo)) return SCE_KERNEL_ERROR_EINVAL;
+ memset(info, 0, sizeof(VirtualQueryInfo));
+ const auto address = reinterpret_cast<uintptr_t>(addr);
+ constexpr int findNext = 1;
+ std::uintptr_t reservedStart = 0;
+ std::uintptr_t reservedEnd = 0;
+ if (GuestReservation(address, &reservedStart, &reservedEnd)) {
+  info->start = reservedStart;
+  info->end = reservedEnd;
+  return 0;
+ }
+ const auto best = GuestAllocations::GuestAllocationsLookup_nid_postfix(GuestArena::HostToGuest(addr), (flags & findNext) != 0);
+ if (best != nullptr) {
+  info->start = reinterpret_cast<uintptr_t>(GuestArena::GuestToHost(best->address));
+  info->end = info->start + best->bytes;
+  info->protection = (best->readable ? 1 : 0) | (best->writable ? 2 : 0) | (!best->releasable ? 4 : 0);
+  int recorded = 0;
+  if (GuestProtection(std::max<uintptr_t>(address, info->start), &recorded)) info->protection = recorded;
+  std::uintptr_t directStart = 0;
+  std::uintptr_t directEnd = 0;
+  std::uint64_t physicalOffset = 0;
+  int memoryType = 0;
+  const bool direct = QueryDirectMapping(std::max<uintptr_t>(address, info->start), &directStart, &directEnd, &physicalOffset, &memoryType);
+  info->is_direct = direct ? 1u : 0u;
+  info->is_flexible = !direct && best->releasable ? 1u : 0u;
+  if (direct) {
+   info->start = std::max(info->start, directStart);
+   info->end = std::min(info->end, directEnd);
+   info->memory_type = memoryType;
+  }
+  info->is_committed = 1;
+  ApplyRangeName(std::max<uintptr_t>(address, info->start), info);
+  if (direct) info->offset = physicalOffset + info->start - directStart;
+  return 0;
+ }
+ // Memory the registry does not know (the title's own heap blocks, stacks): the host's committed
+ // region around the address is the honest extent; unmapped memory is an error, as on the PS5.
+ #ifdef _WIN32
+ MEMORY_BASIC_INFORMATION host{};
+ if (VirtualQuery(addr, &host, sizeof(host)) == 0 || host.State != MEM_COMMIT) return SCE_KERNEL_ERROR_EACCES;
+ info->start = reinterpret_cast<uintptr_t>(host.BaseAddress);
+ info->end = info->start + host.RegionSize;
+ const bool writable = (host.Protect & (PAGE_READWRITE | PAGE_EXECUTE_READWRITE | PAGE_WRITECOPY | PAGE_EXECUTE_WRITECOPY)) != 0;
+ const bool executable = (host.Protect & (PAGE_EXECUTE | PAGE_EXECUTE_READ | PAGE_EXECUTE_READWRITE | PAGE_EXECUTE_WRITECOPY)) != 0;
+ #elif defined(__APPLE__)
+ mach_vm_address_t region = address;
+ mach_vm_size_t regionSize = 0;
+ vm_region_basic_info_data_64_t host{};
+ mach_msg_type_number_t count = VM_REGION_BASIC_INFO_COUNT_64;
+ mach_port_t object = MACH_PORT_NULL;
+ if (mach_vm_region(mach_task_self(), &region, &regionSize, VM_REGION_BASIC_INFO_64, reinterpret_cast<vm_region_info_t>(&host), &count, &object) != KERN_SUCCESS || region > address || (host.protection & VM_PROT_READ) == 0) return SCE_KERNEL_ERROR_EACCES;
+ info->start = region;
+ info->end = region + regionSize;
+ int watched = -1;
+ for (std::uintptr_t cursor = info->start; cursor < info->end;) {
+  std::uintptr_t runEnd = info->end;
+  const int protection = GuestWriteWatch::GuestWriteWatchProtection_nid_postfix(cursor, info->end, &runEnd);
+  if (address < runEnd) {
+   info->start = cursor;
+   info->end = runEnd;
+   watched = protection;
+   break;
+  }
+  cursor = runEnd;
+ }
+ const bool writable = watched >= 0 ? (watched & PROT_WRITE) != 0 : (host.protection & VM_PROT_WRITE) != 0;
+ const bool executable = (host.protection & VM_PROT_EXECUTE) != 0;
+ #else
+ std::ifstream maps("/proc/self/maps");
+ std::string line;
+ bool found = false, writable = false, executable = false;
+ while (std::getline(maps, line)) {
+  std::istringstream fields(line);
+  uintptr_t begin = 0, end = 0;
+  char dash = 0;
+  std::string perms;
+  if (!(fields >> std::hex >> begin >> dash >> end >> perms) || address < begin || address >= end) continue;
+  if (perms.size() < 3 || perms[0] != 'r') return SCE_KERNEL_ERROR_EACCES;
+  info->start = begin;
+  info->end = end;
+  writable = perms[1] == 'w';
+  executable = perms[2] == 'x';
+  found = true;
+  break;
+ }
+ if (!found) return SCE_KERNEL_ERROR_EACCES;
+ #endif
+ info->protection = 1 | (writable ? 2 : 0) | (executable ? 4 : 0);
+ info->is_flexible = 1;
+ info->is_committed = 1;
+ ApplyRangeName(std::max<uintptr_t>(address, info->start), info);
+ return 0;
+}
+
 extern "C" {
 
 int APS5_VABI sceKernelAllocateDirectMemory(int64_t search_start, int64_t search_end, size_t len, size_t alignment, int memory_type, int64_t* phys_addr_out) {
@@ -372,98 +467,12 @@ int APS5_VABI sceKernelReserveVirtualRange(void** addr, size_t len, int flags, s
 }
 
 int APS5_VABI sceKernelVirtualQuery(const void* addr, int flags, VirtualQueryInfo* info, uint64_t info_size) {
- if (!info || info_size < sizeof(VirtualQueryInfo)) return SCE_KERNEL_ERROR_EINVAL;
- memset(info, 0, sizeof(VirtualQueryInfo));
- const auto address = reinterpret_cast<uintptr_t>(addr);
- constexpr int findNext = 1;
- std::uintptr_t reservedStart = 0;
- std::uintptr_t reservedEnd = 0;
- if (GuestReservation(address, &reservedStart, &reservedEnd)) {
-  info->start = reservedStart;
-  info->end = reservedEnd;
-  return 0;
+ const int result = DoVirtualQuery(addr, flags, info, info_size);
+ if (result == 0) {
+  info->start = GuestArena::HostToGuest(reinterpret_cast<const void*>(info->start));
+  info->end = GuestArena::HostToGuest(reinterpret_cast<const void*>(info->end));
  }
- const auto best = GuestAllocations::GuestAllocationsLookup_nid_postfix(GuestArena::HostToGuest(addr), (flags & findNext) != 0);
- if (best != nullptr) {
-  info->start = reinterpret_cast<uintptr_t>(GuestArena::GuestToHost(best->address));
-  info->end = info->start + best->bytes;
-  info->protection = (best->readable ? 1 : 0) | (best->writable ? 2 : 0) | (!best->releasable ? 4 : 0);
-  int recorded = 0;
-  if (GuestProtection(std::max<uintptr_t>(address, info->start), &recorded)) info->protection = recorded;
-  std::uintptr_t directStart = 0;
-  std::uintptr_t directEnd = 0;
-  std::uint64_t physicalOffset = 0;
-  int memoryType = 0;
-  const bool direct = QueryDirectMapping(std::max<uintptr_t>(address, info->start), &directStart, &directEnd, &physicalOffset, &memoryType);
-  info->is_direct = direct ? 1u : 0u;
-  info->is_flexible = !direct && best->releasable ? 1u : 0u;
-  if (direct) {
-   info->start = std::max(info->start, directStart);
-   info->end = std::min(info->end, directEnd);
-   info->memory_type = memoryType;
-  }
-  info->is_committed = 1;
-  ApplyRangeName(std::max<uintptr_t>(address, info->start), info);
-  if (direct) info->offset = physicalOffset + info->start - directStart;
-  return 0;
- }
- // Memory the registry does not know (the title's own heap blocks, stacks): the host's committed
- // region around the address is the honest extent; unmapped memory is an error, as on the PS5.
- #ifdef _WIN32
- MEMORY_BASIC_INFORMATION host{};
- if (VirtualQuery(addr, &host, sizeof(host)) == 0 || host.State != MEM_COMMIT) return SCE_KERNEL_ERROR_EACCES;
- info->start = reinterpret_cast<uintptr_t>(host.BaseAddress);
- info->end = info->start + host.RegionSize;
- const bool writable = (host.Protect & (PAGE_READWRITE | PAGE_EXECUTE_READWRITE | PAGE_WRITECOPY | PAGE_EXECUTE_WRITECOPY)) != 0;
- const bool executable = (host.Protect & (PAGE_EXECUTE | PAGE_EXECUTE_READ | PAGE_EXECUTE_READWRITE | PAGE_EXECUTE_WRITECOPY)) != 0;
- #elif defined(__APPLE__)
- mach_vm_address_t region = address;
- mach_vm_size_t regionSize = 0;
- vm_region_basic_info_data_64_t host{};
- mach_msg_type_number_t count = VM_REGION_BASIC_INFO_COUNT_64;
- mach_port_t object = MACH_PORT_NULL;
- if (mach_vm_region(mach_task_self(), &region, &regionSize, VM_REGION_BASIC_INFO_64, reinterpret_cast<vm_region_info_t>(&host), &count, &object) != KERN_SUCCESS || region > address || (host.protection & VM_PROT_READ) == 0) return SCE_KERNEL_ERROR_EACCES;
- info->start = region;
- info->end = region + regionSize;
- int watched = -1;
- for (std::uintptr_t cursor = info->start; cursor < info->end;) {
-  std::uintptr_t runEnd = info->end;
-  const int protection = GuestWriteWatch::GuestWriteWatchProtection_nid_postfix(cursor, info->end, &runEnd);
-  if (address < runEnd) {
-   info->start = cursor;
-   info->end = runEnd;
-   watched = protection;
-   break;
-  }
-  cursor = runEnd;
- }
- const bool writable = watched >= 0 ? (watched & PROT_WRITE) != 0 : (host.protection & VM_PROT_WRITE) != 0;
- const bool executable = (host.protection & VM_PROT_EXECUTE) != 0;
- #else
- std::ifstream maps("/proc/self/maps");
- std::string line;
- bool found = false, writable = false, executable = false;
- while (std::getline(maps, line)) {
-  std::istringstream fields(line);
-  uintptr_t begin = 0, end = 0;
-  char dash = 0;
-  std::string perms;
-  if (!(fields >> std::hex >> begin >> dash >> end >> perms) || address < begin || address >= end) continue;
-  if (perms.size() < 3 || perms[0] != 'r') return SCE_KERNEL_ERROR_EACCES;
-  info->start = begin;
-  info->end = end;
-  writable = perms[1] == 'w';
-  executable = perms[2] == 'x';
-  found = true;
-  break;
- }
- if (!found) return SCE_KERNEL_ERROR_EACCES;
- #endif
- info->protection = 1 | (writable ? 2 : 0) | (executable ? 4 : 0);
- info->is_flexible = 1;
- info->is_committed = 1;
- ApplyRangeName(std::max<uintptr_t>(address, info->start), info);
- return 0;
+ return result;
 }
 
 // ---------------------------------------------------------------------------
@@ -485,7 +494,7 @@ int APS5_VABI sceKernelMtypeprotect(const void* addr, size_t len, int type, int 
 
 int APS5_VABI sceKernelQueryMemoryProtection(void* addr, void** start, void** end, int* prot) {
  VirtualQueryInfo info{};
- const int result = sceKernelVirtualQuery(addr, 0, &info, sizeof(info));
+ const int result = DoVirtualQuery(addr, 0, &info, sizeof(info));
  if (result != 0) return result;
  const auto startAddress = reinterpret_cast<void*>(info.start);
  const auto endAddress = reinterpret_cast<void*>(info.end);
@@ -500,7 +509,7 @@ int APS5_VABI sceKernelIsStack(void* addr, void** start, void** end) {
  std::uintptr_t stackEnd = 0;
  if (!GuestThreadStack(reinterpret_cast<std::uintptr_t>(addr), &stackStart, &stackEnd)) {
   VirtualQueryInfo info{};
-  if (sceKernelVirtualQuery(addr, 0, &info, sizeof(info)) != 0) return SCE_KERNEL_ERROR_EACCES;
+  if (DoVirtualQuery(addr, 0, &info, sizeof(info)) != 0) return SCE_KERNEL_ERROR_EACCES;
  }
  const auto startAddress = reinterpret_cast<void*>(stackStart);
  const auto endAddress = reinterpret_cast<void*>(stackEnd);
@@ -658,7 +667,7 @@ int32_t APS5_VABI sceKernelMapNamedSystemFlexibleMemory(void** addr_in_out, size
 bool GuestRangeMapped(std::uintptr_t start, std::uintptr_t end) {
     for (auto cursor = start; cursor < end;) {
         VirtualQueryInfo info{};
-        if (sceKernelVirtualQuery(reinterpret_cast<const void*>(cursor), 0, &info, sizeof(info)) != 0) return false;
+        if (DoVirtualQuery(reinterpret_cast<const void*>(cursor), 0, &info, sizeof(info)) != 0) return false;
         if (info.end <= cursor) return false;
         cursor = info.end;
     }

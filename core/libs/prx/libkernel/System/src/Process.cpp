@@ -95,7 +95,7 @@ bool StoreGuestId(std::uint32_t* output) {
     const auto end = address + sizeof(*output);
     for (auto cursor = address; cursor < end;) {
         VirtualQueryInfo info{};
-        if (sceKernelVirtualQuery(reinterpret_cast<const void*>(cursor), 0, &info, sizeof(info)) != 0 ||
+        if (DoVirtualQuery(reinterpret_cast<const void*>(cursor), 0, &info, sizeof(info)) != 0 ||
             info.end <= cursor || (info.protection & 2) == 0)
             return false;
         cursor = std::min(end, info.end);

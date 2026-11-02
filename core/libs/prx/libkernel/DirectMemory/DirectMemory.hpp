@@ -7,6 +7,8 @@
 
 #include "prx/libkernel/KernelErrors.hpp"
 
+struct VirtualQueryInfo;
+
 static constexpr size_t DIRECT_MEMORY_SIZE = 13824ULL * 1024 * 1024;
 static constexpr size_t PS5_PAGE_SIZE = 0x4000;
 
@@ -48,6 +50,7 @@ int DoMprotect(const void* addr, size_t len, int prot, bool requireMappedStart =
 int DoMtypeprotect(const void* addr, size_t len, int type, int prot, bool requireMappedStart = true);
 int DoMunmap(void* addr, size_t len);
 int DoReserveVirtual(void** addr, size_t len, int flags, size_t alignment);
+int DoVirtualQuery(const void* addr, int flags, VirtualQueryInfo* info, uint64_t infoSize);
 bool GuestProtection(uintptr_t addr, int* prot);
 bool GuestReservation(std::uintptr_t addr, std::uintptr_t* start, std::uintptr_t* end);
 bool GuestRangeMapped(std::uintptr_t start, std::uintptr_t end);

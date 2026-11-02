@@ -225,7 +225,7 @@ std::vector<GuestVmEntry> GuestVmEntries() {
         entry.start = start;
         entry.end = end;
         VirtualQueryInfo info{};
-        if (sceKernelVirtualQuery(reinterpret_cast<const void*>(start), 0, &info, sizeof(info)) == 0) entry.protection = info.protection & 7;
+        if (DoVirtualQuery(reinterpret_cast<const void*>(start), 0, &info, sizeof(info)) == 0) entry.protection = info.protection & 7;
         entries.push_back(entry);
     }
     return entries;
