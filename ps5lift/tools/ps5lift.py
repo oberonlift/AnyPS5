@@ -434,11 +434,16 @@ GUEST_POINTER_SLOTS = {
     "sceAgcDriverGetOwnerName": (1,), "sceAgcDriverGetResourceName": (1,), "sceAgcDriverGetResourceBaseAddressAndSizeInBytes": (1,),
     "scePthreadAttrGetstack": (1,), "scePthreadAttrGetstackaddr": (1,), "sceKernelMapDirectMemory": (0,), "sceKernelMapDirectMemory2": (0,),
     "sceKernelMapNamedDirectMemory": (0,), "sceKernelMapFlexibleMemory": (0,), "sceKernelMapNamedFlexibleMemory": (0,),
-    "sceKernelMapNamedSystemFlexibleMemory": (0,), "sceKernelReserveVirtualRange": (0,), "sceKernelMmap": (6,),
+    "sceKernelMapNamedSystemFlexibleMemory": (0,), "sceKernelMapNamedFlexibleMemoryInternal": (0,), "sceKernelReserveVirtualRange": (0,), "sceKernelMmap": (6,),
     "sceFiberGetSelf": (0,),
     "scePthreadJoin": (1,), "pthread_join": (1,), "pthread_timedjoin_np": (1,),
     "sceAgcDriverWaitUntilSafeForRendering": (0,), "sceAgcGetDataPacketPayloadAddress": (0,), "sceAgcGetDataPacketPayloadAddress_0090": (0,),
     "sceAgcGetSemaphoreLabel": (1,),
+    "sceNpUniversalDataSystemCreateEvent": (2, 3), "sceNpUniversalDataSystemCreateEventPropertyObject": (0,),
+    "sceNpUniversalDataSystemCreateEventPropertyArray": (0,), "sceNpUniversalDataSystemEventPropertyObjectSetObject": (3,),
+    "sceNpUniversalDataSystemEventPropertyObjectSetArray": (3,), "sceNpUniversalDataSystemEventPropertyArraySetObject": (2,),
+    "sceNpUniversalDataSystemEventPropertyArraySetArray": (2,),
+    "sceHttpCreateEpoll": (1,), "sceHttpGetAllResponseHeaders": (1,), "sceHttp2GetAllResponseHeaders": (1,),
 }
 
 cindex = None
@@ -1182,11 +1187,17 @@ LOADER_IMPORTS = ["printf", "exit", "dlopen", "sceKernelGetExecutableModuleHandl
 JSON_IMPORTS = ["printf", "exit", "_ZN3sce4Json14InitParameter2C1Ev", "_ZN3sce4Json14InitParameter212setAllocatorEPNS0_12MemAllocatorEPv",
                 "_ZN3sce4Json11InitializerC1Ev", "_ZN3sce4Json11Initializer10initializeEPKNS0_14InitParameter2E", "_ZN3sce4Json11Initializer9terminateEv"]
 UNCONVERTED_IMPORTS = ["printf", "fflush", "exit", "pthread_mutexattr_init"]
+HANDLES_IMPORTS = ["printf", "exit", "sceNpUniversalDataSystemCreateEventPropertyObject", "sceNpUniversalDataSystemCreateEventPropertyArray",
+                   "sceNpUniversalDataSystemCreateEvent", "sceNpUniversalDataSystemEventPropertyObjectSetString", "sceNpUniversalDataSystemEventPropertyObjectSetObject",
+                   "sceNpUniversalDataSystemEventPropertyObjectSetArray", "sceNpUniversalDataSystemEventPropertyArraySetString",
+                   "sceNpUniversalDataSystemEventPropertyArraySetObject", "sceNpUniversalDataSystemEventPropertyArraySetArray",
+                   "sceNpUniversalDataSystemDestroyEventPropertyObject", "sceNpUniversalDataSystemDestroyEventPropertyArray", "sceNpUniversalDataSystemDestroyEvent",
+                   "sceHttpInit", "sceHttpTerm", "sceHttpCreateEpoll", "sceHttpDestroyEpoll"]
 TRANSLATION_IMPORTS = ["printf", "fflush", "exit", "mmap", "munmap", "strlen", "strchr", "strtol", "qsort", "writev", "pthread_mutex_lock",
                        "pthread_mutex_unlock", "scePthreadMutexLock", "scePthreadMutexUnlock", "pthread_mutexattr_init", "scePthreadMutexattrSettype",
                        "pthread_mutexattr_gettype", "pthread_mutexattr_getkind_np", "pthread_mutexattr_destroy", "pthread_self", "pthread_equal",
                        "mbsrtowcs", "sceKernelQueryMemoryProtection", "sceKernelVirtualQuery",
-                       "sceKernelMemoryPoolReserve", "sceKernelMemoryPoolBatch", "sceKernelMprotect"]
+                       "sceKernelMemoryPoolReserve", "sceKernelMemoryPoolBatch", "sceKernelMprotect", "sceKernelMapNamedFlexibleMemoryInternal", "sceKernelMunmap"]
 LOG_LINE = re.compile(r"^\[[^\]\s]+:\d+ [^\]]+\] .*\n", re.MULTILINE)
 GUEST_LINK = ["-no-pie", f"-Wl,--image-base={GUEST_BASE:#x}", "-Wl,--dynamic-linker=/lib64/ld-linux-x86-64.so.2"]
 LIBRARY_PROGRAM_TIMEOUT = 600
@@ -1259,10 +1270,16 @@ def build_unconverted_guest(args, work, optimization):
     return build_stubbed_guest(args, work, optimization, "unconverted", UNCONVERTED_IMPORTS)
 
 
+def build_handles_guest(args, work, optimization):
+    return build_stubbed_guest(args, work, optimization, "handles", HANDLES_IMPORTS)
+
+
 LIBRARY_GUESTS = {"libc": build_libc_guest, "exceptions": build_exceptions_guest, "kernel": build_kernel_guest, "fiber": build_fiber_guest,
-                  "loader": build_loader_guest, "translation": build_translation_guest, "unconverted": build_unconverted_guest, "json": build_json_guest}
+                  "loader": build_loader_guest, "translation": build_translation_guest, "unconverted": build_unconverted_guest, "json": build_json_guest,
+                  "handles": build_handles_guest}
 GUEST_LIBRARIES = {"libc": ["libc"], "exceptions": ["libc"], "kernel": ["libc", "libkernel", "libkernel_sys"], "fiber": ["libc", "libkernel", "libSceFiber"],
-                   "loader": ["libc", "libkernel"], "translation": ["libc", "libkernel"], "unconverted": ["libc", "libkernel"], "json": ["libc", "libkernel", "libSceJson2"]}
+                   "loader": ["libc", "libkernel"], "translation": ["libc", "libkernel"], "unconverted": ["libc", "libkernel"], "json": ["libc", "libkernel", "libSceJson2"],
+                   "handles": ["libc", "libkernel", "libSceNpUniversalDataSystem", "libSceHttp"]}
 
 
 def libc_fixture_command(args):

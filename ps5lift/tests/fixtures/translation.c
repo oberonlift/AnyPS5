@@ -27,6 +27,8 @@ int guest_virtual_query(const void* address, int flags, void* info, unsigned lon
 int guest_mprotect(void* address, unsigned long length, int protection) __asm__(NID_sceKernelMprotect);
 int guest_pool_reserve(void* address, unsigned long length, unsigned long alignment, int flags, void** reserved) __asm__(NID_sceKernelMemoryPoolReserve);
 int guest_pool_batch(const void* entries, int count, int* done, int flags) __asm__(NID_sceKernelMemoryPoolBatch);
+int guest_map_flexible_internal(void** address, unsigned long length, int protection, int flags, const char* name) __asm__(NID_sceKernelMapNamedFlexibleMemoryInternal);
+int guest_kernel_munmap(void* address, unsigned long length) __asm__(NID_sceKernelMunmap);
 
 struct guest_query_info {
     char* start;
@@ -153,6 +155,12 @@ int main(void) {
     volatile int* pooled = (volatile int*)pool;
     pooled[0] = 42;
     guest_printf("memory pool: reserve %d, batch commit %d done %d, write reads back %d\n", pool_reserved, pool_batched, committed, pooled[0] == 42);
+
+    void* flexible = 0;
+    const int flexible_mapped = guest_map_flexible_internal(&flexible, 0x4000, ProtectReadWrite, 0, "fixture");
+    volatile int* flexed = (volatile int*)flexible;
+    flexed[0] = 7;
+    guest_printf("flexible memory: internal map %d, write reads back %d, unmap %d\n", flexible_mapped, flexed[0] == 7, guest_kernel_munmap(flexible, 0x4000));
 
     const char* cursor = text;
     const unsigned long converted = guest_mbsrtowcs((unsigned short*)(map + 4096), &cursor, 2, 0);

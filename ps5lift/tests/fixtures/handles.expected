@@ -1,0 +1,12 @@
+uds create object 0 array 0 child 0
+uds object set string 0
+uds array set string 0
+uds object set object 0 array 0
+uds set string through the object's copies 0 0
+uds array set object 0 array 0
+uds set string through the array's copies 0 0
+uds create event 0
+uds set string through the event's properties 0
+uds destroy event 0 object 0 child 0 array 0
+http create epoll 0
+http destroy epoll 0, term 0
