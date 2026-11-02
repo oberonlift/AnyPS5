@@ -36,14 +36,14 @@ inline std::uint64_t GuestAddress(const void* const pointer) {
 class GuestSlot {
 public:
     explicit GuestSlot(void* const slot) : _slot(slot) {
-        if (_slot == nullptr) return;
+        if (PS5LIFT_GUEST_BASE == 0 || _slot == nullptr) return;
         std::uint64_t bits = 0;
         std::memcpy(&bits, _slot, sizeof(bits));
         _value = HostAddress(bits);
     }
 
     ~GuestSlot() {
-        if (_slot == nullptr) return;
+        if (PS5LIFT_GUEST_BASE == 0 || _slot == nullptr) return;
         const auto bits = GuestAddress(_value);
         std::memcpy(_slot, &bits, sizeof(bits));
     }
@@ -51,7 +51,7 @@ public:
     GuestSlot(const GuestSlot&) = delete;
     GuestSlot& operator=(const GuestSlot&) = delete;
 
-    operator void*() { return _slot == nullptr ? nullptr : &_value; }
+    operator void*() { return PS5LIFT_GUEST_BASE == 0 || _slot == nullptr ? _slot : &_value; }
 
 private:
     void* _slot;

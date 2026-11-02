@@ -43,7 +43,7 @@ std::string Executable() {
     if (restarted) Fail("dyld did not load libmimalloc.dylib after the restart");
     const auto allocator = Allocator();
     std::error_code error;
-    if (allocator.empty() || !std::filesystem::is_regular_file(allocator, error)) Fail("no libmimalloc.dylib beside libkernel at " + allocator.string());
+    if (allocator.empty() || !std::filesystem::is_regular_file(allocator, error)) Fail("no libmimalloc.dylib at " + allocator.string());
     const auto executable = Executable();
     if (executable.empty()) Fail("cannot find the executable to restart");
     const char* inserted = std::getenv("DYLD_INSERT_LIBRARIES");

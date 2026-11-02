@@ -33,6 +33,8 @@
 
 namespace {
 
+constexpr std::uint64_t GuestSpaceEnd = std::uint64_t{1} << 40;
+
 #if defined(__APPLE__)
 bool HostFeature(const char* name) {
     int value = 0;
@@ -41,7 +43,6 @@ bool HostFeature(const char* name) {
     return value != 0;
 }
 
-constexpr std::uint64_t GuestSpaceEnd = std::uint64_t{1} << 40;
 constexpr std::uint64_t GuestImagesStart = 0xFC00000000ull + PS5LIFT_GUEST_BASE;
 constexpr std::uint64_t GuestImagesEnd = GuestSpaceEnd + PS5LIFT_GUEST_BASE;
 constexpr std::uint64_t ThreadAreaStart = 0x800000000ull + PS5LIFT_GUEST_BASE;
@@ -92,7 +93,7 @@ const GuestWindowReservation ReservedGuestWindow;
 class ThreadArea {
 public:
     static ThreadArea& Get() {
-        static ThreadArea area;
+        static ThreadArea& area = *new ThreadArea;
         return area;
     }
 
@@ -689,12 +690,11 @@ void RequireHostFeatures() {
 }
 
 void RequireHighNativeHeap() {
-    constexpr std::uint64_t GuestSpaceBytes = std::uint64_t{1} << 40;
     if (dlsym(RTLD_DEFAULT, "mi_version") == nullptr) ps5lift_fail("AnyPS5 runs without mimalloc, so native allocations can land in the guest's first terabyte");
     void* const probe = std::malloc(64);
     const auto address = reinterpret_cast<std::uintptr_t>(probe);
     std::free(probe);
-    if (address < GuestSpaceBytes) ps5lift_fail("a native allocation landed at 0x%" PRIxPTR ", inside the guest's first terabyte", address);
+    if (address < GuestSpaceEnd) ps5lift_fail("a native allocation landed at 0x%" PRIxPTR ", inside the guest's first terabyte", address);
 }
 
 }

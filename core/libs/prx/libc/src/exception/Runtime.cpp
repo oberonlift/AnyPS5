@@ -17,7 +17,7 @@
 
 namespace LibcException {
 void* AllocateThrown(std::size_t bytes) {
-#ifdef ANYPS5_GUEST_LIFTED
+#ifdef ANYPS5_TRANSLATED_GUEST
     return GuestHeap::GuestHeapAlign_nid_postfix(alignof(std::max_align_t), bytes);
 #else
     return std::malloc(bytes);
@@ -25,7 +25,7 @@ void* AllocateThrown(std::size_t bytes) {
 }
 
 void FreeThrown(void* storage) {
-#ifdef ANYPS5_GUEST_LIFTED
+#ifdef ANYPS5_TRANSLATED_GUEST
     GuestHeap::GuestHeapFree_nid_postfix(storage);
 #else
     std::free(storage);
