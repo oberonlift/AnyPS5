@@ -7,6 +7,7 @@
 #include <cstring>
 #include "prx/libSceAvPlayer/include/AvPlayer.hpp"
 #include "prx/libc/include/General.hpp"
+#include "prx/libc/include/GuestArena.hpp"
 #include "prx/libc/include/GuestHeap.hpp"
 
 namespace AvPlayer {
@@ -22,15 +23,15 @@ bool SameLanguage(const char* preferred, const char* code) {
 }
 
 void* APS5_VABI GuestAllocate_nid_no_patch(void*, std::uint32_t alignment, std::uint32_t size) {
-    return GuestHeap::GuestHeapAlign_nid_postfix(std::max<std::uint32_t>(alignment, 16), size);
+    return reinterpret_cast<void*>(GuestArena::HostToGuest(GuestHeap::GuestHeapAlign_nid_postfix(std::max<std::uint32_t>(alignment, 16), size)));
 }
 
 void APS5_VABI GuestDeallocate_nid_no_patch(void*, void* memory) {
-    GuestHeap::GuestHeapFree_nid_postfix(memory);
+    GuestHeap::GuestHeapFree_nid_postfix(GuestArena::GuestToHost(reinterpret_cast<std::uint64_t>(memory)));
 }
 
 void* APS5_VABI GuestAllocateTexture_nid_no_patch(void*, std::uint32_t alignment, std::uint32_t size) {
-    return GuestHeap::GuestHeapAlignForGpu_nid_postfix(std::max<std::uint32_t>(alignment, 16), size);
+    return reinterpret_cast<void*>(GuestArena::HostToGuest(GuestHeap::GuestHeapAlignForGpu_nid_postfix(std::max<std::uint32_t>(alignment, 16), size)));
 }
 
 AvPlayerMemAllocator WithGuestHeapFallback(AvPlayerMemAllocator memory) {
@@ -143,7 +144,7 @@ void Player::deliver(const Event& event) {
     }
     if (!callback.event_callback) return;
     std::int32_t warning = event.warning;
-    callback.event_callback(callback.object_ptr, event.id, 0, event.id == EventWarningId ? &warning : nullptr);
+    callback.event_callback(callback.object_ptr, event.id, 0, event.id == EventWarningId ? reinterpret_cast<void*>(GuestArena::HostToGuest(&warning)) : nullptr);
 }
 
 bool Player::readyLocked() const {

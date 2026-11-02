@@ -695,10 +695,12 @@ void Release(void* memory, bool texture) {
     ::operator delete(memory, aligned);
 }
 
-void* APS5_VABI AllocateMemory(void*, std::uint32_t alignment, std::uint32_t size) { return Allocate(alignment, size, false); }
-void APS5_VABI DeallocateMemory(void*, void* memory) { Release(memory, false); }
-void* APS5_VABI AllocateTexture(void*, std::uint32_t alignment, std::uint32_t size) { return Allocate(alignment, size, true); }
-void APS5_VABI DeallocateTexture(void*, void* memory) { Release(memory, true); }
+void* GuestForm(void* memory) { return reinterpret_cast<void*>(GuestArena::HostToGuest(memory)); }
+void* HostForm(void* memory) { return GuestArena::GuestToHost(reinterpret_cast<std::uint64_t>(memory)); }
+void* APS5_VABI AllocateMemory(void*, std::uint32_t alignment, std::uint32_t size) { return GuestForm(Allocate(alignment, size, false)); }
+void APS5_VABI DeallocateMemory(void*, void* memory) { Release(HostForm(memory), false); }
+void* APS5_VABI AllocateTexture(void*, std::uint32_t alignment, std::uint32_t size) { return GuestForm(Allocate(alignment, size, true)); }
+void APS5_VABI DeallocateTexture(void*, void* memory) { Release(HostForm(memory), true); }
 
 bool IsAllocation(const void* memory, bool texture) {
     std::lock_guard lock(allocations.mutex);
@@ -748,7 +750,7 @@ void APS5_VABI OnEvent(void* object, std::int32_t id, std::int32_t source, void*
         events->stopAt = std::chrono::steady_clock::now();
         events->hasStop = true;
     }
-    events->received.emplace_back(id, id == EventWarning ? *static_cast<std::int32_t*>(data) : 0);
+    events->received.emplace_back(id, id == EventWarning ? *static_cast<std::int32_t*>(HostForm(data)) : 0);
 }
 
 void APS5_VABI OnLog(void*, const char*) {}
@@ -760,7 +762,7 @@ struct HostFile {
 
 std::int32_t APS5_VABI OpenFile(void* object, const char* path) {
     auto* file = static_cast<HostFile*>(object);
-    if (std::strcmp(path, "/app0/replaced.mp4") != 0) return -1;
+    if (std::strcmp(static_cast<const char*>(HostForm(const_cast<char*>(path))), "/app0/replaced.mp4") != 0) return -1;
     file->stream.open(MoviePath, std::ios::binary);
     file->size = std::filesystem::file_size(MoviePath);
     return file->stream ? 0 : -1;
@@ -775,7 +777,7 @@ std::int32_t APS5_VABI ReadFile(void* object, std::uint8_t* buffer, std::uint64_
     auto* file = static_cast<HostFile*>(object);
     file->stream.clear();
     file->stream.seekg(static_cast<std::streamoff>(position));
-    file->stream.read(reinterpret_cast<char*>(buffer), length);
+    file->stream.read(static_cast<char*>(HostForm(buffer)), length);
     return static_cast<std::int32_t>(file->stream.gcount());
 }
 

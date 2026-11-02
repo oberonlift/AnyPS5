@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: Copyright 2024-2026 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include "prx/libc/include/GuestArena.hpp"
 #include "prx/libSceAvPlayer/include/AvPlayer.hpp"
 #include "prx/libSceAvPlayer/include/HttpStream.hpp"
 #include "prx/libc/include/General.hpp"
@@ -76,6 +77,14 @@ float SampleAspect(AVRational sampleAspect) {
     return HasAspect(sampleAspect) ? static_cast<float>(av_q2d(sampleAspect)) : 0.0f;
 }
 
+void* HostBuffer(void* buffer) {
+    return GuestArena::GuestToHost(reinterpret_cast<std::uint64_t>(buffer));
+}
+
+void* GuestBuffer(void* buffer) {
+    return reinterpret_cast<void*>(GuestArena::HostToGuest(buffer));
+}
+
 class FileReplacementStream {
 public:
     explicit FileReplacementStream(const AvPlayerFileReplacement& callbacks) : file(callbacks) {}
@@ -92,7 +101,7 @@ public:
     FileReplacementStream& operator=(const FileReplacementStream&) = delete;
 
     bool Open(const std::string& path) {
-        if (file.open(file.object_ptr, path.c_str()) < 0) return false;
+        if (file.open(file.object_ptr, reinterpret_cast<const char*>(GuestArena::HostToGuest(path.c_str()))) < 0) return false;
         opened = true;
         size = file.size(file.object_ptr);
         auto* buffer = static_cast<std::uint8_t*>(av_malloc(AvioBufferSize));
@@ -109,7 +118,7 @@ private:
         auto* self = static_cast<FileReplacementStream*>(opaque);
         if (self->position >= self->size) return AVERROR_EOF;
         const auto length = static_cast<std::uint32_t>(std::min<std::uint64_t>(static_cast<std::uint64_t>(size), self->size - self->position));
-        const auto read = self->file.read_offset(self->file.object_ptr, buffer, self->position, length);
+        const auto read = self->file.read_offset(self->file.object_ptr, reinterpret_cast<std::uint8_t*>(GuestArena::HostToGuest(buffer)), self->position, length);
         if (read < 0) return AVERROR(EIO);
         if (read == 0) return AVERROR_EOF;
         self->position += static_cast<std::uint64_t>(read);
@@ -732,7 +741,7 @@ private:
         }
         const auto& memory = settings.memory;
         for (std::uint32_t index = 0; index < count; ++index) {
-            void* buffer = texture ? memory.allocate_texture(memory.object_ptr, alignment, decoder.bufferSize) : memory.allocate(memory.object_ptr, alignment, decoder.bufferSize);
+            void* buffer = HostBuffer(texture ? memory.allocate_texture(memory.object_ptr, alignment, decoder.bufferSize) : memory.allocate(memory.object_ptr, alignment, decoder.bufferSize));
             if (!buffer) return SCE_AVPLAYER_ERROR_NO_MEMORY;
             decoder.allocated.push_back(static_cast<std::uint8_t*>(buffer));
             decoder.free.push_back(static_cast<std::uint8_t*>(buffer));
@@ -751,10 +760,10 @@ private:
         std::vector<std::uint8_t*> extra;
         extra.reserve(count);
         for (std::uint32_t index = 0; index < count; ++index) {
-            auto* buffer = static_cast<std::uint8_t*>(memory.allocate_texture(
-                memory.object_ptr, VideoBufferAlignment, video.bufferSize));
+            auto* buffer = static_cast<std::uint8_t*>(HostBuffer(memory.allocate_texture(
+                memory.object_ptr, VideoBufferAlignment, video.bufferSize)));
             if (!buffer) {
-                for (auto* allocated : extra) memory.deallocate_texture(memory.object_ptr, allocated);
+                for (auto* allocated : extra) memory.deallocate_texture(memory.object_ptr, GuestBuffer(allocated));
                 return false;
             }
             extra.push_back(buffer);
@@ -778,9 +787,9 @@ private:
             decoder->free.clear();
             for (auto* buffer : decoder->allocated) {
                 if (decoder->video) {
-                    memory.deallocate_texture(memory.object_ptr, buffer);
+                    memory.deallocate_texture(memory.object_ptr, GuestBuffer(buffer));
                 } else {
-                    memory.deallocate(memory.object_ptr, buffer);
+                    memory.deallocate(memory.object_ptr, GuestBuffer(buffer));
                 }
             }
             decoder->allocated.clear();
