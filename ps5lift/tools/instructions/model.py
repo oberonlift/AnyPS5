@@ -4,8 +4,11 @@ A `Model` describes one form: its operands with their categories, register kinds
 its shape; whether it is an SSE or AVX floating-point form, an x87 form or an MMX form; whether it accesses memory or
 the stack; and its `Input`s. An input is one value a case chooses, with the `Values` it is drawn from and how it is set
 in a case. Every read operand is an input, and so are the flags (which count toward the number of base cases only when
-the form tests them). A `Rule` adds what one mnemonic needs: registers that hold addresses, inputs of its own, a step
-that runs after the inputs are set, extra cases, and the width of its memory access where the database's differs."""
+the form tests them). An implicit register is either an input or state that the code shape, the MXCSR states or the
+host sets (rip, mxcsr, xcr0); any other name is an error. A form that reads MXCSR is a floating-point form like one with
+a floating-point element. A `Rule` adds what one mnemonic needs: registers that hold addresses, inputs of its own, a
+step that runs after the inputs are set, extra cases on top of given base cases, and the width of its memory access
+where the database's differs."""
 import enum
 from dataclasses import dataclass
 from typing import Optional
@@ -63,6 +66,9 @@ _X87_PUSHES = frozenset("fld fild fbld fld1 fldl2t fldl2e fldpi fldlg2 fldln2 fl
 _TESTED_FLAGS = frozenset(name.lower() for name in records.FLAG_NAMES)
 _X87_BITS = 80
 _FAMILY_BITS = {"vector": 256, "mmx": 64, "st": _X87_BITS}
+_VALUELESS_FAMILIES = frozenset({"bnd"})
+_RULE_MEMORY_BASES = frozenset({"si", "di", "bx"})
+_STATE_REGISTERS = frozenset({"rip", "mxcsr", "xcr0"})
 _BYTE_SHIFT_WIDTH = 16
 
 _BYTE_IMMEDIATES = (0x00, 0x01, 0x1B, 0x4E, 0x55, 0x7F, 0x80, 0xAA, 0xE4, 0xFF)
@@ -130,8 +136,15 @@ LOCATIONS = _locations()
 
 
 def register_key(name):
-    location = LOCATIONS.get(name)
-    return None if location is None else location[:2]
+    return LOCATIONS[name][:2]
+
+
+def register_location(form, name):
+    if name in _STATE_REGISTERS:
+        return None
+    if name not in LOCATIONS:
+        raise CaseError(f"{form.key}: no rule for register {name!r}")
+    return LOCATIONS[name]
 
 
 def family(kind):
@@ -210,7 +223,11 @@ class Model:
         self.x87 = not self.mmx and (
             definition.extension == "X87" or bool(elements & _X87_ELEMENTS) or bool(definition.flags & _X87_STATE_FLAGS)
         )
-        self.floating = not self.x87 and bool(elements & set(FLOAT_BITS))
+        reads_mxcsr = any(
+            operand.reads and operand.category == "implicit_reg" and self.implicit_name(operand) == "mxcsr"
+            for operand in self.operands
+        )
+        self.floating = not self.x87 and (bool(elements & set(FLOAT_BITS)) or reads_mxcsr)
         self.vex = definition.encoding == "vex"
         self.accesses_memory = definition.category not in _NO_ACCESS_CATEGORIES and bool(types & _MEMORY_TYPES)
         self.stack = any(operand.spec.get("mem_base") == "sp" for operand in self.operands) or any(
@@ -244,10 +261,13 @@ class Model:
     def implicit_name(self, operand):
         return implicit_register(self.form, operand.spec["register"], self.operand_size, self.address_size)
 
+    def implicit_location(self, operand):
+        return register_location(self.form, self.implicit_name(operand))
+
     def _implicit_gpr(self, operand):
         if operand.category != "implicit_reg":
             return None
-        location = LOCATIONS.get(self.implicit_name(operand))
+        location = self.implicit_location(operand)
         return location[1] if location is not None and location[0] == "gpr" else None
 
     def _pins(self):
@@ -263,9 +283,9 @@ class Model:
             yield ("gpr", number)
         for operand in self.operands:
             if operand.category == "implicit_reg":
-                key = register_key(self.implicit_name(operand))
-                if key is not None:
-                    yield key
+                location = self.implicit_location(operand)
+                if location is not None:
+                    yield location[:2]
 
     def _supplements(self):
         if "cvt" not in self.mnemonic and not self.mnemonic.startswith(("fist", "fst")):
@@ -394,11 +414,21 @@ def _immediate_values(model, operand, number):
     return choice_values(edges)
 
 
-def _register_values(model, operand, register_family, gpr_bits):
+def _register_inputs(model, operand, name, register_family, gpr_bits):
+    if register_family in _VALUELESS_FAMILIES:
+        return []
     if register_family == "gpr":
-        return model.lane_values(operand, gpr_bits, scalar=True)
-    bits = _FAMILY_BITS.get(register_family)
-    return None if bits is None else model.lane_values(operand, bits)
+        values = model.lane_values(operand, gpr_bits, scalar=True)
+    elif register_family in _FAMILY_BITS:
+        values = model.lane_values(operand, _FAMILY_BITS[register_family])
+    else:
+        raise CaseError(f"{model.form.key}: no rule for the values of a {register_family} register")
+    return [Input(name, values, set_operand(operand.position), True)]
+
+
+def _needs_rule(model, part, step):
+    if step is None:
+        raise CaseError(f"{model.form.key}: no rule gives {part} its values")
 
 
 def _set_address_register(choice, part):
@@ -423,16 +453,17 @@ def _operand_inputs(model, operand):
     if model.shape in (Shape.CALL, Shape.INDIRECT_JUMP) and operand.choice is not None:
         return []
     if category == "register":
-        values = _register_values(model, operand, family(operand.kind), REGISTER_BITS.get(operand.kind))
-        if values is None:
-            return []
-        return [Input(f"operand {operand.choice}", values, set_operand(operand.position), True)]
+        name = f"operand {operand.choice}"
+        return _register_inputs(model, operand, name, family(operand.kind), REGISTER_BITS.get(operand.kind))
     if category == "memory":
         if model.mnemonic == "lea":
             values = integer_values(model.address_size)
             return [Input(f"operand {operand.choice} {part}", values, _set_address_register(operand.choice, part), True)
                     for part in ("base", "index")]
-        if not model.accesses_memory or spec["operand_type"] in VSIB_KINDS or spec.get("element_type") == "struct":
+        if not model.accesses_memory:
+            return []
+        if spec["operand_type"] in VSIB_KINDS or spec.get("element_type") == "struct":
+            _needs_rule(model, f"its {spec['operand_type']} operand {operand.choice}", model.rule.inputs)
             return []
         values = model.lane_values(operand, model.operand_bits(operand))
         return [Input(f"operand {operand.choice}", values, set_operand(operand.position), True)]
@@ -440,18 +471,20 @@ def _operand_inputs(model, operand):
         values = integer_values(model.operand_bits(operand))
         return [Input(f"operand {operand.choice}", values, set_operand(operand.position), True)]
     if category == "implicit_reg":
-        name = model.implicit_name(operand)
-        location = LOCATIONS.get(name)
+        location = model.implicit_location(operand)
         if location is None or (location[0] == "gpr" and location[1] in model.pins):
             return []
         gpr_bits = location[3] if location[0] == "gpr" else None
-        values = _register_values(model, operand, location[0], gpr_bits)
-        return [] if values is None else [Input(name, values, set_operand(operand.position), True)]
+        return _register_inputs(model, operand, model.implicit_name(operand), location[0], gpr_bits)
     if category == "implicit_mem":
-        if spec["mem_base"] not in ("sp", "bp") or model.shape is Shape.RETURN:
+        base = spec["mem_base"]
+        if model.shape is Shape.RETURN:
+            return []
+        if base in _RULE_MEMORY_BASES:
+            _needs_rule(model, f"its [{base}] operand", model.rule.case)
             return []
         values = integer_values(8 * spec[f"width{model.operand_size}"])
-        return [Input(f"[{spec['mem_base']}]", values, set_operand(operand.position), True)]
+        return [Input(f"[{base}]", values, set_operand(operand.position), True)]
     raise CaseError(f"{model.form.key}: no rule for the values of a {category} operand")
 
 

@@ -11,12 +11,16 @@ decode, and numbers the instances of each test group from 0.
 
 Cases. The primary's base cases number E, the longest edge list among its inputs (`model`). In case i, input k
 takes edge (i + k) mod n_k, and lane j of a vector input takes edge (i + k + j) mod n. Four seeded random cases follow.
-SSE and AVX floating-point instances run their base cases under each of the 13 `MXCSR_STATES`, and an FTZ-only or
-DAZ-only case names the console-state case with the same inputs as its twin. x87 instances cycle TOP, the tags,
-precision and rounding, the exception masks and pending exceptions through their cases, and add an all-empty, an
-all-valid and a pending-unmasked case. A form that accesses memory adds, for each memory operand, a case misaligned by
-one, one that ends at the block's end and one that crosses into the guard by one byte. Each variant runs base case 0
-and one random case. `_RULES` is the table of what particular mnemonics need of their inputs.
+SSE and AVX floating-point instances, and those that read MXCSR, run their base cases under each of the 13
+`MXCSR_STATES`, and an FTZ-only or DAZ-only case names the console-state case with the same inputs as its twin. x87
+instances cycle TOP, the tags, precision and rounding, the exception masks and pending exceptions through their base
+cases, of which they have at least as many as the longest of those cycles, and add an all-empty, an all-valid and a
+pending-unmasked case. A form that accesses memory adds, for each memory operand, a case misaligned by one, one that
+ends at the block's end and one that crosses into the guard by one byte; for an operand that must be aligned (XED's
+REQUIRES_ALIGNMENT), which cannot cross a page, that last case is an aligned access at the guard's first byte. A return
+gets none of these: the code that calls it writes the stack slot it reads first. Each variant runs base case 0 and one
+random case. `_RULES` is the table of what particular mnemonics need of their inputs, including extra cases built on
+given base cases.
 
 Values are symbolic where they are addresses: a `BlockOffset` is an offset in the memory block, displacements name the
 block as `BLOCK`, and a fixup stores the address of `TARGET`, the instance's branch target, in a register (which holds 0
@@ -58,6 +62,7 @@ from .model import (
     family,
     keep,
     register_key,
+    register_location,
     set_operand,
     signed,
 )
@@ -129,6 +134,8 @@ _X87_INVALID = 0x01
 _X87_CONDITION_BITS = (8, 9, 10, 14)
 _X87_LOW_HALF = 0x0F
 _X87_OVERRIDES = ("empty", "full", "pending")
+_X87_CYCLE = max(8, len(_X87_CONTROLS), len(_X87_MASKS), len(_X87_PENDING))
+_REQUIRES_ALIGNMENT = "REQUIRES_ALIGNMENT"
 _MMX_EXPONENT = 0xFFFF << 64
 _ALL_LANES = bytes([0xFF]) * 32
 
@@ -459,17 +466,29 @@ def _variants(model, primary, immediates):
     yield from _addressing_variants(model, immediates)
 
 
-def _memory_specials(width):
+def _memory_specials(width, aligned):
     misaligned, block_end, crossing = _MEMORY_SPECIAL_ROLES
     specials = [(misaligned, None)] if width > 1 else []
-    return specials + [(block_end, records.BLOCK_SIZE - width), (crossing, records.BLOCK_SIZE - width + 1)]
+    crossing_offset = records.BLOCK_SIZE if aligned else records.BLOCK_SIZE - width + 1
+    return specials + [(block_end, records.BLOCK_SIZE - width), (crossing, crossing_offset)]
+
+
+def _requires_alignment(model, operand):
+    attributes = model.definition.xed_attributes
+    if attributes is None:
+        raise CaseError(f"{model.form.key}: its row has no XED record to say whether it requires alignment")
+    return operand.choice is not None and _REQUIRES_ALIGNMENT in attributes
+
+
+def _base_case_count(model):
+    return max(model.base_cases, _X87_CYCLE) if model.x87 else model.base_cases
 
 
 def _moffs_plans(model, primary):
     moffs = [operand for operand in model.explicit if operand.category == "moffs"]
     if not moffs or not model.accesses_memory:
         return
-    for role, offset in _memory_specials(model.memory_width(moffs[0])):
+    for role, offset in _memory_specials(model.memory_width(moffs[0]), _requires_alignment(model, moffs[0])):
         address = Mem(None, displacement=_block_expression(_MEMORY + 1 if offset is None else offset),
                       displacement_size=model.address_size)
         operands = tuple(address if op.category == "moffs" else choice for op, choice in zip(model.explicit, primary))
@@ -477,7 +496,8 @@ def _moffs_plans(model, primary):
 
 
 def _plans(model):
-    family_immediates = list(dict.fromkeys(model.immediates_for(case) for case in range(model.base_cases)))
+    cases = range(_base_case_count(model))
+    family_immediates = list(dict.fromkeys(model.immediates_for(case) for case in cases))
     plans = [("primary", _assign(model, {}, immediates, _Options()), ()) for immediates in family_immediates]
     if any(operands is None for _, operands, _ in plans):
         raise CaseError(f"{model.form.key}: its filters leave the primary instance no free register")
@@ -549,11 +569,11 @@ class _Layout:
         if operand.choice is not None:
             choice = self.instance.operands[operand.choice]
             if isinstance(choice, Reg):
-                self.locations[operand.position] = LOCATIONS.get(choice.name)
+                self.locations[operand.position] = register_location(self.model.form, choice.name)
             elif isinstance(choice, Mem) and self.model.mnemonic != "lea":
                 self._locate_memory(operand, choice)
         elif operand.category == "implicit_reg":
-            self.locations[operand.position] = LOCATIONS.get(self.model.implicit_name(operand))
+            self.locations[operand.position] = self.model.implicit_location(operand)
         elif operand.category == "implicit_mem":
             self._locate_implicit_memory(operand)
 
@@ -900,7 +920,7 @@ def _form_specs(model, members, first_index):
         specs.append(_spec(case, first_index + len(specs), twin))
         return specs[-1].index
 
-    count = model.base_cases
+    count = _base_case_count(model)
     console = {}
     for mxcsr in MXCSR_STATES if model.floating else (CONSOLE_MXCSR,):
         for case in range(count):
@@ -914,16 +934,18 @@ def _form_specs(model, members, first_index):
             add(_build(first, (_X87_CASE, number), base=0, x87=override))
     for number in range(_RANDOM_CASES):
         add(_build(primaries[number % len(primaries)], (_RANDOM, number), state=count + number))
-    if model.accesses_memory:
+    if model.accesses_memory and model.shape is not Shape.RETURN:
         for position, kind in first.accesses.items():
             width = first.widths[position]
             if kind == "fixed" or not width:
                 continue
-            for number, (_, offset) in enumerate(_memory_specials(width)):
+            specials = _memory_specials(width, _requires_alignment(model, model.operands[position]))
+            for number, (_, offset) in enumerate(specials):
                 offset = first.targets[position] + 1 if offset is None else offset
                 add(_build(first, (_MEMORY_CASE, position, number), base=0, special=(position, offset)))
-    for number, extra in enumerate(model.rule.extras(model)):
-        add(_build(first, (_EXTRA_CASE, number), base=0, extra=extra))
+    for number, (case, extra) in enumerate(model.rule.extras(model)):
+        layout = by_immediates[model.immediates_for(case)]
+        add(_build(layout, (_EXTRA_CASE, number), base=case, state=case, extra=extra))
     for layout in layouts:
         if layout.instance.role == "primary":
             continue
@@ -1116,13 +1138,11 @@ def _division_overflow(case):
 
 
 def _division_extras(model):
-    return (_division_overflow,)
+    return ((0, _division_overflow),)
 
 
-def _exchange_case(case):
+def _exchange_equal(case):
     model = case.model
-    if (case.base if case.base is not None else case.random.below(2)) % 2:
-        return
     bits = model.operand_bits(model.explicit[0])
     value = case.value_of(model.position(0), bits)
     if model.mnemonic == "cmpxchg":
@@ -1131,6 +1151,10 @@ def _exchange_case(case):
     half = bits // 2
     case.set_gpr(0, 0, half, value)
     case.set_gpr(2, 0, half, value >> half)
+
+
+def _exchange_extras(model):
+    return tuple((case, _exchange_equal) for case in range(model.base_cases))
 
 
 def _cpuid_inputs(model, inputs):
@@ -1285,7 +1309,7 @@ def _bit_past_block(case):
 
 
 def _bit_test_extras(model):
-    return (_bit_past_block,) if _bit_offset_in_memory(model) else ()
+    return ((0, _bit_past_block),) if _bit_offset_in_memory(model) else ()
 
 
 def _vsib_operand(model):
@@ -1354,7 +1378,7 @@ _RULES = {
     **{mnemonic: _COUNTER_RULE for mnemonic in ("loop", "loope", "loopne", "jrcxz", "jecxz")},
     "div": _DIVISION_RULE,
     "idiv": _DIVISION_RULE,
-    **{mnemonic: Rule(case=_exchange_case) for mnemonic in ("cmpxchg", "cmpxchg8b", "cmpxchg16b")},
+    **{mnemonic: Rule(extras=_exchange_extras) for mnemonic in ("cmpxchg", "cmpxchg8b", "cmpxchg16b")},
     "cpuid": Rule(inputs=_cpuid_inputs),
     "xgetbv": Rule(inputs=_xgetbv_inputs),
     **{mnemonic: Rule(inputs=_xsave_inputs, case=_xsave_case, access_width=_XSAVE_FULL) for mnemonic in _XSAVE_FAMILY},

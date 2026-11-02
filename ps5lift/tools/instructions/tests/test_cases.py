@@ -1,5 +1,7 @@
+import dataclasses
 import os
 import re
+import struct
 import subprocess
 import tempfile
 import unittest
@@ -20,6 +22,10 @@ XSAVE_FAMILY = frozenset("xsave xsave64 xsavec xsavec64 xsaveopt xsaveopt64 xrst
 CONSOLE_XSAVE_SIZE = 0x340
 NO_ACCESS_CATEGORIES = frozenset({"PREFETCH", "WIDENOP", "NOP", "CLDEMOTE", "PREFETCHWT1", "MPX"})
 MEMORY_TYPES = frozenset({"mem", "mem_vsibx", "mem_vsiby", "moffs", "implicit_mem"})
+X87_ELEMENTS = frozenset({"float80", "bcd80"})
+X87_STATE_FLAGS = frozenset({"fpu_state_cr", "fpu_state_cw"})
+X87_CONTROL_PAIRS = frozenset((precision, rounding) for precision in (0, 2, 3) for rounding in range(4))
+STACK_MARGIN = 512
 IMPLICIT_BASES = {"si": 6, "di": 7, "bx": 3, "bp": 5, "sp": 4}
 MASK64 = 2**64 - 1
 
@@ -93,6 +99,15 @@ def _accesses_memory(form):
     )
 
 
+def _is_x87(form):
+    definition = form.definition
+    types = {operand["operand_type"] for operand in definition.operands}
+    elements = {operand.get("element_type") for operand in definition.operands}
+    if definition.extension == "MMX" or "mmx" in types:
+        return False
+    return definition.extension == "X87" or bool(elements & X87_ELEMENTS) or bool(definition.flags & X87_STATE_FLAGS)
+
+
 def _operand_size(instance):
     return instance.form.operand_size or 64
 
@@ -120,7 +135,7 @@ def _access_ranges(instance, spec):
                     lane_bits = 32 if definition.mnemonic[len("v"):].startswith(("gatherd", "pgatherd")) else 64
                     index = _lane(spec.vectors[int(choice.index[3:])], 0, lane_bits)
                     start += (index - (1 << lane_bits) if index >> lane_bits - 1 else index) * choice.scale
-            ranges.append((start & MASK64, (start + width) & MASK64))
+            ranges.append((start & MASK64, (start + width) & MASK64, True))
         elif operand_type == "implicit_mem":
             base = operand["mem_base"]
             address = _resolve(gprs[IMPLICIT_BASES[base]])
@@ -128,7 +143,7 @@ def _access_ranges(instance, spec):
                 address += gprs[0] & 0xFF
             if base == "sp" and "write" in operand.get("action", ""):
                 address -= width
-            ranges.append((address, address + width))
+            ranges.append((address, address + width, False))
     return ranges
 
 
@@ -187,6 +202,16 @@ class CasesTest(unittest.TestCase):
                 self.assertTrue(any(_is_nan(value, 32, 8, True) for value in seen))
                 self.assertTrue(any(_is_nan(value, 32, 8, False) for value in seen))
 
+        cmpxchg = self.form("cmpxchg", 64, opcode=0xB1, modrm_mod="3")
+        (instance,) = [instance for instance in self.instances_of(cmpxchg) if instance.role == "primary"]
+        cmpxchg_specs = self.primary_specs(cmpxchg)
+        for name in [operand.name for operand in instance.operands] + ["rax"]:
+            seen = {spec.gprs[records.GPR_NAMES.index(name)] for spec in cmpxchg_specs}
+            self.assert_covers(seen, _integer_edges(64), f"cmpxchg {name}")
+            self.assert_covers(seen, set(values.integer_edges(64)), f"cmpxchg {name}")
+        destination = records.GPR_NAMES.index(instance.operands[0].name)
+        self.assertTrue(any(spec.gprs[0] == spec.gprs[destination] for spec in cmpxchg_specs), "no equal compare")
+
         cvttss2si = self.form("cvttss2si", modrm_mod="3", rex_w="0")
         (instance,) = [instance for instance in self.instances_of(cvttss2si) if instance.role == "primary"]
         source = int(instance.operands[1].name[len("xmm"):])
@@ -203,6 +228,9 @@ class CasesTest(unittest.TestCase):
         expected |= {0x1F80 & ~(1 << bit) for bit in range(7, 13)}
         self.assertEqual(len(expected), 13)
         self.assertEqual(states, expected)
+        for mnemonic in ("stmxcsr", "vstmxcsr"):
+            reads_mxcsr = self.form(mnemonic)
+            self.assertEqual({spec.mxcsr for spec in self.primary_specs(reads_mxcsr)}, expected, mnemonic)
         add = self.form("add", 64, opcode=0x03, modrm_mod="3")
         self.assertEqual({spec.mxcsr for spec in self.specs_of(add)}, {CONSOLE_MXCSR})
 
@@ -224,14 +252,66 @@ class CasesTest(unittest.TestCase):
 
     def test_crossing_case_per_memory_form(self):
         forms, instances, specs = generated()
-        crossing = set()
+        crossing, straddling = set(), set()
         for group, group_specs in specs.items():
             for spec in group_specs:
                 instance = instances[group][spec.instance]
-                if any(end == records.BLOCK_SIZE + 1 for _, end in _access_ranges(instance, spec)):
-                    crossing.add(instance.form.key)
-        missing = [form.key for form in forms if _accesses_memory(form) and form.key not in crossing]
+                aligned = "REQUIRES_ALIGNMENT" in instance.form.definition.xed_attributes
+                for start, end, explicit in _access_ranges(instance, spec):
+                    if aligned and explicit:
+                        if start == records.BLOCK_SIZE:
+                            crossing.add(instance.form.key)
+                        if start < records.BLOCK_SIZE < end:
+                            straddling.add(instance.form.key)
+                    elif end == records.BLOCK_SIZE + 1:
+                        crossing.add(instance.form.key)
+        returns = {form.key for form in forms if form.definition.category == "RET"}
+        missing = [form.key for form in forms if _accesses_memory(form) and form.key not in crossing | returns]
         self.assertEqual(missing, [])
+        self.assertEqual(sorted(straddling), [], "an access that must be aligned cannot cross a page")
+        self.assertGreater(len({key for key in crossing if "REQUIRES_ALIGNMENT" in self.xed(key)}), 0)
+
+    def xed(self, key):
+        return next(form for form in generated()[0] if form.key == key).definition.xed_attributes
+
+    def test_return_has_no_memory_cases(self):
+        _, instances, specs = generated()
+        checked = 0
+        for group, group_specs in specs.items():
+            for spec in group_specs:
+                instance = instances[group][spec.instance]
+                if instance.shape is not cases.Shape.RETURN:
+                    continue
+                for start, end, _ in _access_ranges(instance, spec):
+                    checked += 1
+                    within = STACK_MARGIN <= start and end <= records.BLOCK_SIZE - STACK_MARGIN and start % 8 == 0
+                    self.assertTrue(within, f"case {spec.index} of {instance.form.key} reads [{start}, {end})")
+        self.assertGreater(checked, 0)
+
+    def test_x87_base_cases_cover_the_cycle(self):
+        forms, instances, specs = generated()
+        checked = 0
+        for group, group_specs in specs.items():
+            schedules = defaultdict(list)
+            for spec in group_specs:
+                schedules[instances[group][spec.instance].form.key].append(spec)
+            for key, schedule in schedules.items():
+                if not _is_x87(instances[group][schedule[0].instance].form):
+                    continue
+                checked += 1
+                states = [struct.unpack_from("<HH", spec.x87, 0) for spec in schedule[:len(X87_CONTROL_PAIRS)]]
+                self.assertEqual({status >> 11 & 7 for _, status in states}, set(range(8)), key)
+                controls = {(control >> 8 & 3, control >> 10 & 3) for control, _ in states}
+                self.assertEqual(controls, X87_CONTROL_PAIRS, key)
+        self.assertGreater(checked, 0)
+
+    def test_unknown_implicit_register_names_the_form(self):
+        cpuid = self.form("cpuid")
+        unknown = {"operand_type": "implicit_reg", "register": "xyz", "visible": False}
+        definition = dataclasses.replace(cpuid.definition, operands=cpuid.definition.operands + (unknown,))
+        form = database.Form(definition, cpuid.operand_size, cpuid.key)
+        with self.assertRaisesRegex(cases.CaseError, rf"^{re.escape(cpuid.key)}: .*'xyz'"):
+            cases.instances([form], decoder.from_environment())
 
     def test_xsave_masks_within_console_components(self):
         forms, instances, specs = generated()
