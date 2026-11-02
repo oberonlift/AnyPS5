@@ -428,6 +428,7 @@ GUEST_POINTER_SLOTS = {
     **{name: (1,) for name in ("strtol", "strtoul", "strtoll", "strtoull", "strtoimax", "strtoumax", "strtod", "strtof", "strtold", "wcstol", "wcstoul", "wcstoll",
                                "wcstoull", "wcstod", "wcstof", "wcstold", "_Stoul", "_Stoull", "_Stoll", "_Stod", "_Stof", "_Stold", "_Stodx", "_Stofx", "_Stoldx")},
     "strtok_r": (2,), "strsep": (0,), "posix_memalign": (0,), "pthread_attr_getstack": (1,), "pthread_attr_getstackaddr": (1,),
+    "sceKernelDlsym": (2,),
     "scePthreadAttrGetstack": (1,), "scePthreadAttrGetstackaddr": (1,), "sceKernelMapDirectMemory": (0,), "sceKernelMapDirectMemory2": (0,),
     "sceKernelMapNamedDirectMemory": (0,), "sceKernelMapFlexibleMemory": (0,), "sceKernelMapNamedFlexibleMemory": (0,),
     "sceKernelMapNamedSystemFlexibleMemory": (0,), "sceKernelReserveVirtualRange": (0,), "sceKernelMmap": (6,),
@@ -1151,7 +1152,7 @@ KERNEL_IMPORTS = ["printf", "exit", "scePthreadCreate", "scePthreadJoin", "scePt
                   "scePthreadMutexDestroy", "sceKernelUsleep", "sceKernelGetProcessTime", "sceKernelReadTsc", "sceKernelGetTscFrequency", "signal", "raise",
                   "sigprocmask", "sigsetjmp", "siglongjmp", "scePthreadExit",
                   "scePthreadAttrInit", "scePthreadAttrDestroy", "scePthreadAttrSetstacksize", "scePthreadAttrGet", "scePthreadAttrGetstack", "scePthreadSelf",
-                  "sceKernelInstallExceptionHandler", "sceKernelRemoveExceptionHandler", "sceKernelRaiseException",
+                  "sceKernelInstallExceptionHandler", "sceKernelRemoveExceptionHandler", "sceKernelRaiseException", "dlsym",
                   "sceKernelLoadStartModule", "sceKernelDlsym", "sceKernelGetModuleInfoFromAddr", "sceKernelGetModuleInfoForUnwind",
                   "scePthreadAttrSetcreatesuspend", "scePthreadResume", "sceKernelMprotect"]
 FIBER_IMPORTS = ["printf", "fflush", "exit", "_sceFiberInitializeImpl", "sceFiberFinalize", "sceFiberRun", "sceFiberSwitch", "sceFiberReturnToThread", "sceFiberGetSelf",

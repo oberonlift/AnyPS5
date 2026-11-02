@@ -1,6 +1,7 @@
 #include "prx/libkernel/include/Api.hpp"
 #include "prx/libc/include/General.hpp"
 #include "prx/libc/include/GuestAllocations.hpp"
+#include "prx/libc/include/GuestArena.hpp"
 #include "prx/libc/include/GuestCpu.hpp"
 #include "prx/libkernel/Module/ModuleArgs.hpp"
 #include <nid/NidCompute.hpp>
@@ -142,7 +143,7 @@ std::uintptr_t nextHandle = 0x20000000;
 std::map<const void*, std::uintptr_t> imageIds;
 void* Symbol(Module& module, const char* name) {
 #ifdef ANYPS5_GUEST_LIFTED
-    if (module.image) return reinterpret_cast<void*>(GuestCpuImageSymbol_nid_no_patch(*module.image, name));
+    if (module.image) return GuestArena::GuestToHost(GuestCpuImageSymbol_nid_no_patch(*module.image, name));
 #endif
 #ifdef _WIN32
     return reinterpret_cast<void*>(GetProcAddress(static_cast<HMODULE>(module.native), name));
@@ -152,7 +153,7 @@ void* Symbol(Module& module, const char* name) {
 }
 #ifdef ANYPS5_GUEST_LIFTED
 void* DefaultScopeSymbol(const char* symbolName) {
-    return reinterpret_cast<void*>(GuestCpuImageSymbol_nid_no_patch(0, symbolName));
+    return GuestArena::GuestToHost(GuestCpuImageSymbol_nid_no_patch(0, symbolName));
 }
 #elif defined(__APPLE__)
 bool FromGuestModule(void* address) {
@@ -272,7 +273,7 @@ void RunGuestLifecycle(std::uint64_t* table, Start start, Initialize initialize)
         const auto pending = *static_cast<const PendingModuleArgs*>(__aps5_get_pending_module_args_nid_no_patch());
         const int result = table[2] == 0 ? 0 : start(table[2], pending);
         for (std::uint64_t index = 0; index < table[4]; ++index) {
-            const auto initializer = *reinterpret_cast<const std::uint64_t*>(table[8 + index]);
+            const auto initializer = *static_cast<const std::uint64_t*>(GuestArena::GuestToHost(table[8 + index]));
             if (initializer) initialize(initializer);
         }
         __aps5_set_module_init_result_nid_no_patch(result);
@@ -301,12 +302,12 @@ char* APS5_VABI dlerror_nid_postfix() {
 }
 #ifdef ANYPS5_GUEST_LIFTED
 static void InitializeLiftedGuestModule(const std::uint64_t image) {
-    auto* table = reinterpret_cast<std::uint64_t*>(GuestCpuImageSymbol_nid_no_patch(image, "__aps5_guest_lifecycle_nid_no_patch"));
+    auto* table = static_cast<std::uint64_t*>(GuestArena::GuestToHost(GuestCpuImageSymbol_nid_no_patch(image, "__aps5_guest_lifecycle_nid_no_patch")));
     if (!table) return;
     RunGuestLifecycle(
         table,
         [](const std::uint64_t entry, const PendingModuleArgs& pending) {
-            return static_cast<int>(GuestCpuCall_nid_no_patch(entry, pending.args, reinterpret_cast<std::uint64_t>(pending.argp), 0));
+            return static_cast<int>(GuestCpuCall_nid_no_patch(entry, pending.args, GuestArena::HostToGuest(pending.argp), 0));
         },
         [](const std::uint64_t initializer) { GuestCpuCall_nid_no_patch(initializer, 0, 0, 0); });
 }

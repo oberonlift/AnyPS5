@@ -16,6 +16,7 @@ int guest_remove_exception_handler(int signal) __asm__(NID_sceKernelRemoveExcept
 int guest_raise_exception(void* thread, int signal) __asm__(NID_sceKernelRaiseException);
 int guest_load_start_module(const char* name, unsigned long args, const void* argp, unsigned flags, const void* option, int* result) __asm__(NID_sceKernelLoadStartModule);
 int guest_dlsym(int module, const char* symbol, void** address) __asm__(NID_sceKernelDlsym);
+void* guest_posix_dlsym(void* handle, const char* symbol) __asm__(NID_dlsym);
 int guest_mutex_init(void** mutex, const void* attr, const char* name) __asm__(NID_scePthreadMutexInit);
 int guest_mutex_lock(void** mutex) __asm__(NID_scePthreadMutexLock);
 int guest_mutex_unlock(void** mutex) __asm__(NID_scePthreadMutexUnlock);
@@ -254,14 +255,21 @@ int main(void) {
     guest_printf("raised at a suspended thread %d, resumed %d, handled on it before its entry %d\n", raised_suspended, resumed,
                  (long)handled_first == 1 && suspended_handler_thread == suspended);
 
+    static long module_argument[2] = {30, 3};
     int started = -1;
-    const int module = guest_load_start_module("/app0/libkernelmodule.so", 0, 0, 0, 0, &started);
+    const int module = guest_load_start_module("/app0/libkernelmodule.so", 2, module_argument, 0, 0, &started);
     void* answer = 0;
     const int found = guest_dlsym(module, "kernel_module_answer", &answer);
     void* missing = 0;
     const int absent = guest_dlsym(module, "kernel_module_absent", &missing);
     guest_printf("module loaded %d started %d, dlsym %d answer %ld, absent symbol %d\n", module > 0, started, found, answer ? ((long (*)(long))answer)(6) : -1,
                  absent != 0 && missing == 0);
+    void* report = 0;
+    void* argp = 0;
+    guest_dlsym(module, "kernel_module_started", &report);
+    guest_dlsym(module, "kernel_module_argp", &argp);
+    guest_printf("module_start saw %ld, same argp %d\n", report ? ((long (*)(void))report)() : -1, argp && ((const long* (*)(void))argp)() == module_argument);
+    guest_printf("dlsym in the default scope finds the same answer %d\n", guest_posix_dlsym(0, "kernel_module_answer") == answer);
     const int recased = guest_load_start_module("/app0/LibKernelModule.SO", 0, 0, 0, 0, &started);
     void* recased_answer = 0;
     guest_printf("module found under another case %d, same answer %d\n", recased > 0,
