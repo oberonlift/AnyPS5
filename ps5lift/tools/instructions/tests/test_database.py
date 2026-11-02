@@ -28,8 +28,8 @@ class DatabaseTest(unittest.TestCase):
 
     def test_counts(self):
         in_set = [definition for definition in self.definitions if database.classify(definition) is Group.SET]
-        self.assertEqual(len(in_set), 2889)
-        self.assertEqual(len({definition.mnemonic for definition in in_set}), 923)
+        self.assertEqual(len(in_set), 2888)
+        self.assertEqual(len({definition.mnemonic for definition in in_set}), 922)
 
     def test_classify_examples(self):
         examples = [
@@ -51,6 +51,7 @@ class DatabaseTest(unittest.TestCase):
             (Group.PRIVILEGED, "wrmsr", {}),
             (Group.PRIVILEGED, "in", {"opcode": 0xE4}),
             (Group.PRIVILEGED, "rdpmc", {}),
+            (Group.PRIVILEGED, "lgdt", {}),
             (Group.PRIVILEGED, "xsaves", {"rex_w": "0"}),
             (Group.SEGMENT_TABLES, "lar", {"modrm_mod": "3"}),
             (Group.SEGMENT_TABLES, "mov", {"opcode": 0x8E, "modrm_mod": "3"}),

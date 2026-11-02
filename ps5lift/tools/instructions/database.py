@@ -16,6 +16,7 @@ PS5_EXTENSIONS = frozenset({
 
 KNC_EXTENSIONS = frozenset({"KNC", "KNCE", "KNCV"})
 HINT_OPCODES = frozenset({0x0D, *range(0x18, 0x20)})
+UNMARKED_CPL0_MNEMONICS = frozenset({"lgdt"})
 IO_MNEMONICS = frozenset("in out insb insw insd outsb outsw outsd cli sti rdpmc".split())
 SEGMENT_TABLE_MNEMONICS = frozenset("lar lsl verr verw sgdt sidt sldt smsw str iret iretd iretq lfs lgs lss".split())
 KERNEL_MNEMONICS = frozenset({"syscall", "int", "int1"})
@@ -137,7 +138,7 @@ def classify(definition):
         return Group.SET
     if definition.extension not in PS5_EXTENSIONS or definition.mnemonic == "sysenter":
         return Group.NOT_ON_PS5
-    if definition.cpl == 0 or definition.mnemonic in IO_MNEMONICS:
+    if definition.cpl == 0 or definition.mnemonic in UNMARKED_CPL0_MNEMONICS or definition.mnemonic in IO_MNEMONICS:
         return Group.PRIVILEGED
     if _is_segment_table(definition):
         return Group.SEGMENT_TABLES
