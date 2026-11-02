@@ -89,7 +89,7 @@ std::shared_ptr<const ShaderSnapshot> ReadRawShader(std::uint64_t address, const
             return cached;
         }
     }
-    GuestMemory::CheckRange(reinterpret_cast<const void*>(address), sizeof(std::uint32_t), 256);
+    GuestMemory::CheckRange(GuestArena::GuestToHost(address), sizeof(std::uint32_t), 256);
     constexpr std::size_t limit = 1024 * 1024;
     const auto ranges = GuestMemory::CommittedRanges(address, limit);
     std::uint64_t end = address;

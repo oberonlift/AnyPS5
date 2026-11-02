@@ -684,7 +684,7 @@ public:
             if (planeAliased) sampling.aliasStencil = *stencilClearValue;
             else Require(gpuFill || stencilStored || GuestMemory::StoredAllSince_nid_no_patch(plane.address, plane.bytes, stencilClearGeneration), "native multisample stencil plane fill has no complete tracked store");
             if (!queuedStencilFill && !planeAliased) {
-                const auto* bytes = reinterpret_cast<const std::uint8_t*>(plane.address);
+                const auto* bytes = static_cast<const std::uint8_t*>(GuestArena::GuestToHost(plane.address));
                 Require(std::all_of(bytes, bytes + plane.bytes, [&](std::uint8_t value) { return value == *stencilClearValue; }), "native multisample stencil plane does not hold its fill value");
             }
             const auto generation = GuestMemory::CollectWritesUncached(plane.address, plane.bytes);
