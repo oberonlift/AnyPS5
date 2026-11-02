@@ -11,6 +11,7 @@
 #include <unistd.h>
 
 #include <algorithm>
+#include <atomic>
 #include <bit>
 #include <cerrno>
 #include <cinttypes>
@@ -40,6 +41,30 @@ constexpr std::uint16_t ConsoleX87Control = 0x037f;
 
 std::uint64_t PageSize() {
     return static_cast<std::uint64_t>(sysconf(_SC_PAGESIZE));
+}
+
+std::atomic<Ps5LiftStopHandler> StopHandler{nullptr};
+
+void DefaultStopHandler(Ps5LiftState* state, const std::uint32_t kind, const std::uint64_t address, const std::uint64_t detail, const char* mnemonic) {
+    switch (kind) {
+    case PS5LIFT_STOP_DIVIDE_ERROR:
+        ps5lift_fail("divide error at 0x%" PRIx64 ": the divisor is zero or the quotient does not fit", address);
+    case PS5LIFT_STOP_BREAKPOINT:
+        ps5lift_fail("breakpoint at 0x%" PRIx64, address);
+    case PS5LIFT_STOP_INVALID_OPCODE:
+        ps5lift_fail("invalid opcode %s at 0x%" PRIx64, mnemonic, address);
+    case PS5LIFT_STOP_GENERAL_PROTECTION:
+        ps5lift_fail("general-protection fault: %s at 0x%" PRIx64 " is privileged on the PS5", mnemonic, address);
+    case PS5LIFT_STOP_CONSOLE_KERNEL: {
+        std::uint32_t code = 0;
+        std::memcpy(&code, reinterpret_cast<const void*>(state->FsBase + 0x28), sizeof(code));
+        ps5lift_fail("guest interrupt 0x%" PRIx64 " at 0x%" PRIx64 ", with 0x%08x at %%fs:0x28", detail, address, code);
+    }
+    case PS5LIFT_STOP_MISSING_TRANSLATION:
+        ps5lift_fail("reached unsupported instruction %s at 0x%" PRIx64, mnemonic, address);
+    default:
+        ps5lift_fail("unknown stop kind %" PRIu32 " at 0x%" PRIx64, kind, address);
+    }
 }
 
 void BindDataImports(const Ps5LiftImage& image) {
@@ -394,30 +419,22 @@ extern "C" void ps5lift_import_____tls__get__addr(Ps5LiftState* state) {
     state->Gpr[PS5LIFT_RAX] = state->FsBase - program.Images[index[0] - 1].TlsOffset + index[1];
 }
 
-extern "C" void ps5lift_unsupported(Ps5LiftState*, const std::uint64_t address, const char* mnemonic) {
-    ps5lift_fail("reached unsupported instruction %s at 0x%" PRIx64, mnemonic, address);
+extern "C" void ps5lift_set_stop_handler(const Ps5LiftStopHandler handler) {
+    StopHandler.store(handler);
+}
+
+extern "C" void ps5lift_stop(Ps5LiftState* state, const std::uint32_t kind, const std::uint64_t address, const std::uint64_t detail, const char* mnemonic) {
+    const auto handler = StopHandler.load();
+    (handler != nullptr ? handler : DefaultStopHandler)(state, kind, address, detail, mnemonic);
+    ps5lift_fail("the stop handler returned from stop %" PRIu32 " at 0x%" PRIx64, kind, address);
 }
 
 extern "C" void ps5lift_unknown_resume(Ps5LiftState*, const std::uint64_t function, const std::uint64_t resume) {
     ps5lift_fail("a longjmp or exception resumes at 0x%" PRIx64 " in the frame of 0x%" PRIx64 ", which has no resume point there", resume, function);
 }
 
-extern "C" void ps5lift_interrupt(Ps5LiftState* state, const std::uint64_t address, const std::uint32_t vector) {
-    std::uint32_t code = 0;
-    std::memcpy(&code, reinterpret_cast<const void*>(state->FsBase + 0x28), sizeof(code));
-    ps5lift_fail("guest interrupt 0x%x at 0x%" PRIx64 ", with 0x%08x at %%fs:0x28", vector, address, code);
-}
-
-extern "C" void ps5lift_trap(Ps5LiftState*, const std::uint64_t address) {
-    ps5lift_fail("guest trap at 0x%" PRIx64, address);
-}
-
 extern "C" void ps5lift_left_jump_table(Ps5LiftState*, const std::uint64_t address) {
     ps5lift_fail("the jump at 0x%" PRIx64 " went outside its jump table, which discovery found closed", address);
-}
-
-extern "C" void ps5lift_divide_error(Ps5LiftState*, const std::uint64_t address) {
-    ps5lift_fail("divide error at 0x%" PRIx64 ": the divisor is zero or the quotient does not fit", address);
 }
 
 extern "C" void ps5lift_string_op(Ps5LiftState* state, const std::uint32_t operation, const std::uint32_t width, const std::uint32_t repeat, const std::uint64_t sourceBase) {

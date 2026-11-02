@@ -17,6 +17,7 @@ import platform
 import re
 import shlex
 import shutil
+import signal
 import struct
 import subprocess
 import sys
@@ -104,6 +105,26 @@ def compare(expected, actual, label):
     sys.stderr.write(f"{label}: output differs\n")
     sys.stderr.writelines(difflib.unified_diff(expected.splitlines(True), actual.splitlines(True), "expected", label))
     return False
+
+
+def stop_matches(result, stop, native):
+    """Whether a finished program ended as its fixture expects: cleanly when it has no stop, else by a signal (native) or exit 70 naming the stop (lifted; an uncaught exception from an AnyPS5 library aborts instead)."""
+    if stop is None:
+        return result.returncode == 0
+    if native:
+        return result.returncode < 0
+    return result.returncode in (70, -signal.SIGABRT) and stop in result.stderr
+
+
+def stop_expectation(stop, native):
+    if stop is None:
+        return "exit code 0"
+    return "death by a signal" if native else f"exit code 70 or SIGABRT with {stop!r} in stderr"
+
+
+def read_stop(fixture):
+    stop_file = FIXTURES / f"{fixture}.stop"
+    return stop_file.read_text().strip() if stop_file.exists() else None
 
 
 def configured_compilers(build):
@@ -1008,6 +1029,7 @@ def build_guest(clang, work, name, optimization, defines=(), vectorize=False, su
 def fixture_command(args):
     optimizations = args.optimization or ["-O0", "-O1", "-O2", "-O3"]
     memories = args.memory or ["tso", "relaxed"]
+    stop = read_stop(args.fixture)
 
     def expected_for(optimization):
         specific = FIXTURES / f"{args.fixture}{optimization}.expected"
@@ -1026,8 +1048,11 @@ def fixture_command(args):
             expected = expected_for(optimization)
             guest = build_guest(args.clang, work, args.fixture, optimization, ["-DPS5LIFT_EMULATED"] if runner else [], sysroot=args.guest_sysroot)
             if not args.lift_only and platform.machine() == "x86_64" and args.fixture not in CONSOLE_OUTPUT and (args.fixture not in SSE4A_FIXTURES or host_has_sse4a()):
-                native = run([guest], env={**os.environ, "LD_LIBRARY_PATH": str(work)}).stdout
-                failures += not compare(expected, native, f"native {optimization}")
+                native = subprocess.run([guest], env={**os.environ, "LD_LIBRARY_PATH": str(work)}, capture_output=True, text=True)
+                ended = stop_matches(native, stop, True)
+                if not ended:
+                    sys.stderr.write(f"native {optimization}: exit code {native.returncode}, expected {stop_expectation(stop, True)}\n{native.stderr}")
+                failures += not (ended and compare(expected, native.stdout, f"native {optimization}"))
             for memory in memories:
                 label = f"{args.triple} {optimization} {memory}{' unoptimized lift' if args.unoptimized_lift else ''}"
                 lifted = work / f"{guest.name}-{memory}.a"
@@ -1038,9 +1063,10 @@ def fixture_command(args):
                 program = work / f"{guest.name}-{memory}"
                 link_lifted(args.clangxx, args.triple, program, [FIXTURES / "host_bridge.cpp", lifted], runtime_link_arguments(args.ps5lift, args.triple, lifted_cpu(runner, args.cpu), args.clang, args.clangxx))
                 result = run_lifted(runner, program, label)
-                ok = result is not None and result.returncode == 0 and compare(expected, result.stdout, label)
-                if result is not None and result.returncode != 0:
-                    sys.stderr.write(f"{label}: exit code {result.returncode}\n{result.stderr}")
+                ended = result is not None and stop_matches(result, stop, False)
+                ok = ended and compare(expected, result.stdout, label)
+                if result is not None and not ended:
+                    sys.stderr.write(f"{label}: exit code {result.returncode}, expected {stop_expectation(stop, False)}\n{result.stderr}")
                 print(f"{'PASS' if ok else 'FAIL'} {label}: {report}")
                 failures += not ok
     finally:
@@ -1130,8 +1156,7 @@ def libc_fixture_command(args):
     runner = runner_for(triple)
     cpu = lifted_cpu(runner, None)
     expected = (FIXTURES / f"{args.fixture}.expected").read_text()
-    stop_file = FIXTURES / f"{args.fixture}.stop"
-    stop = stop_file.read_text().strip() if stop_file.exists() else None
+    stop = read_stop(args.fixture)
     work = Path(tempfile.mkdtemp(prefix=f"ps5lift-{args.fixture}-"))
     failures = 0
     try:
@@ -1152,11 +1177,10 @@ def libc_fixture_command(args):
             program = work / f"{guest.name}-lifted"
             link_lifted(args.clangxx, triple, program, [lifted, *host_sources, *linked], runtime)
             result = run_lifted(runner, program, label, LIBRARY_PROGRAM_TIMEOUT, work)
-            ended = result is not None and (result.returncode == 0 if stop is None else result.returncode != 0 and stop in result.stderr)
+            ended = result is not None and stop_matches(result, stop, False)
             ok = ended and compare(expected, LOG_LINE.sub("", result.stdout), label)
             if result is not None and not ended:
-                expectation = "exit code 0" if stop is None else f"a stop with {stop!r}"
-                sys.stderr.write(f"{label}: exit code {result.returncode}, expected {expectation}\n{result.stderr}")
+                sys.stderr.write(f"{label}: exit code {result.returncode}, expected {stop_expectation(stop, False)}\n{result.stderr}")
             print(f"{'PASS' if ok else 'FAIL'} {args.fixture} {label}: {report}")
             failures += not ok
     finally:

@@ -672,21 +672,18 @@ llvm::BasicBlock* FunctionLifter::Target(const std::uint64_t target) {
     return block;
 }
 
-void FunctionLifter::Unsupported(const std::string& what) {
-    const std::string mnemonic = ZydisMnemonicGetString(_instruction->Info.mnemonic);
-    ++_module.Report().Unsupported[mnemonic + (what.empty() ? "" : " (" + what + ")")];
+void FunctionLifter::Stop(const Ps5LiftStopKind kind, const std::uint64_t detail, const std::string& mnemonic) {
     Flush();
-    auto callee = _module.Runtime("ps5lift_unsupported", llvm::FunctionType::get(_builder.getVoidTy(), {_module.Pointer(), I64(), _module.Pointer()}, false));
-    auto* call = _builder.CreateCall(callee, {_state, _builder.getInt64(_instruction->Address), _builder.CreateGlobalString(mnemonic)});
+    auto callee = _module.Runtime("ps5lift_stop", llvm::FunctionType::get(_builder.getVoidTy(), {_module.Pointer(), _builder.getInt32Ty(), I64(), I64(), _module.Pointer()}, false));
+    auto* call = _builder.CreateCall(callee, {_state, _builder.getInt32(kind), _builder.getInt64(_instruction->Address), _builder.getInt64(detail), _builder.CreateGlobalString(mnemonic)});
     call->setDoesNotReturn();
     _builder.CreateUnreachable();
 }
 
-void FunctionLifter::Trap() {
-    Flush();
-    auto callee = _module.Runtime("ps5lift_trap", llvm::FunctionType::get(_builder.getVoidTy(), {_module.Pointer(), I64()}, false));
-    _builder.CreateCall(callee, {_state, _builder.getInt64(_instruction->Address)})->setDoesNotReturn();
-    _builder.CreateUnreachable();
+void FunctionLifter::Unsupported(const std::string& what) {
+    const std::string mnemonic = ZydisMnemonicGetString(_instruction->Info.mnemonic);
+    ++_module.Report().Unsupported[mnemonic + (what.empty() ? "" : " (" + what + ")")];
+    Stop(PS5LIFT_STOP_MISSING_TRANSLATION, 0, mnemonic);
 }
 
 bool FunctionLifter::Locked() const {

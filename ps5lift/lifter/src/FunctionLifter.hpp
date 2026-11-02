@@ -147,7 +147,7 @@ private:
     void TailCall(const std::uint64_t target);
     llvm::BasicBlock* Target(const std::uint64_t target);
     void Unsupported(const std::string& what);
-    void Trap();
+    void Stop(const Ps5LiftStopKind kind, const std::uint64_t detail, const std::string& mnemonic);
     void StringOp(const Ps5LiftStringOperation operation, const unsigned width);
     void ReadString(const StringRead kind, const unsigned width);
     bool Locked() const;
@@ -364,7 +364,6 @@ private:
     void Call();
     void Jump();
     void Return();
-    void Interrupt();
     void EmitSemantics(const ZydisMnemonic mnemonic);
 };
 

@@ -143,7 +143,17 @@ enum Ps5LiftStringCompare {
     PS5LIFT_STRING_SHORT_FIRST = 1 << 17
 };
 
+enum Ps5LiftStopKind {
+    PS5LIFT_STOP_DIVIDE_ERROR = 0,
+    PS5LIFT_STOP_BREAKPOINT = 1,
+    PS5LIFT_STOP_INVALID_OPCODE = 2,
+    PS5LIFT_STOP_GENERAL_PROTECTION = 3,
+    PS5LIFT_STOP_CONSOLE_KERNEL = 4,
+    PS5LIFT_STOP_MISSING_TRANSLATION = 5
+};
+
 typedef void (*Ps5LiftFunction)(Ps5LiftState*);
+typedef void (*Ps5LiftStopHandler)(Ps5LiftState*, uint32_t kind, uint64_t address, uint64_t detail, const char* mnemonic);
 
 typedef struct Ps5LiftFunctionEntry {
     uint64_t GuestAddress;
@@ -242,12 +252,10 @@ void ps5lift_write_back_cache_line(uint64_t address);
 void ps5lift_cpuid(Ps5LiftState* state, uint64_t address);
 uint64_t ps5lift_xgetbv(uint64_t address, uint32_t index);
 [[noreturn, gnu::format(printf, 1, 2)]] void ps5lift_fail(const char* format, ...);
-void ps5lift_unsupported(Ps5LiftState* state, uint64_t address, const char* mnemonic);
+[[noreturn]] void ps5lift_stop(Ps5LiftState* state, uint32_t kind, uint64_t address, uint64_t detail, const char* mnemonic);
+void ps5lift_set_stop_handler(Ps5LiftStopHandler handler);
 void ps5lift_unknown_resume(Ps5LiftState* state, uint64_t function, uint64_t resume);
-void ps5lift_trap(Ps5LiftState* state, uint64_t address);
 void ps5lift_left_jump_table(Ps5LiftState* state, uint64_t address);
-void ps5lift_interrupt(Ps5LiftState* state, uint64_t address, uint32_t vector);
-void ps5lift_divide_error(Ps5LiftState* state, uint64_t address);
 void ps5lift_string_op(Ps5LiftState* state, uint32_t operation, uint32_t width, uint32_t repeat, uint64_t source_base);
 uint32_t ps5lift_string_compare(uint64_t first_low, uint64_t first_high, uint64_t second_low, uint64_t second_high, int64_t first_length, int64_t second_length, uint32_t control);
 

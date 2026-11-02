@@ -59,8 +59,10 @@ case ZYDIS_MNEMONIC_##prefix##231##suffix: return FloatArithmetic({F::Fma, Eleme
     case ZYDIS_MNEMONIC_JMP: return Jump();
     case ZYDIS_MNEMONIC_CALL: return Call();
     case ZYDIS_MNEMONIC_RET: return Return();
-    case ZYDIS_MNEMONIC_UD2: case ZYDIS_MNEMONIC_INT3: case ZYDIS_MNEMONIC_HLT: return Trap();
-    case ZYDIS_MNEMONIC_INT: return Interrupt();
+    case ZYDIS_MNEMONIC_UD2: return Stop(PS5LIFT_STOP_INVALID_OPCODE, 0, "ud2");
+    case ZYDIS_MNEMONIC_INT3: return Stop(PS5LIFT_STOP_BREAKPOINT, 0, "int3");
+    case ZYDIS_MNEMONIC_HLT: return Stop(PS5LIFT_STOP_GENERAL_PROTECTION, 0, "hlt");
+    case ZYDIS_MNEMONIC_INT: return Stop(PS5LIFT_STOP_CONSOLE_KERNEL, static_cast<std::uint32_t>(Immediate(0)), "int");
 
     case ZYDIS_MNEMONIC_NOP: case ZYDIS_MNEMONIC_ENDBR64: case ZYDIS_MNEMONIC_PAUSE: case ZYDIS_MNEMONIC_PREFETCH: case ZYDIS_MNEMONIC_PREFETCHT0:
     case ZYDIS_MNEMONIC_PREFETCHT1: case ZYDIS_MNEMONIC_PREFETCHT2: case ZYDIS_MNEMONIC_PREFETCHNTA: case ZYDIS_MNEMONIC_PREFETCHW:

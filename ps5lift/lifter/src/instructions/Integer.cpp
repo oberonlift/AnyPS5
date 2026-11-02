@@ -189,10 +189,7 @@ void FunctionLifter::Divide(const bool isSigned) {
     else _builder.CreateBr(done);
 
     _builder.SetInsertPoint(fault);
-    Flush();
-    auto callee = _module.Runtime("ps5lift_divide_error", llvm::FunctionType::get(_builder.getVoidTy(), {_module.Pointer(), I64()}, false));
-    _builder.CreateCall(callee, {_state, _builder.getInt64(_instruction->Address)})->setDoesNotReturn();
-    _builder.CreateUnreachable();
+    Stop(PS5LIFT_STOP_DIVIDE_ERROR, 0, ZydisMnemonicGetString(_instruction->Info.mnemonic));
 
     _builder.SetInsertPoint(done);
     auto* quotient = _builder.CreatePHI(type, 2);
