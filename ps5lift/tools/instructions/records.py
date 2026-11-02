@@ -53,13 +53,92 @@ _FILL_MULTIPLIER = 0x2545F4914F6CDD1D
 _FILL_ZERO_SEED = 0x9E3779B97F4A7C15
 _MASK64 = 2**64 - 1
 
-_FILE_HEADER = struct.Struct(f"<8s{FINGERPRINT_SIZE}s{FINGERPRINT_SIZE}sI")
-_INPUT_HEAD = struct.Struct("<IIQB3x")
-_PATCH_COUNT = struct.Struct("<H")
-_PATCH_HEAD = struct.Struct("<HH")
-_RESULT_HEAD = struct.Struct("<IBBHHHQQ")
-_WORD = struct.Struct("<HQ")
-_EXPECTED_COUNT = struct.Struct("<B")
+
+@dataclass(frozen=True)
+class Field:
+    name: str
+    c_type: str
+    code: str
+    count: Optional[int] = None
+
+    def declaration(self):
+        suffix = "" if self.count is None else f"[{self.count}]"
+        return f"{self.c_type} {self.name}{suffix};"
+
+    def format(self):
+        return self.code if self.count is None else f"{self.count}{self.code}"
+
+    def size(self):
+        return struct.calcsize("<" + self.format())
+
+
+@dataclass(frozen=True)
+class Record:
+    c_name: str
+    fields: tuple
+
+    def struct(self):
+        return struct.Struct("<" + "".join(field.format() for field in self.fields))
+
+    def c_text(self):
+        body = "\n".join(f"    {field.declaration()}" for field in self.fields)
+        lines = [f"typedef struct {self.c_name} {{", body, f"}} {self.c_name};"]
+        lines.append(f'_Static_assert(sizeof({self.c_name}) == {self.struct().size}, "{self.c_name} size");')
+        offset = 0
+        for field in self.fields:
+            lines.append(
+                f'_Static_assert(offsetof({self.c_name}, {field.name}) == {offset}, "{self.c_name}.{field.name} offset");'
+            )
+            offset += field.size()
+        return "\n".join(lines)
+
+
+FILE_HEADER = Record("Ps5LiftInstructionFileHeader", (
+    Field("Magic", "char", "s", 8),
+    Field("Program", "uint8_t", "s", FINGERPRINT_SIZE),
+    Field("Inputs", "uint8_t", "s", FINGERPRINT_SIZE),
+    Field("Count", "uint32_t", "I"),
+))
+INPUT_HEAD = Record("Ps5LiftInstructionInputHead", (
+    Field("CaseIndex", "uint32_t", "I"),
+    Field("Instance", "uint32_t", "I"),
+    Field("FillSeed", "uint64_t", "Q"),
+    Field("ConsoleDefined", "uint8_t", "B"),
+    Field("Pad", "uint8_t", "x", 3),
+))
+PATCH_COUNT = Record("Ps5LiftInstructionPatchCount", (
+    Field("Count", "uint16_t", "H"),
+))
+PATCH_HEAD = Record("Ps5LiftInstructionPatchHead", (
+    Field("Offset", "uint16_t", "H"),
+    Field("Length", "uint16_t", "H"),
+))
+RESULT_HEAD = Record("Ps5LiftInstructionResultHead", (
+    Field("CaseIndex", "uint32_t", "I"),
+    Field("Outcome", "uint8_t", "B"),
+    Field("ConsoleDefined", "uint8_t", "B"),
+    Field("Detail", "uint16_t", "H"),
+    Field("SlotWords", "uint16_t", "H"),
+    Field("MemoryWords", "uint16_t", "H"),
+    Field("Address", "uint64_t", "Q"),
+    Field("Data", "uint64_t", "Q"),
+))
+WORD = Record("Ps5LiftInstructionWord", (
+    Field("Offset", "uint16_t", "H"),
+    Field("Value", "uint64_t", "Q"),
+))
+EXPECTED_COUNT = Record("Ps5LiftInstructionExpectedCount", (
+    Field("Count", "uint8_t", "B"),
+))
+RECORDS = (FILE_HEADER, INPUT_HEAD, PATCH_COUNT, PATCH_HEAD, RESULT_HEAD, WORD, EXPECTED_COUNT)
+
+_FILE_HEADER = FILE_HEADER.struct()
+_INPUT_HEAD = INPUT_HEAD.struct()
+_PATCH_COUNT = PATCH_COUNT.struct()
+_PATCH_HEAD = PATCH_HEAD.struct()
+_RESULT_HEAD = RESULT_HEAD.struct()
+_WORD = WORD.struct()
+_EXPECTED_COUNT = EXPECTED_COUNT.struct()
 
 
 class Outcome(IntEnum):
@@ -273,54 +352,16 @@ def read_results(data):
 _C_TEMPLATE = """#ifndef PS5LIFT_INSTRUCTION_RECORDS_H
 #define PS5LIFT_INSTRUCTION_RECORDS_H
 
+#include <stddef.h>
 #include <stdint.h>
 
 {defines}
 
 #pragma pack(push, 1)
 
-typedef struct Ps5LiftInstructionFileHeader {{
-    char magic[8];
-    uint8_t program[{fingerprint}];
-    uint8_t inputs[{fingerprint}];
-    uint32_t count;
-}} Ps5LiftInstructionFileHeader;
-
-typedef struct Ps5LiftInstructionInputHead {{
-    uint32_t caseIndex;
-    uint32_t instance;
-    uint64_t fillSeed;
-    uint8_t consoleDefined;
-    uint8_t pad[3];
-}} Ps5LiftInstructionInputHead;
-
-typedef struct Ps5LiftInstructionPatchHead {{
-    uint16_t offset;
-    uint16_t length;
-}} Ps5LiftInstructionPatchHead;
-
-typedef struct Ps5LiftInstructionResultHead {{
-    uint32_t caseIndex;
-    uint8_t outcome;
-    uint8_t consoleDefined;
-    uint16_t detail;
-    uint16_t slotWords;
-    uint16_t memoryWords;
-    uint64_t address;
-    uint64_t data;
-}} Ps5LiftInstructionResultHead;
-
-typedef struct Ps5LiftInstructionWord {{
-    uint16_t offset;
-    uint64_t value;
-}} Ps5LiftInstructionWord;
+{structs}
 
 #pragma pack(pop)
-
-_Static_assert(sizeof(Ps5LiftInstructionFileHeader) == {file_header}, "file header size");
-_Static_assert(sizeof(Ps5LiftInstructionInputHead) == {input_head}, "input head size");
-_Static_assert(sizeof(Ps5LiftInstructionResultHead) == {result_head}, "result head size");
-_Static_assert(sizeof(Ps5LiftInstructionWord) == {word}, "word size");
 
 static inline void Ps5LiftFillBlock(uint8_t* block, uint64_t seed)
 {{
@@ -381,11 +422,7 @@ def _defines():
 def header_text():
     return _C_TEMPLATE.format(
         defines=_defines(),
-        fingerprint=FINGERPRINT_SIZE,
-        file_header=_FILE_HEADER.size,
-        input_head=_INPUT_HEAD.size,
-        result_head=_RESULT_HEAD.size,
-        word=_WORD.size,
+        structs="\n\n".join(record.c_text() for record in RECORDS),
         zero_seed=_FILL_ZERO_SEED,
         multiplier=_FILL_MULTIPLIER,
     )
