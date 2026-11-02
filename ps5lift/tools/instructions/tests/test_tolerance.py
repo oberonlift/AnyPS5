@@ -28,24 +28,38 @@ def _bits_of(fraction):
 class RcpTest(unittest.TestCase):
     def test_rcp_bound(self):
         bound = Fraction(3, 2) * Fraction(1, 2**12)
-        for expected in (Fraction(1), Fraction(-3, 4), Fraction(5, 2**20)):
-            at_bound = expected + abs(expected) * bound
-            past = _bits_of(at_bound) + 1 if expected > 0 else _bits_of(at_bound) - 1
-            below = expected - abs(expected) * bound
-            with self.subTest(expected=expected):
-                self.assertTrue(tolerance.within_rcp(_bits_of(expected), _bits_of(at_bound), 32))
-                self.assertTrue(tolerance.within_rcp(_bits_of(expected), _bits_of(below), 32))
-                self.assertFalse(tolerance.within_rcp(_bits_of(expected), past, 32))
+        far = _float32(1000.0)
+        samples = (
+            (Fraction(4), Fraction(1, 4), False), (Fraction(-1, 2**20), -Fraction(2**20), False),
+            (Fraction(4), Fraction(1, 2), True), (Fraction(1, 2**30), Fraction(2**15), True),
+        )
+        for source, exact, square_root in samples:
+            at_bound = exact + abs(exact) * bound
+            past = _bits_of(at_bound) + 1 if exact > 0 else _bits_of(at_bound) - 1
+            below = exact - abs(exact) * bound
+            with self.subTest(source=source, square_root=square_root):
+                self.assertTrue(tolerance.within_rcp(far, _bits_of(at_bound), _bits_of(source), 32, square_root))
+                self.assertTrue(tolerance.within_rcp(far, _bits_of(below), _bits_of(source), 32, square_root))
+                self.assertFalse(tolerance.within_rcp(far, past, _bits_of(source), 32, square_root))
+
+    def test_rcp_measured_against_the_exact_reciprocal(self):
+        exact = Fraction(1, 3)
+        intel = _float32(float(exact * (1 + Fraction(14, 10) / 2**12)))
+        lifted = _float32(float(exact * (1 + Fraction(28, 10) / 2**12)))
+        self.assertFalse(tolerance.within_rcp(intel, lifted, _float32(3.0), 32, False))
+        self.assertTrue(tolerance.within_rcp(lifted, intel, _float32(3.0), 32, False))
 
     def test_rcp_exact_specials(self):
         infinity, zero, nan = 0x7F800000, 0x00000000, 0x7FC00000
-        self.assertTrue(tolerance.within_rcp(infinity, infinity, 32))
-        self.assertFalse(tolerance.within_rcp(infinity, 0x7F7FFFFF, 32))
-        self.assertFalse(tolerance.within_rcp(zero, 0x00000001, 32))
-        self.assertFalse(tolerance.within_rcp(zero, 0x80000000, 32))
-        self.assertTrue(tolerance.within_rcp(nan, nan, 32))
-        self.assertFalse(tolerance.within_rcp(nan, 0x7FC00001, 32))
-        self.assertFalse(tolerance.within_rcp(_float32(2.0), nan, 32))
+        for source, expected in ((zero, infinity), (0x80000000, 0xFF800000), (infinity, zero), (nan, nan),
+                                 (0x00000001, infinity), (0x7F000000, zero)):
+            with self.subTest(source=hex(source)):
+                self.assertTrue(tolerance.within_rcp(expected, expected, source, 32, False))
+                self.assertFalse(tolerance.within_rcp(expected, expected ^ 1, source, 32, False))
+        self.assertTrue(tolerance.within_rcp(nan, nan, _float32(-4.0), 32, True))
+        self.assertFalse(tolerance.within_rcp(nan, _float32(-0.5), _float32(-4.0), 32, True))
+        self.assertFalse(tolerance.within_rcp(_float32(0.25), nan, _float32(4.0), 32, False))
+        self.assertFalse(tolerance.within_rcp(_float32(0.25), infinity, _float32(4.0), 32, False))
 
 
 class X87ReferenceTest(unittest.TestCase):

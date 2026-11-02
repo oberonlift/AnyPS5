@@ -1,15 +1,19 @@
 """The comparisons that are not exact: the approximations `rcpps` and `rsqrtps` and the x87 transcendentals.
 
-`within_rcp` accepts a result within the relative error both vendors document for the approximations, and requires
-zeros, infinities and NaNs exactly. `x87_reference` computes the true result of an x87 transcendental with `decimal` at
-`DIGITS` digits, rounded to 64-bit precision with the x87 rounding control (precision control does not apply to these
-instructions), and gives the approximated results by the stack slot they end in: `fsincos` leaves the cosine in ST(0)
-and the sine in ST(1), `fptan` the tangent in ST(1) under an exact 1.0, which is no approximation. It gives None for an
-operand outside the instruction's documented range, or for an operand or result that is no normal number (NaN,
-infinity, zero, denormal, an unnormal encoding, or a result past the extended range): such a case is compared exactly.
-`within_ulp` accepts the reference and the extended values next to it, one unit in the last place of the 64-bit format
-on either side, across a binade boundary too. Values are bit patterns: integers of the float's width, and 80-bit
-extended values as 80-bit integers."""
+`within_rcp` measures an approximated element against the exact 1/x or 1/√x of its input lane x, and accepts the
+relative error both vendors document, where x is normal and so is the exact result; otherwise (a zero, infinity, NaN,
+denormal or negative square-root input, or a result x86 flushes) it requires the recorded value exactly.
+
+`x87_reference` computes the true result of an x87 transcendental with `decimal` at `DIGITS` digits, rounded to 64-bit
+precision with the x87 rounding control (precision control does not apply to these instructions), and gives the
+approximated results by the stack slot they end in: `fsincos` leaves the cosine in ST(0) and the sine in ST(1), `fptan`
+the tangent in ST(1) under an exact 1.0, which is no approximation. It gives None for an operand outside the
+instruction's documented range, or for an operand or result that is no normal number (NaN, infinity, zero, denormal,
+an unnormal encoding, or a result past the extended range): such a case is compared exactly. `within_ulp` accepts the
+reference and the extended values next to it, one unit in the last place of the 64-bit format on either side, across a
+binade boundary too.
+
+Values are bit patterns: integers of the float's width, and 80-bit extended values as 80-bit integers."""
 from decimal import ROUND_HALF_EVEN, Decimal, localcontext
 from fractions import Fraction
 
@@ -54,14 +58,36 @@ def _float_value(bits, width):
     return sign * Fraction((1 << fraction_bits) + fraction, 1 << fraction_bits) * Fraction(2) ** (exponent - bias)
 
 
-def within_rcp(expected, actual, width):
-    expected_value = _float_value(expected, width)
-    if expected_value is None or expected_value == 0:
+def _normal_range(width):
+    exponent_bits, fraction_bits = FLOAT_FORMATS[width]
+    bias = (1 << exponent_bits - 1) - 1
+    return Fraction(2) ** (1 - bias), (2 - Fraction(1, 1 << fraction_bits)) * Fraction(2) ** bias
+
+
+def _is_normal(bits, width):
+    exponent_bits, fraction_bits = FLOAT_FORMATS[width]
+    return 0 < bits >> fraction_bits & (1 << exponent_bits) - 1 < (1 << exponent_bits) - 1
+
+
+def within_rcp(expected, actual, source, width, square_root):
+    negative = source >> width - 1 & 1
+    if not _is_normal(source, width) or (square_root and negative):
         return actual == expected
-    actual_value = _float_value(actual, width)
-    if actual_value is None:
+    x = _float_value(source, width)
+    smallest, largest = _normal_range(width)
+    if square_root:
+        exact_is_normal = 1 / largest**2 <= x <= 1 / smallest**2
+    else:
+        exact_is_normal = smallest <= 1 / abs(x) <= largest
+    if not exact_is_normal:
+        return actual == expected
+    value = _float_value(actual, width)
+    if value is None:
         return False
-    return abs(actual_value - expected_value) <= RCP_RELATIVE_ERROR * abs(expected_value)
+    if square_root:
+        return value > 0 and (1 - RCP_RELATIVE_ERROR) ** 2 <= x * value**2 <= (1 + RCP_RELATIVE_ERROR) ** 2
+    exact = 1 / x
+    return abs(value - exact) <= RCP_RELATIVE_ERROR * abs(exact)
 
 
 def _extended_value(bits):

@@ -112,6 +112,12 @@ def _lane(case, operand, value, lane=0, bits=32):
     return {offset: value.to_bytes(bits // 8, "little")}
 
 
+def _lane_values(case, operand, values, bits=32):
+    number = LOCATIONS[case.instance.operands[operand].name][1]
+    return {records.ymm_offset(number) + lane * bits // 8: value.to_bytes(bits // 8, "little")
+            for lane, value in enumerate(values)}
+
+
 def _vector_field(case, operand):
     return f"ymm{LOCATIONS[case.instance.operands[operand].name][1]}"
 
@@ -319,12 +325,30 @@ class StateTest(unittest.TestCase):
         one_off_by_one = _completed(case, {st0: (ONE_80 + 1).to_bytes(10, "little"), st1: TAN_1.to_bytes(10, "little")})
         self.assertEqual(_fields(_judge(case, recorded, one_off_by_one)), {"st0"})
 
+    def _with_lanes(self, case, operand, *values):
+        slot = bytearray(case.input.slot)
+        for offset, data in _lane_values(case, operand, values).items():
+            slot[offset:offset + len(data)] = data
+        return dataclasses.replace(case, input=dataclasses.replace(case.input, slot=bytes(slot)))
+
     def test_rcp_lanes_within_tolerance(self):
         case = _case("sse", _primary("rcpps"), lambda spec: spec.mxcsr == CONSOLE_MXCSR)
-        expected = _completed(case, _lane(case, 0, 0x3F800000))
-        self.assertEqual(_judge(case, expected, _completed(case, _lane(case, 0, 0x3F800C00))), [])
-        self.assertEqual(_fields(_judge(case, expected, _completed(case, _lane(case, 0, 0x3F800C01)))),
+        case = self._with_lanes(case, 1, 0x3F800000)
+        recorded = _completed(case, _lane(case, 0, 0x3F7FF000))
+        self.assertEqual(_judge(case, recorded, _completed(case, _lane(case, 0, 0x3F800C00))), [])
+        self.assertEqual(_fields(_judge(case, recorded, _completed(case, _lane(case, 0, 0x3F800C01)))),
                          {_vector_field(case, 0)})
+
+    def test_scalar_rcp_copies_compared_exactly(self):
+        case = _case("avx", _primary("vrcpss"), lambda spec: spec.mxcsr == CONSOLE_MXCSR)
+        case = self._with_lanes(case, 2, 0x3F800000)
+        case = self._with_lanes(case, 1, 0x40000000, 0x3F800000, 0x3F800000, 0x3F800000)
+        copies = {**_lane(case, 0, 0x3F800000), **_lane(case, 0, 0x3F800000, lane=1),
+                  **_lane(case, 0, 0x3F800000, lane=2), **_lane(case, 0, 0x3F800000, lane=3)}
+        recorded = _completed(case, copies)
+        self.assertEqual(_judge(case, recorded, _completed(case, {**copies, **_lane(case, 0, 0x3F800C00)})), [])
+        drifted = _completed(case, {**copies, **_lane(case, 0, 0x3F800800, lane=1)})
+        self.assertEqual(_fields(_judge(case, recorded, drifted)), {_vector_field(case, 0)})
 
     def test_page_fault_data_exact(self):
         case = _case("base", _primary("mov", registers_only=False, operand_size=64))

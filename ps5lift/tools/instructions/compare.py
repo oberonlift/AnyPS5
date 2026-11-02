@@ -118,7 +118,9 @@ class Rules:
     undefined_flags: frozenset
     status_flags_dropped: bool
     float_lanes: tuple
+    float_sources: tuple
     tolerance: Tolerance
+    square_root: bool
     min_max: bool
     console: Optional[str]
     destination: Optional[tuple]
@@ -195,29 +197,47 @@ def _location_name(location, x87_names):
     raise CompareError(f"no slot field for a {kind} register")
 
 
-def _written_float_lanes(model, instance):
+def _scalar(mnemonic):
+    return (mnemonic[1:] if mnemonic.startswith("v") else mnemonic).endswith(("ss", "sd"))
+
+
+def _float_location(model, instance, operand):
+    if operand.choice is not None:
+        choice = instance.operands[operand.choice]
+        if isinstance(choice, Reg):
+            return LOCATIONS[choice.name][:2]
+        if isinstance(choice, Mem) and model.accesses_memory:
+            return "memory", operand.choice
+        return None
+    if operand.category == "implicit_reg" and model.implicit_location(operand) is not None:
+        return model.implicit_location(operand)[:2]
+    return None
+
+
+def _float_operands(model, instance, writes):
     if not model.floating:
-        return ()
-    lanes = []
+        return []
+    found = []
     for operand in model.operands:
         element = operand.spec.get("element_type")
-        if not operand.writes or element not in FLOAT_BITS:
+        if element not in FLOAT_BITS or not (operand.writes if writes else operand.reads):
             continue
-        bits = FLOAT_BITS[element]
-        if operand.choice is not None:
-            choice = instance.operands[operand.choice]
-            if isinstance(choice, Reg):
-                location = LOCATIONS[choice.name][:2]
-            elif isinstance(choice, Mem) and model.accesses_memory:
-                location = ("memory", operand.choice)
-            else:
-                continue
-        elif operand.category == "implicit_reg" and model.implicit_location(operand) is not None:
-            location = model.implicit_location(operand)[:2]
-        else:
-            continue
-        lanes.append(Lanes(location, bits, max(model.operand_bits(operand) // bits, 1)))
+        location = _float_location(model, instance, operand)
+        if location is not None:
+            found.append((operand, location, FLOAT_BITS[element]))
+    return found
+
+
+def _written_float_lanes(model, instance, kind):
+    lanes = []
+    for operand, location, bits in _float_operands(model, instance, writes=True):
+        count = 1 if kind is Tolerance.RCP and _scalar(model.mnemonic) else max(model.operand_bits(operand) // bits, 1)
+        lanes.append(Lanes(location, bits, count))
     return tuple(lanes)
+
+
+def _float_sources(model, instance):
+    return tuple((location, bits) for _, location, bits in _float_operands(model, instance, writes=False))
 
 
 def _read_inputs(model, instance, x87_names):
@@ -262,8 +282,10 @@ def rules_for(instance):
         mnemonic=mnemonic,
         undefined_flags=frozenset(flag.upper() for flag in definition.undefined_flags),
         status_flags_dropped=model.shape in _DROPPING_SHAPES,
-        float_lanes=_written_float_lanes(model, instance),
+        float_lanes=_written_float_lanes(model, instance, kind),
+        float_sources=_float_sources(model, instance),
         tolerance=kind,
+        square_root=base.startswith("rsqrt"),
         min_max=model.floating and base.startswith(("min", "max")),
         console=mnemonic if mnemonic in _CONSOLE_REGISTERS else None,
         destination=_destination(model, instance) if kind in (Tolerance.RANDOM_VALUE, Tolerance.PROCESSOR_ID) else None,
@@ -404,35 +426,6 @@ def _is_nan(value, bits):
     return exponent == (1 << tolerance.FLOAT_FORMATS[bits][0]) - 1 and fraction != 0
 
 
-def _lane_matches(expected, actual, bits, rules, mxcsr, float_mode):
-    if expected == actual:
-        return True
-    if float_mode == FAST:
-        if _is_nan(expected, bits) and _is_nan(actual, bits):
-            return True
-        expected_sign, expected_exponent, expected_fraction = _float_parts(expected, bits)
-        actual_sign, actual_exponent, actual_fraction = _float_parts(actual, bits)
-        if mxcsr & (_FTZ | _DAZ) and expected_sign == actual_sign:
-            if rules.min_max and expected_exponent == expected_fraction == 0 and actual_exponent == 0:
-                return True
-            if expected_exponent == 1 and expected_fraction == 0 and actual_exponent == actual_fraction == 0:
-                return True
-    return rules.tolerance is Tolerance.RCP and tolerance.within_rcp(expected, actual, bits)
-
-
-def _lanes_match(expected, actual, lanes, rules, mxcsr, float_mode):
-    size = lanes.element_bits // 8
-    end = min(lanes.count * size, len(expected))
-    if expected[end:] != actual[end:]:
-        return False
-    for start in range(0, end, size):
-        expected_lane = int.from_bytes(expected[start:start + size], "little")
-        actual_lane = int.from_bytes(actual[start:start + size], "little")
-        if not _lane_matches(expected_lane, actual_lane, lanes.element_bits, rules, mxcsr, float_mode):
-            return False
-    return True
-
-
 def _mxcsr_matches(expected, actual, own, float_mode, twin):
     if twin:
         expected = expected & ~_MXCSR_CONTROL | own & _MXCSR_CONTROL
@@ -475,6 +468,56 @@ class _Judgement:
         self.twin = reference_case(case.spec, float_mode) != case.spec.index
         self.mismatches = []
         self.settled = set()
+        self.initial = None
+
+    def initial_block(self):
+        if self.initial is None:
+            self.initial = _initial_block(self.case.input)
+        return self.initial
+
+    def source_lane(self, location, index, bits):
+        size = bits // 8
+        kind, number = location
+        if kind == "vector":
+            start = records.ymm_offset(number) + index * size
+            return int.from_bytes(self.case.input.slot[start:start + size], "little")
+        if kind == "memory":
+            address = _operand_address(self.case, number, _address_size(self.case))
+            start = address - self.case.layout.block + index * size
+            if not 0 <= start <= records.BLOCK_SIZE - size:
+                raise CompareError(f"case {self.case.spec.index} reads lane {index} outside the block")
+            return int.from_bytes(self.initial_block()[start:start + size], "little")
+        raise CompareError(f"{self.case.instance.form.key}: no rule for a floating-point source in a {kind} register")
+
+    def lane_matches(self, expected, actual, index, bits):
+        if expected == actual:
+            return True
+        if self.float_mode == FAST:
+            if _is_nan(expected, bits) and _is_nan(actual, bits):
+                return True
+            expected_sign, expected_exponent, expected_fraction = _float_parts(expected, bits)
+            actual_sign, actual_exponent, actual_fraction = _float_parts(actual, bits)
+            if self.own_mxcsr & (_FTZ | _DAZ) and expected_sign == actual_sign:
+                if self.rules.min_max and expected_exponent == expected_fraction == 0 and actual_exponent == 0:
+                    return True
+                if expected_exponent == 1 and expected_fraction == 0 and actual_exponent == actual_fraction == 0:
+                    return True
+        if self.rules.tolerance is Tolerance.RCP:
+            source = self.source_lane(self.rules.float_sources[-1][0], index, bits)
+            return tolerance.within_rcp(expected, actual, source, bits, self.rules.square_root)
+        return False
+
+    def lanes_match(self, expected, actual, lanes):
+        size = lanes.element_bits // 8
+        end = min(lanes.count * size, len(expected))
+        if expected[end:] != actual[end:]:
+            return False
+        for index, start in enumerate(range(0, end, size)):
+            expected_lane = int.from_bytes(expected[start:start + size], "little")
+            actual_lane = int.from_bytes(actual[start:start + size], "little")
+            if not self.lane_matches(expected_lane, actual_lane, index, lanes.element_bits):
+                return False
+        return True
 
     def mismatch(self, field, expected, actual):
         self.mismatches.append(Mismatch(field, expected, actual))
@@ -566,7 +609,7 @@ class _Judgement:
         if name in records.GPR_NAMES:
             location = ("gpr", records.GPR_NAMES.index(name))
         lanes = self.lanes_at(location) if location is not None else None
-        return lanes is not None and _lanes_match(expected, actual, lanes, self.rules, self.own_mxcsr, self.float_mode)
+        return lanes is not None and self.lanes_match(expected, actual, lanes)
 
     def slot(self, x87):
         for name, start, size in _slot_fields(self.rules.x87_names):
@@ -592,9 +635,8 @@ class _Judgement:
     def memory(self):
         if self.expected_memory == self.actual_memory:
             return
-        initial = _initial_block(self.case.input)
-        expected = _apply_words(initial, self.expected_memory)
-        actual = _apply_words(initial, self.actual_memory)
+        expected = _apply_words(self.initial_block(), self.expected_memory)
+        actual = _apply_words(self.initial_block(), self.actual_memory)
         covered = set()
         for start, size, lanes in self.special_ranges():
             if start < 0 or start + size > records.BLOCK_SIZE:
@@ -608,8 +650,7 @@ class _Judgement:
                                          int.from_bytes(actual_bytes, "little"), self.own_mxcsr, self.float_mode,
                                          self.twin)
             else:
-                matches = _lanes_match(expected_bytes, actual_bytes, lanes, self.rules, self.own_mxcsr,
-                                       self.float_mode)
+                matches = self.lanes_match(expected_bytes, actual_bytes, lanes)
             if not matches:
                 self.mismatch(f"block+{start:#x}", _hex(expected_bytes), _hex(actual_bytes))
         for offset in sorted(set(self.expected_memory) | set(self.actual_memory)):
