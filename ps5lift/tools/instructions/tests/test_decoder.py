@@ -45,6 +45,12 @@ class DecoderTest(unittest.TestCase):
         memory = decoded.operands[1]
         self.assertEqual((memory.type, memory.base, memory.index, memory.scale, memory.displacement), ("memory", "rax", "rbx", 4, 16))
 
+    def test_displacement_size(self):
+        encodings = ["488b03", "488b4300", "488b8300000000", "488b0500000000", "48a10000000000000000", "488b0424"]
+        decoded = self.decoder.decode([bytes.fromhex(encoding) for encoding in encodings])
+        self.assertEqual([item.operands[1].displacement_size for item in decoded], [0, 8, 32, 32, 64, 0])
+        self.assertEqual({item.operands[1].displacement for item in decoded}, {0})
+
     def test_text(self):
         self.assertEqual(self.decode_one("4801d8").text, "add rax, rbx")
 

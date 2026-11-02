@@ -827,6 +827,7 @@ def _operand_matches(expected, decoded):
             and decoded.index == (expected.index or "none")
             and decoded.scale == (expected.scale if expected.index else 0)
             and decoded.displacement == (expected.displacement if isinstance(expected.displacement, int) else 0)
+            and decoded.displacement_size == expected.displacement_size
         )
     if isinstance(expected, Imm):
         return decoded.type == "immediate" and decoded.immediate == expected.value
@@ -837,7 +838,8 @@ def _described(decoded):
     if decoded.type == "register":
         return decoded.register
     if decoded.type == "memory":
-        return f"[{decoded.base} + {decoded.index}*{decoded.scale} + {decoded.displacement}]"
+        return (f"[{decoded.base} + {decoded.index}*{decoded.scale} + {decoded.displacement}] "
+                f"with displacement size {decoded.displacement_size}")
     if decoded.type == "immediate":
         return f"immediate {decoded.immediate}"
     return decoded.type

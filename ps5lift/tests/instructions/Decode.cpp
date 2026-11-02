@@ -59,7 +59,7 @@ const char* Visibility(const ZydisOperandVisibility visibility) {
     }
 }
 
-std::string Operand(const ZydisDecodedOperand& operand) {
+std::string Operand(const ZydisDecodedInstruction& instruction, const ZydisDecodedOperand& operand) {
     std::ostringstream json;
     json << "{\"type\":" << Quoted(Type(operand.type)) << ",\"visibility\":" << Quoted(Visibility(operand.visibility))
          << ",\"action\":" << Quoted(Action(operand.actions)) << ",\"size\":" << operand.size;
@@ -67,7 +67,8 @@ std::string Operand(const ZydisDecodedOperand& operand) {
         json << ",\"register\":" << Quoted(ZydisRegisterGetString(operand.reg.value));
     } else if (operand.type == ZYDIS_OPERAND_TYPE_MEMORY) {
         json << ",\"base\":" << Quoted(ZydisRegisterGetString(operand.mem.base)) << ",\"index\":" << Quoted(ZydisRegisterGetString(operand.mem.index))
-             << ",\"scale\":" << static_cast<unsigned>(operand.mem.scale) << ",\"displacement\":" << (operand.mem.disp.has_displacement ? operand.mem.disp.value : 0);
+             << ",\"scale\":" << static_cast<unsigned>(operand.mem.scale) << ",\"displacement\":" << (operand.mem.disp.has_displacement ? operand.mem.disp.value : 0)
+             << ",\"displacement_size\":" << (operand.mem.disp.has_displacement ? static_cast<unsigned>(instruction.raw.disp.size) : 0u);
     } else if (operand.type == ZYDIS_OPERAND_TYPE_IMMEDIATE) {
         json << ",\"immediate\":";
         if (operand.imm.is_signed) json << static_cast<std::int64_t>(operand.imm.value.s);
@@ -97,7 +98,7 @@ std::string Decode(const ZydisDecoder& decoder, const ZydisFormatter& formatter,
          << ",\"isa_set\":" << Quoted(ZydisISASetGetString(instruction.meta.isa_set)) << ",\"category\":" << Quoted(ZydisCategoryGetString(instruction.meta.category))
          << ",\"operand_width\":" << static_cast<unsigned>(instruction.operand_width)
          << ",\"privileged\":" << ((instruction.attributes & ZYDIS_ATTRIB_IS_PRIVILEGED) ? "true" : "false") << ",\"operands\":[";
-    for (unsigned i = 0; i < instruction.operand_count; ++i) json << (i ? "," : "") << Operand(operands[i]);
+    for (unsigned i = 0; i < instruction.operand_count; ++i) json << (i ? "," : "") << Operand(instruction, operands[i]);
     json << "]}";
     return json.str();
 }

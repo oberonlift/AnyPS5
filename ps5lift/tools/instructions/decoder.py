@@ -27,6 +27,7 @@ class DecodedOperand:
     index: Optional[str] = None
     scale: Optional[int] = None
     displacement: Optional[int] = None
+    displacement_size: Optional[int] = None
     immediate: Optional[int] = None
 
 

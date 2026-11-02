@@ -87,6 +87,13 @@ class EncodingTest(unittest.TestCase):
         with self.assertRaisesRegex(encoding.EncodingError, rf"^{add.key}: "):
             encoding.verify(self.decoder, add, operands, (), [b"\x06"])
 
+    def test_displacement_size_must_match(self):
+        add = self.form("add", 64, opcode=0x03, modrm_mod="!3")
+        with self.assertRaisesRegex(encoding.EncodingError, rf"^{add.key}: .*displacement size 8, not Mem"):
+            encoding.verify(self.decoder, add, [Reg("rax"), Mem("rbx")], (), [bytes.fromhex("48034300")])
+        with self.assertRaisesRegex(encoding.EncodingError, rf"^{add.key}: .*displacement size 0, not Mem"):
+            encoding.verify(self.decoder, add, [Reg("rax"), Mem("rbx", displacement_size=32)], (), [bytes.fromhex("480303")])
+
     def test_unknown_value_names_the_form(self):
         addps = self.form("addps", modrm_mod="3")
         broken = dataclasses.replace(addps.definition, filters={**addps.definition.filters, "modrm_mod": "4"})
