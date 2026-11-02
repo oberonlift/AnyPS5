@@ -24,7 +24,7 @@
 #include <sstream>
 #include <system_error>
 #include <vector>
-#ifdef __APPLE__
+#if defined(__APPLE__) && !defined(ANYPS5_GUEST_LIFTED)
 #include <mach-o/dyld.h>
 #include <mach-o/loader.h>
 #endif
@@ -293,7 +293,7 @@ struct ImagePages {
     std::map<std::uint64_t, Page> pages;
 };
 
-#ifdef __APPLE__
+#if defined(__APPLE__) && !defined(ANYPS5_GUEST_LIFTED)
 void addSegmentPages(ImagePages& collected, std::uintptr_t address, std::uint64_t bytes, bool readable, bool writable) {
     const auto start = address & ~(collected.pageSize - 1);
     const auto end = (address + bytes + collected.pageSize - 1) & ~(collected.pageSize - 1);
@@ -327,13 +327,14 @@ void collectMachImagePages(ImagePages& collected) {
 #else
 int collectImagePages(dl_phdr_info* image, std::size_t, void* data) {
     auto& collected = *static_cast<ImagePages*>(data);
-    if (!collected.main && image->dlpi_addr != collected.base) return 0;
+    if (!collected.main && reinterpret_cast<std::uintptr_t>(GuestArena::GuestToHost(image->dlpi_addr)) != collected.base) return 0;
     collected.found = true;
     for (int index = 0; index < image->dlpi_phnum; ++index) {
         const auto& header = image->dlpi_phdr[index];
         if (header.p_type != PT_LOAD || header.p_memsz == 0) continue;
-        const auto start = (image->dlpi_addr + header.p_vaddr) & ~(collected.pageSize - 1);
-        const auto end = (image->dlpi_addr + header.p_vaddr + header.p_memsz + collected.pageSize - 1) & ~(collected.pageSize - 1);
+        const auto segment = reinterpret_cast<std::uintptr_t>(GuestArena::GuestToHost(image->dlpi_addr + header.p_vaddr));
+        const auto start = segment & ~(collected.pageSize - 1);
+        const auto end = (segment + header.p_memsz + collected.pageSize - 1) & ~(collected.pageSize - 1);
         for (auto page = start; page < end; page += collected.pageSize) {
             auto& entry = collected.pages[page];
             entry.readable = entry.readable || (header.p_flags & (PF_R | PF_W)) != 0;
@@ -372,7 +373,7 @@ void GuestAllocationsRegisterMainImage_nid_postfix(void*) {
     auto& state = registry();
     if (state.mainImageRegistered) return;
     ImagePages collected{.main = true, .pageSize = static_cast<std::uint64_t>(::sysconf(_SC_PAGESIZE))};
-#ifdef __APPLE__
+#if defined(__APPLE__) && !defined(ANYPS5_GUEST_LIFTED)
     collectMachImagePages(collected);
 #else
     dl_iterate_phdr(collectImagePages, &collected);
@@ -388,7 +389,7 @@ void GuestAllocationsRegisterImage_nid_postfix(void*, const void* image) {
     const auto base = reinterpret_cast<std::uintptr_t>(image);
     if (state.registeredImages.contains(guestAddress(image))) return;
     ImagePages collected{.base = base, .pageSize = static_cast<std::uint64_t>(::sysconf(_SC_PAGESIZE))};
-#ifdef __APPLE__
+#if defined(__APPLE__) && !defined(ANYPS5_GUEST_LIFTED)
     collectMachImagePages(collected);
 #else
     dl_iterate_phdr(collectImagePages, &collected);
@@ -584,11 +585,11 @@ void GuestAllocationsGuestPages_nid_postfix(std::uintptr_t address, std::size_t 
         auto& found = *static_cast<Search*>(data);
         for (unsigned index = 0; index < image->dlpi_phnum; ++index) {
             const auto& header = image->dlpi_phdr[index];
-            const auto segment = static_cast<std::uintptr_t>(image->dlpi_addr + header.p_vaddr);
+            const auto segment = reinterpret_cast<std::uintptr_t>(GuestArena::GuestToHost(image->dlpi_addr + header.p_vaddr));
             const auto start = segment & ~(found.hostPage - 1);
             const auto finish = (segment + header.p_memsz + found.hostPage - 1) & ~(found.hostPage - 1);
             if (header.p_type == PT_LOAD && found.address >= start && found.address < finish) {
-                found.bias = static_cast<std::uintptr_t>(image->dlpi_addr);
+                found.bias = reinterpret_cast<std::uintptr_t>(GuestArena::GuestToHost(image->dlpi_addr));
                 return 1;
             }
         }

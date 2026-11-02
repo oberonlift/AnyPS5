@@ -24,6 +24,7 @@ int guest_pthread_equal(void* left, void* right) __asm__(NID_pthread_equal);
 unsigned long guest_mbsrtowcs(unsigned short* destination, const char** source, unsigned long count, void* state) __asm__(NID_mbsrtowcs);
 int guest_query_protection(void* address, void** start, void** end, int* protection) __asm__(NID_sceKernelQueryMemoryProtection);
 int guest_virtual_query(const void* address, int flags, void* info, unsigned long size) __asm__(NID_sceKernelVirtualQuery);
+int guest_mprotect(void* address, unsigned long length, int protection) __asm__(NID_sceKernelMprotect);
 int guest_pool_reserve(void* address, unsigned long length, unsigned long alignment, int flags, void** reserved) __asm__(NID_sceKernelMemoryPoolReserve);
 int guest_pool_batch(const void* entries, int count, int* done, int flags) __asm__(NID_sceKernelMemoryPoolBatch);
 
@@ -136,6 +137,12 @@ int main(void) {
     query.start = 0, query.end = 0;
     const int virtual_queried = guest_virtual_query(map + 100, 0, &query, sizeof(query));
     guest_printf("sceKernelVirtualQuery %d: start at the map %d, end at its end %d\n", virtual_queried, query.start == Fixed, query.end == Fixed + MapBytes);
+
+    const int reprotected = guest_mprotect(map, 0x4000, ProtectReadWrite);
+    struct guest_query_info image;
+    image.start = 0, image.end = 0;
+    const int image_queried = guest_virtual_query((const char*)0xfbfff00000, 1, &image, sizeof(image));
+    guest_printf("after mprotect %d, sceKernelVirtualQuery %d finds the program image next: starts at it %d\n", reprotected, image_queried, image.start == (char*)0xfc00000000);
 
     void* pool = 0;
     const int pool_reserved = guest_pool_reserve(0, 0x400000, 0x200000, 0, &pool);

@@ -15,6 +15,7 @@ pthread_equal on its own handle 1
 mmap failure returns MAP_FAILED 1
 sceKernelQueryMemoryProtection 0: start at the map 1, end past the address 1
 sceKernelVirtualQuery 0: start at the map 1, end at its end 1
+after mprotect 0, sceKernelVirtualQuery 0 finds the program image next: starts at it 1
 memory pool: reserve 0, batch commit 0 done 1, write reads back 1
 mbsrtowcs converted 2, source advanced by 2
 munmap 0

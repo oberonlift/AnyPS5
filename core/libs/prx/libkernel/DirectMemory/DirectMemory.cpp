@@ -1508,13 +1508,14 @@ static int FindImagesOverlapping(dl_phdr_info* image, std::size_t, void* data) {
     auto& search = *static_cast<GuestImageSearch*>(data);
     const bool main = search.first;
     search.first = false;
-    GuestImageOverlap overlap{.base = image->dlpi_addr, .guestModule = image->dlpi_name != nullptr && std::string_view(image->dlpi_name).ends_with(".guest.prx")};
+    GuestImageOverlap overlap{.base = reinterpret_cast<std::uintptr_t>(GuestArena::GuestToHost(image->dlpi_addr)), .guestModule = image->dlpi_name != nullptr && std::string_view(image->dlpi_name).ends_with(".guest.prx")};
     bool overlaps = false;
     for (int index = 0; index < image->dlpi_phnum; ++index) {
         const auto& header = image->dlpi_phdr[index];
         if (header.p_type != PT_LOAD) continue;
-        const auto start = (image->dlpi_addr + header.p_vaddr) & ~(search.pageSize - 1);
-        const auto end = (image->dlpi_addr + header.p_vaddr + header.p_memsz + search.pageSize - 1) & ~(search.pageSize - 1);
+        const auto segment = reinterpret_cast<std::uintptr_t>(GuestArena::GuestToHost(image->dlpi_addr + header.p_vaddr));
+        const auto start = segment & ~(search.pageSize - 1);
+        const auto end = (segment + header.p_memsz + search.pageSize - 1) & ~(search.pageSize - 1);
         if (search.end <= start || search.start >= end) continue;
         overlaps = true;
         if (search.start >= start) overlap.containsStart = true;
