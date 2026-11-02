@@ -754,7 +754,7 @@ inline int FormatWindows(char* buffer, size_t size, const char* format, const vo
             }
             output.Value(spec + 's', utf8.c_str());
         } else if (conversion == 'p' && (length.empty() || length == "l")) {
-            const std::string text = FormatPointer(spec, args.Next<void*>());
+            const std::string text = FormatPointer(spec, reinterpret_cast<const void*>(args.Next<std::uintptr_t>()));
             output.Append(text.data(), text.size());
         } else if (conversion == 'n' && secure) {
             throw FormatConstraintViolation("Format count conversion");

@@ -11,4 +11,8 @@ writev wrote 15
 zeroed mutex: pthread lock 0 unlock 0, sce lock 0 unlock 0
 mutexattr: pthread init 0, sce settype 0, pthread gettype 0 type 2, kind 2, destroy 0
 pthread_equal on its own handle 1
+%p prints the guest address 1000000000
+mmap failure returns MAP_FAILED 1
+sceKernelQueryMemoryProtection 0: start at the map 1, end past the address 1
+mbsrtowcs converted 2, source advanced by 2
 munmap 0

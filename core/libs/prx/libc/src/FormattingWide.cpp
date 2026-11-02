@@ -220,7 +220,7 @@ std::u16string FormatWide(const char16_t* format, VaList* source, bool secure = 
                 }
             }
         } else if (conversion == u'p' && (length.empty() || length == "l")) {
-            const std::string text = LibcDetail::FormatPointer(spec, args.Next<void*>());
+            const std::string text = LibcDetail::FormatPointer(spec, reinterpret_cast<const void*>(args.Next<std::uintptr_t>()));
             out.append(text.begin(), text.end());
         } else if (conversion == u'c' || conversion == u'C') {
             const int value = args.Next<int>();

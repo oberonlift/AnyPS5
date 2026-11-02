@@ -21,6 +21,8 @@ int guest_pthread_mutexattr_getkind_np(void* attr) __asm__(NID_pthread_mutexattr
 int guest_pthread_mutexattr_destroy(void* attr) __asm__(NID_pthread_mutexattr_destroy);
 void* guest_pthread_self(void) __asm__(NID_pthread_self);
 int guest_pthread_equal(void* left, void* right) __asm__(NID_pthread_equal);
+unsigned long guest_mbsrtowcs(unsigned short* destination, const char** source, unsigned long count, void* state) __asm__(NID_mbsrtowcs);
+int guest_query_protection(void* address, void** start, void** end, int* protection) __asm__(NID_sceKernelQueryMemoryProtection);
 
 struct guest_iovec {
     const void* base;
@@ -101,6 +103,19 @@ int main(void) {
 
     void* self = guest_pthread_self();
     guest_printf("pthread_equal on its own handle %d\n", guest_pthread_equal(self, self) != 0);
+
+    guest_printf("%%p prints the guest address %p\n", (void*)Fixed);
+    guest_printf("mmap failure returns MAP_FAILED %d\n", guest_mmap(0, 0, ProtectReadWrite, MapPrivate | MapAnonymous, -1, 0) == (void*)-1);
+
+    void* start = 0;
+    void* stop = 0;
+    int protection = 0;
+    const int queried = guest_query_protection(map + 100, &start, &stop, &protection);
+    guest_printf("sceKernelQueryMemoryProtection %d: start at the map %d, end past the address %d\n", queried, start == Fixed, (char*)stop > map + 100);
+
+    const char* cursor = text;
+    const unsigned long converted = guest_mbsrtowcs((unsigned short*)(map + 4096), &cursor, 2, 0);
+    guest_printf("mbsrtowcs converted %lu, source advanced by %ld\n", converted, (long)(cursor - text));
 
     guest_printf("munmap %d\n", guest_munmap(map, MapBytes));
     return 0;

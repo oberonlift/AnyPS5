@@ -428,7 +428,9 @@ GUEST_POINTER_SLOTS = {
     **{name: (1,) for name in ("strtol", "strtoul", "strtoll", "strtoull", "strtoimax", "strtoumax", "strtod", "strtof", "strtold", "wcstol", "wcstoul", "wcstoll",
                                "wcstoull", "wcstod", "wcstof", "wcstold", "_Stoul", "_Stoull", "_Stoll", "_Stod", "_Stof", "_Stold", "_Stodx", "_Stofx", "_Stoldx")},
     "strtok_r": (2,), "strsep": (0,), "posix_memalign": (0,), "pthread_attr_getstack": (1,), "pthread_attr_getstackaddr": (1,),
-    "sceKernelDlsym": (2,),
+    "asprintf": (0,), "vasprintf": (0,), "wcstok": (2,), "wcstok_s": (3,), "mbsrtowcs": (1,), "mbsrtowcs_s": (3,), "wcsrtombs": (1,), "wcsrtombs_s": (3,),
+    "sceKernelQueryMemoryProtection": (1, 2), "sceKernelMemoryPoolReserve": (4,), "sceKernelJitMapSharedMemory": (2,), "sceKernelDlsym": (2,),
+    "sceAgcDriverGetOwnerName": (1,), "sceAgcDriverGetResourceName": (1,), "sceAgcDriverGetResourceBaseAddressAndSizeInBytes": (1,),
     "scePthreadAttrGetstack": (1,), "scePthreadAttrGetstackaddr": (1,), "sceKernelMapDirectMemory": (0,), "sceKernelMapDirectMemory2": (0,),
     "sceKernelMapNamedDirectMemory": (0,), "sceKernelMapFlexibleMemory": (0,), "sceKernelMapNamedFlexibleMemory": (0,),
     "sceKernelMapNamedSystemFlexibleMemory": (0,), "sceKernelReserveVirtualRange": (0,), "sceKernelMmap": (6,),
@@ -1160,7 +1162,8 @@ FIBER_IMPORTS = ["printf", "fflush", "exit", "_sceFiberInitializeImpl", "sceFibe
 LOADER_IMPORTS = ["printf", "exit", "dlopen", "sceKernelGetExecutableModuleHandle", "sceKernelLoadStartModule", "sceKernelDlsym"]
 TRANSLATION_IMPORTS = ["printf", "fflush", "exit", "mmap", "munmap", "strlen", "strchr", "strtol", "qsort", "writev", "pthread_mutex_lock",
                        "pthread_mutex_unlock", "scePthreadMutexLock", "scePthreadMutexUnlock", "pthread_mutexattr_init", "scePthreadMutexattrSettype",
-                       "pthread_mutexattr_gettype", "pthread_mutexattr_getkind_np", "pthread_mutexattr_destroy", "pthread_self", "pthread_equal"]
+                       "pthread_mutexattr_gettype", "pthread_mutexattr_getkind_np", "pthread_mutexattr_destroy", "pthread_self", "pthread_equal",
+                       "mbsrtowcs", "sceKernelQueryMemoryProtection"]
 LOG_LINE = re.compile(r"^\[[^\]\s]+:\d+ [^\]]+\] .*\n", re.MULTILINE)
 GUEST_LINK = ["-no-pie", f"-Wl,--image-base={GUEST_BASE:#x}", "-Wl,--dynamic-linker=/lib64/ld-linux-x86-64.so.2"]
 LIBRARY_PROGRAM_TIMEOUT = 600
