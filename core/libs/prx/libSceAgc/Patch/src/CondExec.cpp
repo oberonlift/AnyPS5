@@ -11,7 +11,7 @@ namespace {
 
 int SetCommandAddress(std::uint32_t* cmd, const volatile std::uint32_t* command, const char* function) {
     Agc::Command::ValidatePacket(cmd, 0x22u, 5, function);
-    const auto address = reinterpret_cast<std::uintptr_t>(command);
+    const auto address = GuestArena::HostToGuest(command);
     Agc::Command::CheckAddress(address, 4, function);
     cmd[1] = (cmd[1] & 3u) | (static_cast<std::uint32_t>(address) & ~3u);
     cmd[2] = static_cast<std::uint32_t>(address >> 32u);

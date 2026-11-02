@@ -30,7 +30,7 @@ public:
         _imageType = llvm::StructType::create(_context, {_pointer, _i64, _i64, _i64, _pointer, _i64, _i64, _i64, _i64, _i64, _i64, _i64, _pointer, _i64, _pointer, _i64, _i64, _i64, _i64, _pointer, _i64},
                                               "Ps5LiftImage");
         auto* functionType = llvm::StructType::create(_context, {_i64, _pointer}, "Ps5LiftFunctionEntry");
-        auto* programType = llvm::StructType::create(_context, {_pointer, _i64, _pointer, _i64, _pointer, _i64, _i64}, "Ps5LiftProgram");
+        auto* programType = llvm::StructType::create(_context, {_pointer, _i64, _pointer, _i64, _pointer, _i64, _i64, _i64}, "Ps5LiftProgram");
 
         std::vector<llvm::Constant*> images;
         for (std::size_t index = 0; index < _program.Images.size(); ++index) images.push_back(Image(index));
@@ -44,7 +44,7 @@ public:
         for (const auto index : _program.Initialization) initialization.push_back(Int(index));
 
         auto* program = llvm::ConstantStruct::get(programType, {Table(_imageType, images, "ps5lift_images"), Int(images.size()), Table(_i64, initialization, "ps5lift_initialization"), Int(initialization.size()),
-            Table(functionType, entries, "ps5lift_functions"), Int(entries.size()), Int(_program.Images.front().Entry())});
+            Table(functionType, entries, "ps5lift_functions"), Int(entries.size()), Int(_program.Images.front().Entry()), Int(_options.GuestBase)});
         new llvm::GlobalVariable(*_module, programType, true, llvm::GlobalValue::ExternalLinkage, program, "ps5lift_program");
         return Verified(std::move(_module));
     }

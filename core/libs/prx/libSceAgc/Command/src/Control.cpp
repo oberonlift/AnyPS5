@@ -3,7 +3,7 @@
 namespace Agc::Command {
 
 std::uint32_t* WriteJump(CommandBuffer* buffer, std::uint8_t chain, std::uint8_t cachePolicy, const std::uint32_t* target, std::uint32_t sizeInDwords, const char* function) {
-    const auto guestAddress = reinterpret_cast<std::uintptr_t>(target);
+    const auto guestAddress = GuestArena::HostToGuest(target);
     CheckBits(chain, 1, function);
     CheckBits(cachePolicy, 3, function);
     CheckBits(sizeInDwords, 0xfffffu, function);
@@ -19,7 +19,7 @@ std::uint32_t* WritePredication(CommandBuffer* buffer, std::uint8_t condition, s
     CheckBits(condition, 1, function);
     CheckBits(operation, 7, function);
     CheckBits(waitOperation, 1, function);
-    const auto guestAddress = reinterpret_cast<std::uintptr_t>(address);
+    const auto guestAddress = GuestArena::HostToGuest(address);
     if (operation != 0) {
         CheckAddress(guestAddress, 8, function);
     }
@@ -30,7 +30,7 @@ std::uint32_t* WriteMemSemaphore(CommandBuffer* buffer, const volatile void* add
     CheckBits(waitForMailbox, 1, function);
     CheckBits(signalType, 1, function);
     Require(operation == 6 || operation == 7, function, "invalid memory semaphore operation");
-    const auto guestAddress = reinterpret_cast<std::uintptr_t>(address);
+    const auto guestAddress = GuestArena::HostToGuest(address);
     CheckAddress(guestAddress, 8, function);
     return Emit(buffer, 0x39u, {static_cast<std::uint32_t>(guestAddress), static_cast<std::uint32_t>(guestAddress >> 32u), (static_cast<std::uint32_t>(operation) << 29u) | (static_cast<std::uint32_t>(signalType) << 20u) | (static_cast<std::uint32_t>(waitForMailbox) << 16u)}, function);
 }

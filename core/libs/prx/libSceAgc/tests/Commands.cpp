@@ -577,7 +577,7 @@ void testFlowPackets() {
     Storage rejected;
     rejected.words.fill(0xa5a5a5a5u);
     const auto rejectedWords = rejected.words;
-    const auto* rejectedCursor = rejected.buffer.cursor_up;
+    const std::uint32_t* rejectedCursor = rejected.buffer.cursor_up;
     expectFailure([&] { sceAgcDcbJump(&rejected.buffer, 2, 0, target, 1); });
     check(rejected.words == rejectedWords && rejected.buffer.cursor_up == rejectedCursor, "a refused packet changed the command buffer");
     expectFailure([&] { sceAgcDcbJump(&rejected.buffer, 0, 4, target, 1); });
@@ -1041,7 +1041,7 @@ void testDispatchPackets() {
     Storage rejected;
     rejected.words.fill(0xa5a5a5a5u);
     const auto rejectedWords = rejected.words;
-    const auto* rejectedCursor = rejected.buffer.cursor_up;
+    const std::uint32_t* rejectedCursor = rejected.buffer.cursor_up;
     expectFailure([&] { sceAgcCbDispatch(&rejected.buffer, 1, 1, 1, 0x100u); });
     check(rejected.words == rejectedWords && rejected.buffer.cursor_up == rejectedCursor, "a refused packet changed the command buffer");
     expectFailure([&] { sceAgcAcbDispatchIndirect(&rejected.buffer, reinterpret_cast<const volatile void*>(0x1002ull), 0); });
@@ -1111,7 +1111,7 @@ void testAcquireMem() {
     Storage rejected;
     rejected.words.fill(0xa5a5a5a5u);
     const auto rejectedWords = rejected.words;
-    const auto* rejectedCursor = rejected.buffer.cursor_up;
+    const std::uint32_t* rejectedCursor = rejected.buffer.cursor_up;
     expectFailure([&] { sceAgcDcbAcquireMem(&rejected.buffer, 2, 0, 0, base, 0x100, 0); });
     check(rejected.words == rejectedWords && rejected.buffer.cursor_up == rejectedCursor, "a refused packet changed the command buffer");
     expectFailure([&] { sceAgcDcbAcquireMem(&rejected.buffer, 0, 0, 0x80000u, base, 0x100, 0); });

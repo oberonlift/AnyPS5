@@ -3173,7 +3173,7 @@ void APS5_VABI sceNetThreadExit() {
 }
 
 int APS5_VABI sceNetThreadJoin(void* thread) {
-    return scePthreadJoin(static_cast<Pthread>(thread), nullptr);
+    return scePthreadJoin(static_cast<PthreadPrivate*>(thread), nullptr);
 }
 
 int APS5_VABI sceNetUsleep(int microseconds) {

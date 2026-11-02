@@ -361,7 +361,7 @@ int APS5_VABI sceHttp2CreateCookieBox(std::size_t poolSize) {
     const auto mappedSize = (poolSize + 0x3fff) & ~std::size_t{0x3fff};
     void* address = nullptr;
     if (const int result = sceKernelMapNamedFlexibleMemory(&address, mappedSize, 3, 0, "SceHttp2CookieBox"); result != 0) return result;
-    std::shared_ptr<void> memory(address, [mappedSize](void* mapped) { sceKernelMunmap(reinterpret_cast<std::uint64_t>(mapped), mappedSize); });
+    std::shared_ptr<void> memory(address, [mappedSize](void* mapped) { sceKernelMunmap(GuestArena::HostToGuest(mapped), mappedSize); });
     std::lock_guard lock(g_handlesMutex);
     const int id = g_nextHandle.fetch_add(1, std::memory_order_relaxed);
     g_handles.emplace(id, Http2Handle{Http2Kind::CookieBox, 0, poolSize, std::move(memory)});

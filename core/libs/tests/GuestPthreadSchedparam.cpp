@@ -181,7 +181,7 @@ static void* APS5_VABI Spawn(void*) {
 int main() {
     *__error_nid_postfix() = 1234;
     Require(pthread_getprio_nid_postfix(nullptr) == -1 && *__error_nid_postfix() == GUEST_EINVAL);
-    Require(pthread_getprio_nid_postfix(reinterpret_cast<Pthread>(std::uintptr_t{1})) == -1 && *__error_nid_postfix() == GUEST_ESRCH);
+    Require(pthread_getprio_nid_postfix(reinterpret_cast<PthreadPrivate*>(std::uintptr_t{1})) == -1 && *__error_nid_postfix() == GUEST_ESRCH);
     Pthread thread = nullptr;
     Require(scePthreadCreate(&thread, nullptr, Run, nullptr, "schedparam") == SCE_OK);
     const Pthread retired = thread;

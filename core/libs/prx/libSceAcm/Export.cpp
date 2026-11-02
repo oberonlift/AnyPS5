@@ -80,7 +80,7 @@ int AppendReverbJob(AcmBatchInfo& batch, std::uint32_t blockSize, const ReverbEn
     put(0x174, 2 * blockSize);
     put(0x178, wideMask);
     put(0x17C, count + 1);
-    auto* buffer = static_cast<std::byte*>(batch.buffer);
+    auto* buffer = static_cast<std::byte*>(static_cast<void*>(batch.buffer));
     const auto descriptorOffset = capacity - ReverbDescriptorSize;
     std::memcpy(buffer + descriptorOffset, descriptor.data(), descriptor.size());
     const std::array<std::uint64_t, 5> words{0x028000000000000D, Address(buffer + descriptorOffset), blockSize == 1024 || hasMetadata ? 0x1000Au : 0x1030Au, 0x10A, 0x20A};
@@ -124,7 +124,7 @@ int EncodeTransforms(AcmBatchInfo* batch, bool inverse, std::int32_t transformSi
         header = (inverse ? 0 : std::uint64_t{1} << 16) | (static_cast<std::uint64_t>(flags & 6) << 20) | (real ? std::uint64_t{1} << (inverse ? 23 : 24) : 0) | (std::uint64_t{1} << (inputFormat == 1 ? 25 : 27)) | (std::uint64_t{1} << (outputFormat == 1 ? 26 : 28)) | (std::uint64_t{1} << (17 + sizeIndex)) | (static_cast<std::uint64_t>(encodedCount) << 29);
     }
     header |= static_cast<std::uint64_t>(7 + sizeIndex) << 8;
-    auto* buffer = static_cast<std::byte*>(batch->buffer);
+    auto* buffer = static_cast<std::byte*>(static_cast<void*>(batch->buffer));
     auto offset = batch->offset;
     const auto capacity = batch->buffer_size;
     const auto hasRoom = [&](std::uint64_t bytes) { return offset <= capacity && capacity - offset >= bytes; };
@@ -297,7 +297,7 @@ int APS5_VABI sceAcm_ConvReverb_SharedInput(AcmBatchInfo* batch, std::uint32_t m
         if (!history || history->blockMetadata || !history->samples || !input->inputChannels[channel]) return SCE_ACM_ERROR_BAD_POINTER;
         const auto position = wideSamples ? channel : channelCount - 1 - channel;
         sources[position] = input->inputChannels[channel];
-        destinations[position] = static_cast<std::byte*>(history->samples) + current * slotBytes;
+        destinations[position] = static_cast<std::byte*>(static_cast<void*>(history->samples)) + current * slotBytes;
     }
     AcmBatchInfo work = *batch;
     if (const auto result = sceAcm_FFT(&work, static_cast<std::int32_t>(2 * blockSize), channelCount, 0, sources.data(), wideSamples ? 0 : 1, destinations.data(), 9)) return result;
@@ -347,7 +347,7 @@ int APS5_VABI sceAcm_ConvReverb_SharedInput(AcmBatchInfo* batch, std::uint32_t m
     }
     flags |= (std::uint64_t{std::min(outputCount - 1, 15u)} << 29) | (std::uint64_t{1} << ((64 - std::countl_zero(channelCount)) & 63)) | (std::uint64_t{std::min(smallestBlockCount, 7u)} << 45);
     const std::uint64_t header = ((flags & 0xFFFF) ? std::uint64_t{1} << 63 : flags) | ((0x0B + static_cast<std::uint64_t>(std::countr_zero(blockSize >> 7))) << 8);
-    std::memcpy(static_cast<std::byte*>(work.buffer) + headerOffset, &header, sizeof(header));
+    std::memcpy(static_cast<std::byte*>(static_cast<void*>(work.buffer)) + headerOffset, &header, sizeof(header));
     *batch = work;
     return 0;
 }
@@ -375,7 +375,7 @@ int APS5_VABI sceAcm_Panner(AcmBatchInfo* batch, std::uint32_t sourceCount, cons
     const auto offset = batch->offset;
     const auto capacity = batch->buffer_size;
     if (offset > capacity || capacity - offset < 8) return static_cast<int>(0x81940009);
-    auto* buffer = static_cast<std::byte*>(batch->buffer);
+    auto* buffer = static_cast<std::byte*>(static_cast<void*>(batch->buffer));
     const auto writeWord = [buffer](std::size_t position, std::uint64_t value) { std::memcpy(buffer + position, &value, sizeof(value)); };
     const auto encodedCount = sourceCount < 255 ? sourceCount : 255;
     writeWord(offset, (static_cast<std::uint64_t>(channelCount) << 24) | (static_cast<std::uint64_t>(encodedCount) << 16) | (std::uint64_t{1} << (sourceMode + 32)) | (std::uint64_t{1} << (outputMode + 35)) | 0x300);
@@ -404,7 +404,7 @@ int APS5_VABI sceAcmBatchJobPriority(AcmBatchInfo* batch, std::uint32_t priority
     const auto offset = batch->offset;
     if (offset > batch->buffer_size || batch->buffer_size - offset < 8) return static_cast<int>(0x81940009);
     const std::uint64_t job = 0x10 | (static_cast<std::uint64_t>(priority) << 8);
-    std::memcpy(static_cast<std::byte*>(batch->buffer) + offset, &job, sizeof(job));
+    std::memcpy(static_cast<std::byte*>(static_cast<void*>(batch->buffer)) + offset, &job, sizeof(job));
     batch->offset = offset + sizeof(job);
     return 0;
 }

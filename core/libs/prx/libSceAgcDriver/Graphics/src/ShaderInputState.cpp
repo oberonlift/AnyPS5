@@ -1,4 +1,5 @@
 #include "prx/libSceAgcDriver/Graphics/include/ShaderInputState.hpp"
+#include "prx/libc/include/GuestArena.hpp"
 #include "SceShaders.hpp"
 #include "prx/libSceAgc/Shader/include/ShaderConstants.hpp"
 #include "prx/libSceAgcDriver/Graphics/include/State.hpp"
@@ -49,7 +50,7 @@ std::uint32_t read(const Registers& registers, std::uint32_t offset, RegisterBan
 
 template <typename T> T _readHeaderPod(std::span<const std::byte> header, std::uint64_t headerAddress, const void* pointer, std::size_t bytes = sizeof(T)) {
     if (pointer == nullptr) throw std::runtime_error("AGC graphics: null AGC header pointer");
-    const auto address = reinterpret_cast<std::uint64_t>(pointer);
+    const auto address = GuestArena::HostToGuest(pointer);
     if (address < headerAddress) throw std::runtime_error("AGC graphics: AGC header pointer precedes the shader header");
     const auto offset = address - headerAddress;
     if (offset > header.size() || bytes > header.size() - offset) throw std::runtime_error("AGC graphics: AGC header pointer is outside the registered shader header");
@@ -61,7 +62,7 @@ template <typename T> T _readHeaderPod(std::span<const std::byte> header, std::u
 template <typename T> void _readHeaderArray(std::span<const std::byte> header, std::uint64_t headerAddress, const void* pointer, std::uint32_t count, T* destination) {
     if (count == 0) return;
     if (pointer == nullptr) throw std::runtime_error("AGC graphics: null AGC header array pointer");
-    const auto address = reinterpret_cast<std::uint64_t>(pointer);
+    const auto address = GuestArena::HostToGuest(pointer);
     if (address < headerAddress) throw std::runtime_error("AGC graphics: AGC header array pointer precedes the shader header");
     const auto offset = address - headerAddress;
     const auto bytes = static_cast<std::uint64_t>(count) * sizeof(T);
@@ -279,7 +280,7 @@ ShaderRecompiler::ShaderVertexStageInfo DecodeVertexStageInfo(std::span<const st
             const auto wordsPer = stride / 4u;
             words.assign(static_cast<std::size_t>(last - first + 1u) * wordsPer, 0u);
             const auto begin = base + static_cast<std::uint64_t>(first) * stride;
-            if (AgcDriver::GuestMemory::Accessible(reinterpret_cast<const void*>(begin), words.size() * 4u)) {
+            if (AgcDriver::GuestMemory::Accessible(GuestArena::GuestToHost(begin), words.size() * 4u)) {
                 AgcDriver::GuestMemory::Read(begin, std::as_writable_bytes(std::span(words)), 4);
                 return;
             }

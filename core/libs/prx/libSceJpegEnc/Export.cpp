@@ -67,7 +67,7 @@ std::int32_t validateEncodeParam(const JpegEncEncodeParam* param) {
     if (!param) return SCE_JPEG_ENC_ERROR_INVALID_ADDR;
     const bool grayscaleInput = param->pixel_format == PIXEL_FORMAT_Y8;
     if (!param->image) return SCE_JPEG_ENC_ERROR_INVALID_ADDR;
-    if (!grayscaleInput && reinterpret_cast<std::uintptr_t>(param->image) % 4 != 0) return SCE_JPEG_ENC_ERROR_INVALID_ADDR;
+    if (!grayscaleInput && reinterpret_cast<std::uintptr_t>(static_cast<const void*>(param->image)) % 4 != 0) return SCE_JPEG_ENC_ERROR_INVALID_ADDR;
     if (!param->jpeg) return SCE_JPEG_ENC_ERROR_INVALID_ADDR;
 
     if (param->image_size == 0 || param->jpeg_size == 0) return SCE_JPEG_ENC_ERROR_INVALID_SIZE;
@@ -117,7 +117,7 @@ void yuvToRgb(std::uint8_t y, std::uint8_t u, std::uint8_t v, std::uint8_t* rgb)
 }
 
 std::vector<std::uint8_t> toPackedPixels(const JpegEncEncodeParam& param, std::uint32_t channels) {
-    const auto* image = static_cast<const std::uint8_t*>(param.image);
+    const auto* image = static_cast<const std::uint8_t*>(static_cast<const void*>(param.image));
     const std::size_t width = param.image_width;
     std::vector<std::uint8_t> pixels(width * param.image_height * channels);
     for (std::size_t y = 0; y < param.image_height; ++y) {

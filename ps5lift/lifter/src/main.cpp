@@ -87,6 +87,7 @@ int main(int argc, char** argv) {
         std::cerr << "ps5lift: " << error.what() << "\n";
         return 2;
     }
+    if (target.Triple.isOSDarwin()) lift.GuestBase = Ps5Lift::DarwinGuestBase;
 
     try {
         const auto program = Ps5Lift::GuestProgram::Load(input);

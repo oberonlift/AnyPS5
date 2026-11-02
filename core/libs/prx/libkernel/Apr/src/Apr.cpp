@@ -142,11 +142,11 @@ AprFile _file(std::uint32_t id) {
 constexpr std::uint32_t INVALID_FILE_ID = 0xFFFFFFFFu;
 constexpr int SCE_KERNEL_ERROR_ENOENT = static_cast<int>(0x80020002);
 
-int _resolveForEach(const char* prefix, const char** paths, uint32_t count, uint32_t* ids, uint64_t* sizes, int* results) {
+int _resolveForEach(const char* prefix, const GuestArena::GuestPointer<const char>* paths, uint32_t count, uint32_t* ids, uint64_t* sizes, int* results) {
     if (!paths || !ids) return _fail(GUEST_EINVAL);
     std::uint32_t resolvedCount = 0;
     for (uint32_t index = 0; index < count; ++index) {
-        const std::string path = prefix ? (paths[index] ? std::string(prefix) + paths[index] : std::string()) : (paths[index] ? std::string(paths[index]) : std::string());
+        const std::string path = prefix ? (paths[index] ? std::string(prefix) + static_cast<const char*>(paths[index]) : std::string()) : (paths[index] ? std::string(paths[index]) : std::string());
         const bool resolved = !path.empty() && _resolve(path.c_str(), &ids[index], sizes ? &sizes[index] : nullptr);
         if (!resolved) {
             ids[index] = INVALID_FILE_ID;
@@ -843,7 +843,7 @@ bool AmmSubmitted_nid_no_patch(std::uint32_t id) {
     return true;
 }
 
-int APS5_VABI sceKernelAprResolveFilepathsToIds(const char** paths, uint32_t count, uint32_t* ids, uint32_t* error_index) {
+int APS5_VABI sceKernelAprResolveFilepathsToIds(const GuestArena::GuestPointer<const char>* paths, uint32_t count, uint32_t* ids, uint32_t* error_index) {
     if (!paths || !ids) return _fail(GUEST_EINVAL);
     for (uint32_t index = 0; index < count; ++index) {
         if (!_resolve(paths[index], &ids[index], nullptr)) {
@@ -855,7 +855,7 @@ int APS5_VABI sceKernelAprResolveFilepathsToIds(const char** paths, uint32_t cou
     return 0;
 }
 
-int APS5_VABI sceKernelAprResolveFilepathsToIdsAndFileSizes(const char** paths, uint32_t count, uint32_t* ids, uint64_t* sizes, uint32_t* error_index) {
+int APS5_VABI sceKernelAprResolveFilepathsToIdsAndFileSizes(const GuestArena::GuestPointer<const char>* paths, uint32_t count, uint32_t* ids, uint64_t* sizes, uint32_t* error_index) {
     if (!paths || !ids || !sizes) return _fail(GUEST_EINVAL);
     for (uint32_t index = 0; index < count; ++index) {
         if (!_resolve(paths[index], &ids[index], &sizes[index])) {
@@ -868,10 +868,10 @@ int APS5_VABI sceKernelAprResolveFilepathsToIdsAndFileSizes(const char** paths, 
     return 0;
 }
 
-int APS5_VABI sceKernelAprResolveFilepathsWithPrefixToIdsAndFileSizes(const char* prefix, const char** paths, uint32_t count, uint32_t* ids, uint64_t* sizes, uint32_t* error_index) {
+int APS5_VABI sceKernelAprResolveFilepathsWithPrefixToIdsAndFileSizes(const char* prefix, const GuestArena::GuestPointer<const char>* paths, uint32_t count, uint32_t* ids, uint64_t* sizes, uint32_t* error_index) {
     if (!prefix || !paths || !ids) return _fail(GUEST_EINVAL);
     for (uint32_t index = 0; index < count; ++index) {
-        const std::string path = paths[index] ? std::string(prefix) + paths[index] : std::string();
+        const std::string path = paths[index] ? std::string(prefix) + static_cast<const char*>(paths[index]) : std::string();
         if (path.empty() || !_resolve(path.c_str(), &ids[index], sizes ? &sizes[index] : nullptr)) {
             ids[index] = INVALID_FILE_ID;
             if (sizes) sizes[index] = 0;
@@ -882,7 +882,7 @@ int APS5_VABI sceKernelAprResolveFilepathsWithPrefixToIdsAndFileSizes(const char
     return 0;
 }
 
-int APS5_VABI sceKernelAprResolveFilepathsWithPrefixToIds(const char* prefix, const char** paths, uint32_t count, uint32_t* ids, uint32_t* error_index) {
+int APS5_VABI sceKernelAprResolveFilepathsWithPrefixToIds(const char* prefix, const GuestArena::GuestPointer<const char>* paths, uint32_t count, uint32_t* ids, uint32_t* error_index) {
     return sceKernelAprResolveFilepathsWithPrefixToIdsAndFileSizes(prefix, paths, count, ids, nullptr, error_index);
 }
 
@@ -927,21 +927,21 @@ int APS5_VABI sceKernelAprWaitCommandBuffer(uint32_t id) {
     return 0;
 }
 
-int APS5_VABI sceKernelAprResolveFilepathsToIdsForEach(const char** paths, uint32_t count, uint32_t* ids, int* results) {
+int APS5_VABI sceKernelAprResolveFilepathsToIdsForEach(const GuestArena::GuestPointer<const char>* paths, uint32_t count, uint32_t* ids, int* results) {
     return _resolveForEach(nullptr, paths, count, ids, nullptr, results);
 }
 
-int APS5_VABI sceKernelAprResolveFilepathsToIdsAndFileSizesForEach(const char** paths, uint32_t count, uint32_t* ids, uint64_t* sizes, int* results) {
+int APS5_VABI sceKernelAprResolveFilepathsToIdsAndFileSizesForEach(const GuestArena::GuestPointer<const char>* paths, uint32_t count, uint32_t* ids, uint64_t* sizes, int* results) {
     if (!sizes) return _fail(GUEST_EINVAL);
     return _resolveForEach(nullptr, paths, count, ids, sizes, results);
 }
 
-int APS5_VABI sceKernelAprResolveFilepathsWithPrefixToIdsForEach(const char* prefix, const char** paths, uint32_t count, uint32_t* ids, int* results) {
+int APS5_VABI sceKernelAprResolveFilepathsWithPrefixToIdsForEach(const char* prefix, const GuestArena::GuestPointer<const char>* paths, uint32_t count, uint32_t* ids, int* results) {
     if (!prefix) return _fail(GUEST_EINVAL);
     return _resolveForEach(prefix, paths, count, ids, nullptr, results);
 }
 
-int APS5_VABI sceKernelAprResolveFilepathsWithPrefixToIdsAndFileSizesForEach(const char* prefix, const char** paths, uint32_t count, uint32_t* ids, uint64_t* sizes, int* results) {
+int APS5_VABI sceKernelAprResolveFilepathsWithPrefixToIdsAndFileSizesForEach(const char* prefix, const GuestArena::GuestPointer<const char>* paths, uint32_t count, uint32_t* ids, uint64_t* sizes, int* results) {
     if (!prefix || !sizes) return _fail(GUEST_EINVAL);
     return _resolveForEach(prefix, paths, count, ids, sizes, results);
 }

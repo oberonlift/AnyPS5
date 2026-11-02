@@ -262,7 +262,7 @@ int APS5_VABI munmap_nid_postfix(void* address, std::size_t length) noexcept {
         rounded > std::numeric_limits<std::uintptr_t>::max() - start)
         return failed(GuestInvalid);
     try {
-        if (sceKernelMunmap(start, rounded) != 0) return failed(GuestInvalid);
+        if (sceKernelMunmap(GuestArena::HostToGuest(reinterpret_cast<const void*>(start)), rounded) != 0) return failed(GuestInvalid);
         return 0;
     } catch (const std::bad_alloc&) {
         return failed(GuestNoMemory);

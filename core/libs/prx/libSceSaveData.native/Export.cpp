@@ -1035,7 +1035,7 @@ static int getSaveDataMemory2(SaveDataMemoryGet2* get_param) {
         if (!destination.Open()) {
             throw std::runtime_error("SaveData: the memory buffer is not writable");
         }
-        f.read(static_cast<char*>(d->buf), static_cast<std::streamsize>(d->buf_size));
+        f.read(static_cast<char*>(static_cast<void*>(d->buf)), static_cast<std::streamsize>(d->buf_size));
         if (!f) {
             return SAVE_DATA_ERROR_INTERNAL;
         }
@@ -1084,7 +1084,7 @@ int APS5_VABI sceSaveDataLoadIcon(const SaveDataMountPoint* mount_point, SaveDat
     const auto count = std::min(icon->buf_size, static_cast<std::size_t>(size));
     if (count > static_cast<std::uintmax_t>(std::numeric_limits<std::streamsize>::max())) return SAVE_DATA_ERROR_INTERNAL;
     file.seekg(0);
-    if (count != 0) file.read(static_cast<char*>(icon->buf), static_cast<std::streamsize>(count));
+    if (count != 0) file.read(static_cast<char*>(static_cast<void*>(icon->buf)), static_cast<std::streamsize>(count));
     if (!file) return SAVE_DATA_ERROR_INTERNAL;
     icon->data_size = static_cast<std::size_t>(size);
     return SAVE_DATA_OK;
@@ -1298,7 +1298,7 @@ static int setSaveDataMemory2(const SaveDataMemorySet2* set_param) {
     for (std::uint32_t i = 0; i < n; i++) {
         const SaveDataMemoryData& d = set_param->data[i];
         if (d.buf_size != 0) {
-            writes.push_back({d.offset, d.buf_size, static_cast<const char*>(d.buf)});
+            writes.push_back({d.offset, d.buf_size, static_cast<const char*>(static_cast<const void*>(d.buf))});
         }
     }
     if (!writes.empty()) {

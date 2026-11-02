@@ -1,4 +1,5 @@
 #include "prx/libSceAgcDriver/Execution/include/Driver/Driver.hpp"
+#include "prx/libc/include/GuestArena.hpp"
 #include "prx/libSceAgcDriver/Execution/include/Driver/Shaders/ShaderRegistry.hpp"
 #include "prx/libSceAgcDriver/Execution/include/Driver/Diagnostics.hpp"
 #include "prx/libSceAgcDriver/Execution/include/Driver/Draw/DrawPipeline.hpp"
@@ -67,7 +68,7 @@ void InitializeMerged(const QueueState& queue, DrawProgram& program, std::uint32
     const auto address = static_cast<std::uint64_t>(low) | (static_cast<std::uint64_t>(high) << 32u);
     require(address != 0 || !pointerRequired, "merged shader user-data address is null");
     if (address == 0) return;
-    if (pointerRequired) GuestMemory::CheckRange(reinterpret_cast<const void*>(address), 8, 4);
+    if (pointerRequired) GuestMemory::CheckRange(GuestArena::GuestToHost(address), 8, 4);
     program.userData[0] = low;
     program.userData[1] = high;
 }

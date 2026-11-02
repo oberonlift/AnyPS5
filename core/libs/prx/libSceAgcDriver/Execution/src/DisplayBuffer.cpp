@@ -1,4 +1,5 @@
 #include "prx/libSceAgcDriver/Execution/include/DisplayBuffer.hpp"
+#include "prx/libc/include/GuestArena.hpp"
 #include "prx/libSceAgcDriver/Execution/include/DisplayFormat.hpp"
 #include "prx/libSceAgcDriver/Execution/include/GuestMemory.hpp"
 #include "prx/libSceAgcDriver/Execution/include/PerformanceTimer.hpp"
@@ -241,8 +242,8 @@ Graphics::DccKeys DisplayBufferKeys(const DisplayBuffer& buffer) {
     const auto keys = Graphics::CurrentDccKeys(buffer.dccAddress, DisplayBufferSize(buffer), count);
     if (keys == Graphics::DccKeys::Uncompressed || Graphics::IsDccClear(keys)) return keys;
     char differing[128] = "";
-    if (keys == Graphics::DccKeys::Mixed && GuestMemory::Accessible(reinterpret_cast<const void*>(buffer.dccAddress), count)) {
-        const auto* bytes = reinterpret_cast<const std::uint8_t*>(buffer.dccAddress);
+    if (keys == Graphics::DccKeys::Mixed && GuestMemory::Accessible(GuestArena::GuestToHost(buffer.dccAddress), count)) {
+        const auto* bytes = static_cast<const std::uint8_t*>(GuestArena::GuestToHost(buffer.dccAddress));
         traceDisplayKeys(buffer, bytes, count);
         const auto* other = std::find_if(bytes + 1, bytes + count, [&](std::uint8_t key) { return key != bytes[0]; });
         if (other == bytes + count) {
@@ -266,8 +267,8 @@ std::vector<std::byte> ReadDisplayBuffer(const DisplayBuffer& buffer) {
         std::fprintf(stderr, "[gpu] scanout display buffer 0x%llx %ux%u format 0x%016llx at %.1f s\n", static_cast<unsigned long long>(buffer.address), buffer.width, buffer.height, static_cast<unsigned long long>(buffer.pixelFormat), std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count());
     }
     GuestMemory::FlushGpuWrites(buffer.address, size);
-    GuestMemory::CheckRange(reinterpret_cast<const void*>(buffer.address), size, buffer.alignment);
-    const auto* source = reinterpret_cast<const std::byte*>(buffer.address);
+    GuestMemory::CheckRange(GuestArena::GuestToHost(buffer.address), size, buffer.alignment);
+    const auto* source = static_cast<const std::byte*>(GuestArena::GuestToHost(buffer.address));
     return DecodeDisplayBuffer(buffer, {source, size});
 }
 
@@ -284,8 +285,8 @@ std::vector<std::byte> DisplayBufferTexels(const DisplayBuffer& buffer, std::spa
 std::vector<std::byte> ReadDisplayBufferTexels(const DisplayBuffer& buffer) {
     const auto size = DisplayBufferSize(buffer);
     GuestMemory::FlushGpuWrites(buffer.address, size);
-    GuestMemory::CheckRange(reinterpret_cast<const void*>(buffer.address), size, buffer.alignment);
-    return DisplayBufferTexels(buffer, {reinterpret_cast<const std::byte*>(buffer.address), size});
+    GuestMemory::CheckRange(GuestArena::GuestToHost(buffer.address), size, buffer.alignment);
+    return DisplayBufferTexels(buffer, {static_cast<const std::byte*>(GuestArena::GuestToHost(buffer.address)), size});
 }
 
 }

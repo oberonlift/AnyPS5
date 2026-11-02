@@ -17,7 +17,7 @@ constexpr int sceSemValueMax = 0x7fffffff;
 std::mutex semInitializationMutex;
 
 PthreadSem destroyedSem() {
-    return reinterpret_cast<PthreadSem>(std::uintptr_t{2});
+    return reinterpret_cast<PthreadSemPrivate*>(std::uintptr_t{2});
 }
 
 PthreadSemPrivate* resolveSem(PthreadSem* sem) {

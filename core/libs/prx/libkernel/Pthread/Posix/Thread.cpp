@@ -59,7 +59,7 @@ int APS5_VABI cpuset_getaffinity_nid_postfix(int level, int which, std::int64_t 
     if (size < sizeof(KernelCpumask) || size >= 24) return fail(GuestErange);
     if (size > 16) NotImplemented_nid_no_patch("cpuset_getaffinity with a size of 17 to 23 bytes");
     if (!mask) return fail(GuestEfault);
-    auto* self = scePthreadSelf();
+    PthreadPrivate* self = scePthreadSelf();
     KernelCpumask affinity = 0;
     switch (which) {
     case WhichThread: {
@@ -121,7 +121,7 @@ int APS5_VABI cpuset_setaffinity_nid_postfix(int level, int which, std::int64_t 
     for (std::size_t index = sizeof(KernelCpumask); index < size; ++index) {
         if (buffer[index] != 0) return fail(GuestEinval);
     }
-    auto* self = scePthreadSelf();
+    PthreadPrivate* self = scePthreadSelf();
     const auto threadExists = [&] { return id == -1 || id == self->tid || LiveGuestThreadExists(id); };
     switch (level) {
     case LevelRoot:
@@ -194,7 +194,7 @@ int APS5_VABI rtprio_thread_nid_postfix(int function, int lwpid, GuestRtPrio* pr
     };
     if (function != Lookup && function != Set) return fail(GuestEsrch);
     if (priority == nullptr) return fail(GuestEfault);
-    auto* self = scePthreadSelf();
+    PthreadPrivate* self = scePthreadSelf();
     int policy = self->schedPolicy.load(std::memory_order_relaxed);
     int schedPriority = self->priority.load(std::memory_order_relaxed);
     const bool other = lwpid != 0 && static_cast<std::int64_t>(lwpid) != static_cast<std::int64_t>(self->tid);

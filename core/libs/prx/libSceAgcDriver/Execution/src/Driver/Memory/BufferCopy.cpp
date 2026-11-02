@@ -1,4 +1,5 @@
 #include "prx/libSceAgcDriver/Execution/include/Driver/Driver.hpp"
+#include "prx/libc/include/GuestArena.hpp"
 #include "prx/libSceAgcDriver/Execution/include/Driver/Memory/BufferCopy.hpp"
 #include "prx/libSceAgcDriver/Execution/include/Driver/Diagnostics.hpp"
 #include "prx/libSceAgcDriver/Execution/include/GuestMemory.hpp"
@@ -195,7 +196,7 @@ bool Driver::copyBuffer(QueueState& queue, std::uint32_t queueId, std::span<cons
         bytes = range->bytes;
     } else if (indexed) {
         Graphics::FinishLeaseWork();
-        const bool recordAccessible = GuestMemory::Accessible(reinterpret_cast<const void*>(record), 12);
+        const bool recordAccessible = GuestMemory::Accessible(GuestArena::GuestToHost(record), 12);
 
         bool published = false;
         if (!recordAccessible || Graphics::Recorder::SnapshotWriteOverlaps(record, 12) || Graphics::StorageTexture::FlushPending(record, 12, nullptr, "indexed copy record", Graphics::PublishScope::Whole, &published) || published || labelPending(record, 12)) {
@@ -204,9 +205,9 @@ bool Driver::copyBuffer(QueueState& queue, std::uint32_t queueId, std::span<cons
             return false;
         }
         std::uint32_t count = 0, sourceOffset = 0, destinationOffset = 0;
-        std::memcpy(&count, reinterpret_cast<const void*>(record), 4);
-        std::memcpy(&sourceOffset, reinterpret_cast<const void*>(record + 4), 4);
-        std::memcpy(&destinationOffset, reinterpret_cast<const void*>(record + 8), 4);
+        std::memcpy(&count, GuestArena::GuestToHost(record), 4);
+        std::memcpy(&sourceOffset, GuestArena::GuestToHost(record + 4), 4);
+        std::memcpy(&destinationOffset, GuestArena::GuestToHost(record + 8), 4);
         const auto range = IndexedCopyRange(userData, groups[0], count, sourceOffset, destinationOffset);
         if (!range || (record < range->destination + range->bytes && range->destination < record + 12)) {
             countCopy(CopyShape, range ? range->bytes : 0, started, locked);
@@ -216,7 +217,7 @@ bool Driver::copyBuffer(QueueState& queue, std::uint32_t queueId, std::span<cons
         destination = range->destination;
         bytes = range->bytes;
     } else {
-        const bool recordAccessible = GuestMemory::Accessible(reinterpret_cast<const void*>(record), 8);
+        const bool recordAccessible = GuestMemory::Accessible(GuestArena::GuestToHost(record), 8);
 
         bool published = false;
         if (!recordAccessible || Graphics::Recorder::SnapshotWriteOverlaps(record, 8) || Graphics::StorageTexture::FlushPending(record, 8, nullptr, "buffer copy count", Graphics::PublishScope::Whole, &published) || published || labelPending(record, 8)) {
@@ -225,8 +226,8 @@ bool Driver::copyBuffer(QueueState& queue, std::uint32_t queueId, std::span<cons
             return false;
         }
         std::uint32_t count = 0, period = 0;
-        std::memcpy(&count, reinterpret_cast<const void*>(record), 4);
-        std::memcpy(&period, reinterpret_cast<const void*>(record + 4), 4);
+        std::memcpy(&count, GuestArena::GuestToHost(record), 4);
+        std::memcpy(&period, GuestArena::GuestToHost(record + 4), 4);
         bytes = static_cast<std::size_t>(count) * 4u;
 
         if (count == 0 || period < count || groups[0] != (count + 63u) / 64u || count > userData[2] || count > userData[6] || bytes > (16u << 20u) || source % 4 != 0 || destination % 4 != 0 || (record < destination + bytes && destination < record + 8)) {
@@ -238,7 +239,7 @@ bool Driver::copyBuffer(QueueState& queue, std::uint32_t queueId, std::span<cons
         countCopy(CopyOverlapping, bytes, started, locked);
         return false;
     }
-    if (!GuestMemory::Accessible(reinterpret_cast<const void*>(source), bytes) || !GuestMemory::Accessible(reinterpret_cast<const void*>(destination), bytes, true)) {
+    if (!GuestMemory::Accessible(GuestArena::GuestToHost(source), bytes) || !GuestMemory::Accessible(GuestArena::GuestToHost(destination), bytes, true)) {
         countCopy(CopyInaccessible, bytes, started, locked);
         return false;
     }

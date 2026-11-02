@@ -268,8 +268,8 @@ int main() {
     Require(pthread_setaffinity_np_nid_postfix(target, GUEST_CPUSET_BYTES, nullptr) == GUEST_EFAULT);
     Require(pthread_setaffinity_np_nid_postfix(nullptr, GUEST_CPUSET_BYTES, request) == GUEST_EINVAL);
     std::uint64_t unknownThread[8]{};
-    Require(pthread_setaffinity_np_nid_postfix(reinterpret_cast<Pthread>(unknownThread), GUEST_CPUSET_BYTES, request) == GUEST_ESRCH);
-    Require(pthread_setaffinity_np_nid_postfix(reinterpret_cast<Pthread>(unknownThread), 8, request) == GUEST_ESRCH);
+    Require(pthread_setaffinity_np_nid_postfix(reinterpret_cast<PthreadPrivate*>(unknownThread), GUEST_CPUSET_BYTES, request) == GUEST_ESRCH);
+    Require(pthread_setaffinity_np_nid_postfix(reinterpret_cast<PthreadPrivate*>(unknownThread), 8, request) == GUEST_ESRCH);
     settle.set_value();
     Require(scePthreadJoin(target, nullptr) == SCE_OK);
     Require(pthread_setaffinity_np_nid_postfix(target, GUEST_CPUSET_BYTES, request) == GUEST_ESRCH);

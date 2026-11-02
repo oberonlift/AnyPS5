@@ -12,8 +12,8 @@ static constexpr int SCE_OK = 0;
 static constexpr int POSIX_EDEADLK = 11;
 static constexpr int POSIX_EINVAL = 22;
 static constexpr int POSIX_ETIMEDOUT = 60;
-static const PthreadMutex AdaptiveInitializer = reinterpret_cast<PthreadMutex>(std::uintptr_t{1});
-static const PthreadMutex DestroyedMutex = reinterpret_cast<PthreadMutex>(std::uintptr_t{2});
+static const PthreadMutex AdaptiveInitializer = reinterpret_cast<PthreadMutexPrivate*>(std::uintptr_t{1});
+static const PthreadMutex DestroyedMutex = reinterpret_cast<PthreadMutexPrivate*>(std::uintptr_t{2});
 
 static void Require(bool value) { if (!value) std::abort(); }
 
@@ -141,7 +141,7 @@ int main() {
     Require(scePthreadMutexDestroy(&mutex) == SCE_KERNEL_ERROR_EBUSY);
     Require(scePthreadMutexUnlock(&mutex) == SCE_OK);
     Require(scePthreadMutexDestroy(&mutex) == SCE_OK);
-    Require(mutex == reinterpret_cast<PthreadMutex>(std::uintptr_t{2}));
+    Require(mutex == reinterpret_cast<PthreadMutexPrivate*>(std::uintptr_t{2}));
     Require(scePthreadMutexDestroy(&mutex) == SCE_KERNEL_ERROR_EINVAL);
 
     Require(scePthreadMutexInit(&mutex, &attr, "attr") == SCE_OK);

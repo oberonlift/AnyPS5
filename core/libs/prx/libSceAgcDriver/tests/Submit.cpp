@@ -805,7 +805,7 @@ void testShaderHeaderAlignment() {
     const auto at = [](std::size_t offset, const Shader& fields) {
         Header header;
         header.shader = fields;
-        const auto address = reinterpret_cast<std::uintptr_t>(fields.code);
+        const auto address = GuestArena::HostToGuest(fields.code);
         header.registers = {{{0x20c, static_cast<std::uint32_t>(address >> 8u)}, {0x20d, static_cast<std::uint32_t>(address >> 40u)}, {0x207, 1}, {0x208, 1}, {0x209, 1}, {0x212, 0}, {0x213, 0}}};
         header.specials.dispatch_modifier = 0x8000u;
         header.shader.sh_registers = reinterpret_cast<ShaderRegister*>(storage.data() + offset + offsetof(Header, registers));

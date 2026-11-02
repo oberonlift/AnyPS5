@@ -63,7 +63,7 @@ int main() {
     Require(scePthreadGetname(named, name) == SCE_OK && std::strcmp(name, "0123456789abcdefghijklmnopqrstu") == 0);
     Require(scePthreadJoin(named, nullptr) == SCE_OK);
     for (const char* tooLong : {"0123456789abcdefghijklmnopqrstuv", "0123456789abcdefghijklmnopqrstuvw"}) {
-        Pthread cleared = reinterpret_cast<Pthread>(std::uintptr_t{0x77});
+        Pthread cleared = reinterpret_cast<PthreadPrivate*>(std::uintptr_t{0x77});
         Require(scePthreadCreate(&cleared, nullptr, Finish, nullptr, tooLong) == SCE_KERNEL_ERROR_ENAMETOOLONG);
         Require(cleared == nullptr);
     }

@@ -1,4 +1,5 @@
 #include "prx/libSceAgcDriver/Execution/include/ProfileOutput.hpp"
+#include "prx/libc/include/GuestArena.hpp"
 #include "prx/libSceAgcDriver/Execution/include/Driver/Driver.hpp"
 #include "prx/libSceAgcDriver/Execution/include/Driver/Synchronization/WaitMemory.hpp"
 #include "prx/libSceAgcDriver/Execution/include/Driver/Queues/SubmissionRing.hpp"
@@ -38,7 +39,7 @@ void PollSleep() {
 bool OwnStoreRejects(std::span<const std::uint32_t> packet, std::uint64_t awaited, std::size_t bytes, std::uint32_t queue) {
     const auto own = Graphics::Recorder::UnlandedOwnLabel(awaited, bytes, queue);
     if (own.mask == 0) return false;
-    const std::uint64_t memory = bytes == 8 ? *reinterpret_cast<const volatile std::uint64_t*>(awaited) : *reinterpret_cast<const volatile std::uint32_t*>(awaited);
+    const std::uint64_t memory = bytes == 8 ? *static_cast<const volatile std::uint64_t*>(GuestArena::GuestToHost(awaited)) : *static_cast<const volatile std::uint32_t*>(GuestArena::GuestToHost(awaited));
     return !Pm4::WaitComparesValue(packet, (memory & ~own.mask) | own.value);
 }
 
@@ -125,7 +126,7 @@ void Driver::waitMemory(std::span<const std::uint32_t> packet, std::uint32_t que
     const std::uint64_t awaited = (packet[2] & static_cast<std::uint32_t>(alignMask)) | (static_cast<std::uint64_t>(packet[3]) << 32u);
     static const bool traceGpu = std::getenv("APS5_TRACE_GPU") != nullptr;
     if (traceGpu) std::fprintf(stderr, "[gpu] %.1f queue 0x%x waits 0x%llx == 0x%x (now 0x%x)\n", TraceMs(), queue, static_cast<unsigned long long>(awaited), packet[4],
-                               *reinterpret_cast<const volatile std::uint32_t*>(awaited));
+                               *static_cast<const volatile std::uint32_t*>(GuestArena::GuestToHost(awaited)));
     struct WaitTrace {
         bool enabled; std::uint32_t queue; std::uint64_t address; std::chrono::steady_clock::time_point begin;
         ~WaitTrace() {
@@ -154,7 +155,7 @@ void Driver::waitMemory(std::span<const std::uint32_t> packet, std::uint32_t que
         std::uint32_t writer = queue;
         return !requireMemory && storedSince(packet, awaited, awaitedBytes, received, queue, &writer) && writer == queue;
     };
-    GuestMemory::CheckRange(reinterpret_cast<const void*>(awaited), awaitedBytes, awaitedBytes);
+    GuestMemory::CheckRange(GuestArena::GuestToHost(awaited), awaitedBytes, awaitedBytes);
     if (memorySatisfied()) {
         ++outcomes.atEntry;
         if (storedByOwnLabel()) epochPoint.bump = false;
@@ -403,7 +404,7 @@ void Driver::waitMemory(std::span<const std::uint32_t> packet, std::uint32_t que
             const bool wide = ((packet[0] >> 8u) & 0xffu) == 0x93u;
             const std::uint64_t reference = wide ? packet[4] | (static_cast<std::uint64_t>(packet[5]) << 32u) : packet[4];
             const std::uint64_t mask = wide ? packet[6] | (static_cast<std::uint64_t>(packet[7]) << 32u) : packet[5];
-            const std::uint64_t current = awaitedBytes == 8 ? *reinterpret_cast<const volatile std::uint64_t*>(awaited) : *reinterpret_cast<const volatile std::uint32_t*>(awaited);
+            const std::uint64_t current = awaitedBytes == 8 ? *static_cast<const volatile std::uint64_t*>(GuestArena::GuestToHost(awaited)) : *static_cast<const volatile std::uint32_t*>(GuestArena::GuestToHost(awaited));
             std::fprintf(stderr, "[gpu] queue 0x%x WAIT_REG_MEM%s%s at 0x%llx timed out after %dms (function %u ref 0x%llx mask 0x%llx value 0x%llx)\n", queue, wide ? "_64" : "", requireMemory ? " (landing)" : "",
                          static_cast<unsigned long long>(awaited), waitTimeoutMs(), packet[1] & 7u, static_cast<unsigned long long>(reference), static_cast<unsigned long long>(mask), static_cast<unsigned long long>(current));
             const auto address = awaited;

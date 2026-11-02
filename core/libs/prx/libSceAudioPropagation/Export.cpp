@@ -225,7 +225,7 @@ std::int32_t APS5_VABI sceAudioPropagationSystemCreate(const SystemOptions* opti
     auto requiredMemory = *memory;
     const auto result = sceAudioPropagationSystemQueryMemory(options, &requiredMemory);
     if (result != 0) return result;
-    const auto address = reinterpret_cast<std::uintptr_t>(memory->p_cpu_mem);
+    const auto address = reinterpret_cast<std::uintptr_t>(static_cast<const void*>(memory->p_cpu_mem));
     require(address != 0 && address % alignof(SystemState) == 0 && memory->size_cpu_mem >= requiredMemory.size_cpu_mem && memory->size_gpu_mem == 0, __func__);
     auto& state = registry();
     std::lock_guard lock(state.mutex);
@@ -233,9 +233,9 @@ std::int32_t APS5_VABI sceAudioPropagationSystemCreate(const SystemOptions* opti
     const auto freeIndex = std::find(state.systemIndices.begin(), state.systemIndices.end(), false);
     if (freeIndex == state.systemIndices.end()) return static_cast<std::int32_t>(0x8A700006);
     const auto index = static_cast<std::uint32_t>(freeIndex - state.systemIndices.begin());
-    *static_cast<SystemState*>(memory->p_cpu_mem) = SystemState{
+    *static_cast<SystemState*>(static_cast<void*>(memory->p_cpu_mem)) = SystemState{
         SystemMagic,
-        memory->p_cpu_mem,
+        static_cast<void*>(memory->p_cpu_mem),
         memory->size_cpu_mem,
         index,
         options->frameSamples,

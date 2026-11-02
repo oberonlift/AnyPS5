@@ -270,7 +270,6 @@ std::u16string FormatWide(const char16_t* format, VaList* source, bool secure = 
 }  // namespace
 
 extern "C" {
-extern FileStream* __stdoutp_nid_postfix;
 
 int APS5_VABI vswprintf_nid_postfix(char16_t* buffer, std::size_t size, const char16_t* format, VaList* args) {
     if (buffer == nullptr || size == 0) { errno = 22; return -1; }

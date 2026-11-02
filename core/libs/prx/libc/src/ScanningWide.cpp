@@ -451,8 +451,6 @@ int APS5_VABI vswscanf_s_nid_postfix(const char16_t* buffer, const char16_t* for
     return WideScanner("vswscanf_s", true, WideInput(buffer), format, args).Run();
 }
 
-extern FileStream* __stdinp_nid_postfix;
-
 int APS5_VABI vfwscanf_nid_postfix(FileStream* stream, const char16_t* format, VaList* args) {
     if (stream == nullptr || format == nullptr) return EOF;
     stream->Orientation(1);

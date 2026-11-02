@@ -15,7 +15,7 @@ std::uint32_t* APS5_VABI sceAgcDcbAcquireMem(CommandBuffer* buf, std::uint8_t en
     Agc::Command::CheckBits(gcrControl, 0x7ffffu, __func__);
     // The range only scopes cache maintenance, so round it outward to the 256-byte granularity the
     // packet encodes instead of rejecting unaligned ranges.
-    const auto requested = reinterpret_cast<std::uintptr_t>(base);
+    const auto requested = GuestArena::HostToGuest(base);
     auto address = requested & ~static_cast<std::uintptr_t>(0xffu);
     const auto wholeAddressSpace = sizeBytes == 0xffffffffffffffffull || (address >> 40u) != 0 || sizeBytes > (1ull << 40u);
     if (wholeAddressSpace) address = 0;

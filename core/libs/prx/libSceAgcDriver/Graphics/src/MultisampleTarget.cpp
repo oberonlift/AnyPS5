@@ -1,4 +1,5 @@
 #include "prx/libSceAgcDriver/Graphics/include/MemoryAccounting.hpp"
+#include "prx/libc/include/GuestArena.hpp"
 #include <shared_mutex>
 #include "prx/libSceAgcDriver/Graphics/include/MultisampleTarget.hpp"
 #include "prx/libSceAgcDriver/Graphics/include/ColorTargetLayout.hpp"
@@ -797,7 +798,7 @@ private:
         std::vector<GuestMemory::UnchangedQuery> watched;
         for (std::size_t index = 0; index < dccRanges.size(); ++index) {
             auto& range = dccRanges[index];
-            GuestMemory::CheckRange(reinterpret_cast<const void*>(range.address), range.bytes, 256);
+            GuestMemory::CheckRange(GuestArena::GuestToHost(range.address), range.bytes, 256);
             if (!WatchedAfterSettle(context, range.address, range.bytes) && ComparedHostImportCovers(context, range.address, range.bytes)) {
                 dccCopies[index].compared = true;
                 continue;
@@ -819,7 +820,7 @@ private:
             static_cast<void>(fmaskSnapshotResource(resource));
             fmaskRange = GuestMemory::UnchangedQuery{use.fmaskAddress, static_cast<std::size_t>(DescribeSurface(resource).guestBytes), 0};
             auto& range = *fmaskRange;
-            GuestMemory::CheckRange(reinterpret_cast<const void*>(range.address), range.bytes, 65536u);
+            GuestMemory::CheckRange(GuestArena::GuestToHost(range.address), range.bytes, 65536u);
             fmaskCopy.compared = !WatchedAfterSettle(context, range.address, range.bytes) && ComparedHostImportCovers(context, range.address, range.bytes);
             Require(fmaskCopy.compared || GuestMemory::Watched(range.address, range.bytes), "native FMASK contents require watched guest memory");
             if (!fmaskCopy.compared) {
@@ -1146,7 +1147,7 @@ MultisampleTarget& createFilled(const Context& context, const GuestTextureResour
     RequireNoResidentDepthRead_nid_no_patch(use.address, static_cast<std::size_t>(bytes), std::nullopt, false);
     RequireNoMultisampleColorTarget(use.address, static_cast<std::size_t>(bytes), "sampling a multisampled texture no draw rendered to");
     GuestMemory::FlushGpuWrites(use.address, static_cast<std::size_t>(bytes));
-    if (!GuestMemory::Accessible(reinterpret_cast<const void*>(use.address), static_cast<std::size_t>(bytes))) refuse(std::string("whose color memory ") + range + " is not mapped");
+    if (!GuestMemory::Accessible(GuestArena::GuestToHost(use.address), static_cast<std::size_t>(bytes))) refuse(std::string("whose color memory ") + range + " is not mapped");
     std::uint64_t htileBytes = 0;
     bool htileCleared = false;
     if (resource.dccAddress != 0) {
@@ -1155,9 +1156,9 @@ MultisampleTarget& createFilled(const Context& context, const GuestTextureResour
         char htileRange[64];
         std::snprintf(htileRange, sizeof(htileRange), "0x%llx+0x%llx", static_cast<unsigned long long>(resource.dccAddress), static_cast<unsigned long long>(htileBytes));
         GuestMemory::FlushGpuWrites(resource.dccAddress, static_cast<std::size_t>(htileBytes));
-        if (!GuestMemory::Accessible(reinterpret_cast<const void*>(resource.dccAddress), static_cast<std::size_t>(htileBytes))) refuse(std::string("whose HTILE ") + htileRange + " is not mapped");
+        if (!GuestMemory::Accessible(GuestArena::GuestToHost(resource.dccAddress), static_cast<std::size_t>(htileBytes))) refuse(std::string("whose HTILE ") + htileRange + " is not mapped");
         std::vector<std::uint32_t> words(static_cast<std::size_t>(htileBytes / sizeof(std::uint32_t)));
-        std::memcpy(words.data(), reinterpret_cast<const void*>(resource.dccAddress), words.size() * sizeof(std::uint32_t));
+        std::memcpy(words.data(), GuestArena::GuestToHost(resource.dccAddress), words.size() * sizeof(std::uint32_t));
         htileCleared = words.front() == 0u;
         const auto mixed = std::find_if(words.begin(), words.end(), [&](std::uint32_t word) { return htileCleared ? word != 0u : (word & 15u) != 15u; });
         if (mixed != words.end()) {
@@ -1166,7 +1167,7 @@ MultisampleTarget& createFilled(const Context& context, const GuestTextureResour
             refuse(std::string("whose HTILE ") + htileRange + text + ", which is neither all cleared to 0.0 nor all expanded");
         }
     }
-    const auto* memory = reinterpret_cast<const std::byte*>(use.address);
+    const auto* memory = static_cast<const std::byte*>(GuestArena::GuestToHost(use.address));
     std::uint32_t value = 0;
     if (!htileCleared) std::memcpy(&value, memory, sizeof(value));
     char held[16];
@@ -1324,7 +1325,7 @@ bool TakeMultisampledSingleClear(std::span<const std::uint32_t> code, std::span<
     const auto clear = MatchMultisampledSingleClear(code, userData, numThreads);
     if (!clear) return false;
     std::array<std::uint32_t, 8> words{};
-    if (!GuestMemory::Accessible(reinterpret_cast<const void*>(clear->descriptor), sizeof(words))) return false;
+    if (!GuestMemory::Accessible(GuestArena::GuestToHost(clear->descriptor), sizeof(words))) return false;
     GuestMemory::Read(clear->descriptor, std::as_writable_bytes(std::span(words)));
     const auto resource = DecodeTextureResource(words);
     if (resource.samples < 2) return false;

@@ -19,7 +19,7 @@ std::uint32_t APS5_VABI sceAgcDcbSetNumInstancesGetSize() {
 uint32_t* APS5_VABI sceAgcDcbSetBaseIndirectArgs(CommandBuffer* buf, uint32_t shader_type, const volatile void* indirect_base_addr) {
     // SET_BASE with base index 1; header bit 1 selects the dispatch (compute) base over the draw base.
     Agc::Command::CheckBits(shader_type, 1, __func__);
-    const auto address = reinterpret_cast<std::uintptr_t>(indirect_base_addr);
+    const auto address = GuestArena::HostToGuest(indirect_base_addr);
     if (address != 0) Agc::Command::CheckAddress(address, 8, __func__);
     Agc::Command::CheckBits(address, 0xffffffffffffull, __func__);
     auto* packet = Agc::Command::Allocate(buf, 4, __func__);

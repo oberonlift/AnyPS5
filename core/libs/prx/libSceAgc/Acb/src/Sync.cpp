@@ -11,7 +11,7 @@
 extern "C" {
 
 uint32_t* APS5_VABI sceAgcAcbCondExec(CommandBuffer* buf, const volatile uint32_t* address, uint32_t num_dwords) {
-    const auto guestAddress = reinterpret_cast<std::uintptr_t>(address);
+    const auto guestAddress = GuestArena::HostToGuest(address);
     Agc::Command::CheckAddress(guestAddress, 4, __func__);
     Agc::Command::Require(num_dwords <= 0x3fffu, __func__, "conditional execution range is too large");
     return Agc::Command::Emit(buf, 0x22u, {static_cast<std::uint32_t>(guestAddress) & ~3u, static_cast<std::uint32_t>(guestAddress >> 32u), 0, num_dwords & 0x3fffu}, __func__);

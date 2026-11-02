@@ -163,7 +163,7 @@ void SyncBuffers(Session& session) {
     const std::size_t bytes = session.text.size() * sizeof(char16_t);
     std::memcpy(session.param.input_text_buffer, session.text.data(), bytes);
     session.param.input_text_buffer[session.text.size()] = u'\0';
-    auto* work = static_cast<char16_t*>(session.param.work);
+    auto* work = static_cast<char16_t*>(static_cast<void*>(session.param.work));
     std::memcpy(work, session.text.data(), bytes);
     work[session.text.size()] = u'\0';
 }
@@ -171,7 +171,7 @@ void SyncBuffers(Session& session) {
 void QueueText(Session& session, uint32_t id, uint32_t index, int32_t delta) {
     ImeEvent event{};
     event.id = id;
-    event.param.text.str = static_cast<char16_t*>(session.param.work);
+    event.param.text.str = static_cast<char16_t*>(static_cast<void*>(session.param.work));
     event.param.text.caret_index = session.caret;
     event.param.text.area_num = 1;
     event.param.text.text_area[0].mode = TextAreaMode::Edit;
@@ -372,7 +372,7 @@ int ValidateOpen(const Param* param, const ExtendedParam* extended) {
             if (byte != 0) return ErrorInvalidExtended;
         }
     }
-    if (!param->work || (reinterpret_cast<std::uintptr_t>(param->work) & 3u) != 0) return ErrorInvalidWork;
+    if (!param->work || (reinterpret_cast<std::uintptr_t>(static_cast<const void*>(param->work)) & 3u) != 0) return ErrorInvalidWork;
     if (!param->handler) return ErrorInvalidHandler;
     for (const std::int8_t byte : param->reserved) {
         if (byte != 0) return ErrorInvalidReserved;

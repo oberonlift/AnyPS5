@@ -1,4 +1,5 @@
 #include "prx/libSceAgcDriver/Execution/include/AsyncLog.hpp"
+#include "prx/libc/include/GuestArena.hpp"
 #include "prx/libSceAgcDriver/Execution/include/ProfileOutput.hpp"
 #include "prx/libSceAgcDriver/Execution/include/CaptureTrace.hpp"
 #include "prx/libSceAgcDriver/Execution/include/Mutex.hpp"
@@ -840,9 +841,9 @@ public:
         // The access's bytes are copied raw: a Read here would re-enter the hook. The same access
         // check the accessing code makes guards the copy; a range that fails it is left unchecked.
         // A store's bytes are not compared (counted as a store instead).
-        if (key.site != GuestMemory::ReadSite::Store && bytes <= CompareLimit && GuestMemory::Accessible(reinterpret_cast<const void*>(address), bytes)) {
+        if (key.site != GuestMemory::ReadSite::Store && bytes <= CompareLimit && GuestMemory::Accessible(GuestArena::GuestToHost(address), bytes)) {
             before.resize(bytes);
-            std::memcpy(before.data(), reinterpret_cast<const void*>(address), bytes);
+            std::memcpy(before.data(), GuestArena::GuestToHost(address), bytes);
         }
         start = std::chrono::steady_clock::now();
     }
@@ -869,8 +870,8 @@ public:
         // One outcome per sync, on both the key's and the interval's counters.
         const auto outcome = [&]() -> std::uint64_t HookSyncOutcomes::* {
             if (key.site == GuestMemory::ReadSite::Store) return &HookSyncOutcomes::stores;
-            if (before.empty() || !GuestMemory::Accessible(reinterpret_cast<const void*>(address), bytes)) return &HookSyncOutcomes::unchecked;
-            if (std::memcmp(before.data(), reinterpret_cast<const void*>(address), bytes) != 0) return &HookSyncOutcomes::changed;
+            if (before.empty() || !GuestMemory::Accessible(GuestArena::GuestToHost(address), bytes)) return &HookSyncOutcomes::unchecked;
+            if (std::memcmp(before.data(), GuestArena::GuestToHost(address), bytes) != 0) return &HookSyncOutcomes::changed;
             // A target already signaled (or no target found: the batch is finishing) had run
             // before the copy, so its unchanged bytes are not evidence of a false overlap.
             if (!info.has_value() || info->signaled) return &HookSyncOutcomes::unchangedSignaled;
@@ -976,9 +977,9 @@ public:
     RecordedStoreSyncScope(const Recorder& recorder, std::uint64_t address, std::size_t bytes, const StorageTexture::AccessClassification& classification, bool stored, const HookSyncKey& key) : enabled(HookSyncProfiled()), address(address), bytes(bytes), classification(classification), stored(stored), key(key) {
         if (!enabled) return;
         batchesInFlight = recorder.InFlightBatches();
-        if (key.site != GuestMemory::ReadSite::Store && bytes <= CompareLimit && GuestMemory::Accessible(reinterpret_cast<const void*>(address), bytes)) {
+        if (key.site != GuestMemory::ReadSite::Store && bytes <= CompareLimit && GuestMemory::Accessible(GuestArena::GuestToHost(address), bytes)) {
             before.resize(bytes);
-            std::memcpy(before.data(), reinterpret_cast<const void*>(address), bytes);
+            std::memcpy(before.data(), GuestArena::GuestToHost(address), bytes);
         }
         start = std::chrono::steady_clock::now();
     }
@@ -998,8 +999,8 @@ public:
             else ++(classification.allCpuWritten ? totals.cpuWrittenYes : totals.cpuWrittenNo);
             totals.imagesDead += classification.dead;
             totals.imagesLive += classification.live;
-            if (before.empty() || !GuestMemory::Accessible(reinterpret_cast<const void*>(address), bytes)) ++totals.unchecked;
-            else if (std::memcmp(before.data(), reinterpret_cast<const void*>(address), bytes) != 0) ++totals.changed;
+            if (before.empty() || !GuestMemory::Accessible(GuestArena::GuestToHost(address), bytes)) ++totals.unchecked;
+            else if (std::memcmp(before.data(), GuestArena::GuestToHost(address), bytes) != 0) ++totals.changed;
             else ++totals.unchanged;
         };
         add(stats.byKey[key]);
@@ -3169,7 +3170,7 @@ bool Recorder::refreshDrawSnapshot(DrawSnapshot& entry, std::uint64_t address, s
         const auto from = std::max(address, aligned + k * block);
         const auto to = std::min(end, aligned + (k + 1) * block);
         const auto offset = static_cast<std::size_t>(from - address);
-        spans.push_back({held.data() + offset, reinterpret_cast<const void*>(from), static_cast<std::size_t>(to - from)});
+        spans.push_back({held.data() + offset, GuestArena::GuestToHost(from), static_cast<std::size_t>(to - from)});
     }
     equal.assign(spans.size(), 0);
     CompareSpans(spans, equal);
@@ -3181,7 +3182,7 @@ bool Recorder::refreshDrawSnapshot(DrawSnapshot& entry, std::uint64_t address, s
         if (!differing.empty() && differing.back().first + differing.back().second == offset) differing.back().second += length;
         else differing.emplace_back(offset, length);
     }
-    for (const auto& [offset, length] : differing) std::memcpy(held.data() + offset, reinterpret_cast<const void*>(address + offset), length);
+    for (const auto& [offset, length] : differing) std::memcpy(held.data() + offset, GuestArena::GuestToHost(address + offset), length);
     return true;
 }
 
@@ -3824,7 +3825,7 @@ void Recorder::AfterCompletions(std::uint64_t address, std::span<const std::byte
             return;
         }
         completionStoresRun.fetch_add(1, std::memory_order_relaxed);
-        GuestMemory::CheckRange(reinterpret_cast<const void*>(address), copy.size(), 4, true);
+        GuestMemory::CheckRange(GuestArena::GuestToHost(address), copy.size(), 4, true);
         GuestMemory::StoreOwnBytes(address, copy);
     });
     // Counted per batch and counted down when the batch finishes, on every exit path of finish()

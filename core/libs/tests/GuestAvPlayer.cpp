@@ -814,7 +814,7 @@ void CheckVideoPicture(const AvPlayerFrameInfoEx& info) {
     Check(std::memcmp(video.language_code, "eng", 4) == 0, "missing video language");
     const int index = FrameIndex(info.timestamp);
     Check(index >= 0 && index < FrameCount, "frame timestamp out of range");
-    const auto* luma = static_cast<const std::uint8_t*>(info.p_data);
+    const auto* luma = static_cast<const std::uint8_t*>(static_cast<void*>(info.p_data));
     const auto* chroma = luma + Pitch * 64;
     for (const int row : {2, 30, 57, 63}) {
         Check(std::abs(luma[row * Pitch + 10] - LumaFor(index)) <= 6, "left luma mismatch for frame " + std::to_string(index));
@@ -831,7 +831,7 @@ void CheckVideoFrame(const AvPlayerFrameInfoEx& info) {
 }
 
 int Loudest(const AvPlayerFrameInfo& info) {
-    const auto* samples = reinterpret_cast<const std::int16_t*>(info.p_data);
+    const auto* samples = reinterpret_cast<const std::int16_t*>(static_cast<std::uint8_t*>(info.p_data));
     int loudest = 0;
     for (std::uint32_t index = 0; index < info.details.audio.size / sizeof(std::int16_t); ++index) loudest = std::max(loudest, std::abs(static_cast<int>(samples[index])));
     return loudest;
@@ -1281,7 +1281,7 @@ void TestHandedOutFramesStayIntact() {
         AvPlayerFrameInfoEx frame{};
         Check(WaitFor([&] { return sceAvPlayerGetVideoDataEx(player, &frame) != 0; }), "no frame for round " + std::to_string(round));
         CheckVideoFrame(frame);
-        taken.push_back({static_cast<const std::uint8_t*>(frame.p_data), FrameIndex(frame.timestamp)});
+        taken.push_back({static_cast<const std::uint8_t*>(static_cast<void*>(frame.p_data)), FrameIndex(frame.timestamp)});
         if (taken.size() > Retained) taken.pop_front();
         std::this_thread::sleep_for(std::chrono::milliseconds(30));
         for (std::size_t k = 0; k < taken.size(); ++k) {

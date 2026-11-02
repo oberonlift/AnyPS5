@@ -2,6 +2,7 @@
 #define CORE_LIBS_SCE_SHADERS_HPP
 
 #include <cstdint>
+#include "prx/libc/include/GuestArena.hpp"
 
 struct ShaderSharp {
     std::uint16_t offset_dw : 15;
@@ -14,8 +15,8 @@ struct ShaderRegister {
 };
 
 struct ShaderUserData {
-    std::uint16_t* direct_resource_offset;
-    ShaderSharp* sharp_resource_offset[4];
+    GuestArena::GuestPointer<std::uint16_t> direct_resource_offset;
+    GuestArena::GuestPointer<ShaderSharp> sharp_resource_offset[4];
     std::uint16_t eud_size_dw;
     std::uint16_t srt_size_dw;
     std::uint16_t direct_resource_count;
@@ -68,13 +69,13 @@ struct ShaderSemantic {
 struct Shader {
     std::uint32_t file_header;
     std::uint32_t version;
-    ShaderUserData* user_data;
-    const volatile void* code;
-    ShaderRegister* cx_registers;
-    ShaderRegister* sh_registers;
-    ShaderSpecialRegs* specials;
-    ShaderSemantic* input_semantics;
-    ShaderSemantic* output_semantics;
+    GuestArena::GuestPointer<ShaderUserData> user_data;
+    GuestArena::GuestPointer<const volatile void> code;
+    GuestArena::GuestPointer<ShaderRegister> cx_registers;
+    GuestArena::GuestPointer<ShaderRegister> sh_registers;
+    GuestArena::GuestPointer<ShaderSpecialRegs> specials;
+    GuestArena::GuestPointer<ShaderSemantic> input_semantics;
+    GuestArena::GuestPointer<ShaderSemantic> output_semantics;
     std::uint32_t header_size;
     std::uint32_t shader_size;
     std::uint32_t embedded_constant_buffer_size_dqw;

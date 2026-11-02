@@ -6,10 +6,13 @@
 #include <unistd.h>
 #include <cstdint>
 #include <cstdio>
+#include <cerrno>
 #include <cstdlib>
+#include <cstring>
 #include <filesystem>
 #include <string>
 #include <vector>
+#include "prx/libc/include/GuestArena.hpp"
 
 namespace {
 
@@ -27,6 +30,30 @@ std::string Executable() {
     return executable.data();
 }
 
+#ifdef ANYPS5_TRANSLATED_GUEST
+[[noreturn]] void Fail(const std::string& reason) {
+    std::fprintf(stderr, "[memory] a translated guest needs mimalloc above the guest's first terabyte: %s\n", reason.c_str());
+    std::abort();
+}
+
+[[gnu::constructor]] void RestartWithMimalloc() {
+    const bool restarted = std::getenv("APS5_MIMALLOC_RESTARTED") != nullptr;
+    unsetenv("APS5_MIMALLOC_RESTARTED");
+    if (dlsym(RTLD_DEFAULT, "mi_version") != nullptr) return;
+    if (restarted) Fail("dyld did not load libmimalloc.dylib after the restart");
+    const auto allocator = Allocator();
+    std::error_code error;
+    if (allocator.empty() || !std::filesystem::is_regular_file(allocator, error)) Fail("no libmimalloc.dylib beside libkernel at " + allocator.string());
+    const auto executable = Executable();
+    if (executable.empty()) Fail("cannot find the executable to restart");
+    const char* inserted = std::getenv("DYLD_INSERT_LIBRARIES");
+    const auto libraries = inserted == nullptr || *inserted == 0 ? allocator.string() : allocator.string() + ":" + inserted;
+    setenv("DYLD_INSERT_LIBRARIES", libraries.c_str(), 1);
+    setenv("APS5_MIMALLOC_RESTARTED", "1", 1);
+    execv(executable.c_str(), *_NSGetArgv());
+    Fail(std::string("execv failed: ") + std::strerror(errno));
+}
+#else
 [[gnu::constructor]] void RestartWithMimalloc() {
     const bool restarted = std::getenv("APS5_MIMALLOC_RESTARTED") != nullptr;
     unsetenv("APS5_MIMALLOC_RESTARTED");
@@ -51,6 +78,7 @@ std::string Executable() {
     if (inserted == nullptr) unsetenv("DYLD_INSERT_LIBRARIES");
     else setenv("DYLD_INSERT_LIBRARIES", previous.c_str(), 1);
 }
+#endif
 
 }
 

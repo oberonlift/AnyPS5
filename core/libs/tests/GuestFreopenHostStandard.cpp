@@ -20,7 +20,6 @@
 
 extern "C" {
 
-extern FileStream* __stdoutp_nid_postfix;
 }
 
 static void Require(bool value, int line) {

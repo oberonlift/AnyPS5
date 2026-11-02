@@ -191,8 +191,8 @@ struct Candidate {
 };
 
 bool allZero(std::uint64_t begin, std::uint64_t end) {
-    const auto* at = reinterpret_cast<const unsigned char*>(begin);
-    const auto* stop = reinterpret_cast<const unsigned char*>(end);
+    const auto* at = static_cast<const unsigned char*>(GuestArena::GuestToHost(begin));
+    const auto* stop = at + (end - begin);
     while (at < stop && reinterpret_cast<std::uintptr_t>(at) % sizeof(std::uint64_t) != 0) {
         if (*at++ != 0) return false;
     }
@@ -321,7 +321,12 @@ GuestRuns GuestNonzeroBlocks(const GuestRuns& candidates) {
     GuestRuns runs;
     for (const auto& [first, last] : candidates) {
         if (first >= last) continue;
-        const auto maybe = possiblyNonzero(first, last);
+        const auto host = reinterpret_cast<std::uint64_t>(GuestArena::GuestToHost(first));
+        auto maybe = possiblyNonzero(host, host + (last - first));
+        for (auto& candidate : maybe) {
+            candidate.begin = candidate.begin - host + first;
+            candidate.end = candidate.end - host + first;
+        }
         std::size_t at = 0;
         for (auto block = first / BlockSize * BlockSize; block < last; block += BlockSize) {
             const auto from = std::max(first, block);
@@ -521,7 +526,7 @@ void ResidentBuffer::Store(std::uint64_t guest, std::span<const std::byte> bytes
         const auto within = static_cast<std::size_t>((at - origin) % BlockSize);
         const auto length = std::min<std::size_t>(bytes.size() - done, static_cast<std::size_t>(BlockSize) - within);
         if (auto* target = Block(at); target != nullptr) std::memcpy(target, bytes.data() + done, length);
-        else Require(GuestBytesZero(reinterpret_cast<std::uintptr_t>(bytes.data() + done), reinterpret_cast<std::uintptr_t>(bytes.data() + done + length)), "the GPU wrote a heap mirror block that holds no memory");
+        else Require(GuestBytesZero(GuestArena::HostToGuest(bytes.data() + done), GuestArena::HostToGuest(bytes.data() + done + length)), "the GPU wrote a heap mirror block that holds no memory");
         done += length;
     }
 }

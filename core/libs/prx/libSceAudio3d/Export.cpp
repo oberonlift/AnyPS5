@@ -528,7 +528,7 @@ int APS5_VABI sceAudio3dObjectSetAttributes(uint32_t port_id, uint32_t object_id
             const Audio3dAttribute& attribute = attribute_array[i];
             if (attribute.attribute_id < AUDIO3D_OBJECT_ATTRIBUTE_PCM || attribute.attribute_id > AUDIO3D_OBJECT_ATTRIBUTE_OUTPUT_ROUTE) return AUDIO3D_ERROR_INVALID_PARAMETER;
             if (attribute.attribute_id != AUDIO3D_OBJECT_ATTRIBUTE_PCM) continue;
-            const auto* pcm = static_cast<const Audio3dPcm*>(attribute.value);
+            const auto* pcm = static_cast<const Audio3dPcm*>(static_cast<const void*>(attribute.value));
             if (pcm == nullptr || pcm->num_samples == 0 || pcm->format > AUDIO3D_FORMAT_FLOAT) return AUDIO3D_ERROR_INVALID_PARAMETER;
         }
         if (!g_port.objects.contains(object_id & AUDIO3D_OBJECT_ID_MASK)) return AUDIO3D_ERROR_INVALID_OBJECT;

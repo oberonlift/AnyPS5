@@ -1583,9 +1583,10 @@ static int CopyIovecs(const KernelIovec* iov, int iovcnt, std::vector<KernelIove
     throw std::runtime_error("iovec: checked guest copies are not implemented on this host");
 #endif
     std::size_t total = 0;
-    for (const auto& vector : vectors) {
+    for (auto& vector : vectors) {
         if (vector.length > static_cast<std::size_t>(std::numeric_limits<std::int64_t>::max()) - total) return SceErrorFromErrno(GUEST_EINVAL);
         total += vector.length;
+        vector.base = GuestArena::GuestToHost(reinterpret_cast<std::uint64_t>(vector.base));
     }
     return 0;
 }

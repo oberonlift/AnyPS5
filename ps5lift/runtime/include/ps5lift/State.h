@@ -198,6 +198,12 @@ typedef struct Ps5LiftImage {
     uint64_t ExportCount;
 } Ps5LiftImage;
 
+#if defined(__APPLE__)
+#define PS5LIFT_GUEST_BASE UINT64_C(0x400000000000)
+#else
+#define PS5LIFT_GUEST_BASE UINT64_C(0)
+#endif
+
 typedef struct Ps5LiftProgram {
     const Ps5LiftImage* Images;
     uint64_t ImageCount;
@@ -206,6 +212,7 @@ typedef struct Ps5LiftProgram {
     const Ps5LiftFunctionEntry* Functions;
     uint64_t FunctionCount;
     uint64_t Entry;
+    uint64_t GuestBase;
 } Ps5LiftProgram;
 
 void ps5lift_use_program(const Ps5LiftProgram* program);

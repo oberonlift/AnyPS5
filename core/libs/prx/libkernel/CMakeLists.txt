@@ -74,7 +74,7 @@ add_library(libkernel SHARED EXCLUDE_FROM_ALL
         ${CMAKE_CURRENT_SOURCE_DIR}/System/src/HostPerformance.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/System/src/HostPerformanceProcess.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/System/src/HostPerformanceStartup.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/System/src/MimallocMacOs.cpp
+        $<$<NOT:$<BOOL:${ANYPS5_GUEST_LIFTED}>>:${CMAKE_CURRENT_SOURCE_DIR}/System/src/MimallocMacOs.cpp>
         ${CMAKE_CURRENT_SOURCE_DIR}/System/src/SystemConfiguration.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/System/src/Login.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/System/src/Getlogin.cpp

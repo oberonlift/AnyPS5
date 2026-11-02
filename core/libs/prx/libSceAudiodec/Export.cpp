@@ -83,8 +83,8 @@ std::int32_t validateCtrl(const AudiodecCtrl* ctrl, std::uint32_t codecType) {
     if (!ctrl) return ERROR_INVALID_CTRL_POINTER;
     if (!ctrl->pParam) return ERROR_INVALID_PARAM_POINTER;
     if (!ctrl->pBsiInfo) return ERROR_INVALID_BSI_INFO_POINTER;
-    const std::uint32_t paramSize = *static_cast<const std::uint32_t*>(ctrl->pParam);
-    const std::uint32_t infoSize = *static_cast<const std::uint32_t*>(ctrl->pBsiInfo);
+    const std::uint32_t paramSize = *static_cast<const std::uint32_t*>(static_cast<const void*>(ctrl->pParam));
+    const std::uint32_t infoSize = *static_cast<const std::uint32_t*>(static_cast<const void*>(ctrl->pBsiInfo));
     switch (codecType) {
         case TYPE_AT9:
             if (paramSize != sizeof(AudiodecParamAt9)) return ERROR_INVALID_PARAM_SIZE;
@@ -199,13 +199,13 @@ int32_t APS5_VABI sceAudiodecCreateDecoder(AudiodecCtrl* ctrl, uint32_t codec_ty
         instance = {};
         instance.codecType = codec_type;
         if (codec_type == TYPE_AT9) {
-            const auto* param = static_cast<const AudiodecParamAt9*>(ctrl->pParam);
+            const auto* param = static_cast<const AudiodecParamAt9*>(static_cast<const void*>(ctrl->pParam));
             instance.decoder = Audiodec::CreateAt9(param->i_bw_pcm, param->ui_config_data, instance.at9);
             if (!instance.decoder) return ERROR_AT9_INVALID_CONFIG_DATA;
-            fillAt9Info(static_cast<AudiodecAt9Info*>(ctrl->pBsiInfo), instance.at9);
+            fillAt9Info(static_cast<AudiodecAt9Info*>(static_cast<void*>(ctrl->pBsiInfo)), instance.at9);
         } else if (codec_type == TYPE_MP3) {
-            instance.decoder = Audiodec::CreateMp3(static_cast<const AudiodecParamMp3*>(ctrl->pParam)->i_bw_pcm);
-        } else if (const std::int32_t result = createAac(static_cast<const AudiodecParamM4aac*>(ctrl->pParam), static_cast<AudiodecM4aacInfo*>(ctrl->pBsiInfo), instance); result != 0) {
+            instance.decoder = Audiodec::CreateMp3(static_cast<const AudiodecParamMp3*>(static_cast<const void*>(ctrl->pParam))->i_bw_pcm);
+        } else if (const std::int32_t result = createAac(static_cast<const AudiodecParamM4aac*>(static_cast<const void*>(ctrl->pParam)), static_cast<AudiodecM4aacInfo*>(static_cast<void*>(ctrl->pBsiInfo)), instance); result != 0) {
             instance = {};
             return result;
         }
@@ -237,11 +237,11 @@ int32_t APS5_VABI sceAudiodecDecode(int32_t handle, AudiodecCtrl* ctrl) {
     if (const std::int32_t result = validateCtrl(ctrl, instance->codecType); result != 0) return result;
     if (const std::int32_t result = validateBuffers(ctrl); result != 0) return result;
 
-    const Audiodec::DecodeResult decoded = instance->decoder->Decode(static_cast<const std::uint8_t*>(ctrl->pAuInfo->p_au_addr), ctrl->pAuInfo->ui_au_size,
-                                                                     static_cast<std::uint8_t*>(ctrl->pPcmItem->p_pcm_addr), ctrl->pPcmItem->ui_pcm_size);
+    const Audiodec::DecodeResult decoded = instance->decoder->Decode(static_cast<const std::uint8_t*>(static_cast<const void*>(ctrl->pAuInfo->p_au_addr)), ctrl->pAuInfo->ui_au_size,
+                                                                     static_cast<std::uint8_t*>(static_cast<void*>(ctrl->pPcmItem->p_pcm_addr)), ctrl->pPcmItem->ui_pcm_size);
     if (instance->codecType == TYPE_M4AAC) {
         if (instance->surroundChannelInterleaveOrder != 0 && decoded.channels > 2) throw std::runtime_error("M4AAC surround channel interleave order " + std::to_string(instance->surroundChannelInterleaveOrder) + " is not implemented for " + std::to_string(decoded.channels) + " decoded channels");
-        auto* info = static_cast<AudiodecM4aacInfo*>(ctrl->pBsiInfo);
+        auto* info = static_cast<AudiodecM4aacInfo*>(static_cast<void*>(ctrl->pBsiInfo));
         info->i_result = decoded.status == Audiodec::DecodeStatus::InvalidData ? M4AAC_RESULT_DECODE_ERROR
             : decoded.status == Audiodec::DecodeStatus::PartialInput ? M4AAC_RESULT_INSUFFICIENT_DATA : 0;
         if (decoded.channels != 0) {
@@ -256,8 +256,8 @@ int32_t APS5_VABI sceAudiodecDecode(int32_t handle, AudiodecCtrl* ctrl) {
         ctrl->pPcmItem->ui_pcm_size = 0;
         return ERROR_API_FAIL;
     }
-    if (instance->codecType == TYPE_MP3) fillMp3Info(static_cast<AudiodecMp3Info*>(ctrl->pBsiInfo), decoded.mp3);
-    if (instance->codecType == TYPE_AT9) fillAt9Info(static_cast<AudiodecAt9Info*>(ctrl->pBsiInfo), instance->at9);
+    if (instance->codecType == TYPE_MP3) fillMp3Info(static_cast<AudiodecMp3Info*>(static_cast<void*>(ctrl->pBsiInfo)), decoded.mp3);
+    if (instance->codecType == TYPE_AT9) fillAt9Info(static_cast<AudiodecAt9Info*>(static_cast<void*>(ctrl->pBsiInfo)), instance->at9);
     ctrl->pAuInfo->ui_au_size = static_cast<std::uint32_t>(decoded.consumed);
     ctrl->pPcmItem->ui_pcm_size = static_cast<std::uint32_t>(decoded.produced);
     return 0;

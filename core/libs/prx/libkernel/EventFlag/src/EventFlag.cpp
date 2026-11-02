@@ -99,7 +99,7 @@ struct EventFlagHandle {
 };
 
 PrimedSharedMutex eventFlagRegistryMutex;
-std::unordered_map<KernelEventFlag, std::shared_ptr<EventFlagHandle>> eventFlagRegistry;
+std::unordered_map<KernelEventFlagPrivate*, std::shared_ptr<EventFlagHandle>> eventFlagRegistry;
 
 std::shared_ptr<EventFlagHandle> ResolveEventFlag(KernelEventFlag handle) {
     if (!handle) return {};
@@ -109,7 +109,7 @@ std::shared_ptr<EventFlagHandle> ResolveEventFlag(KernelEventFlag handle) {
 }
 
 KernelEventFlag RegisterEventFlag(const std::shared_ptr<EventFlagHandle>& entry) {
-    const auto handle = reinterpret_cast<KernelEventFlag>(entry.get());
+    const KernelEventFlag handle = reinterpret_cast<KernelEventFlagPrivate*>(entry.get());
     eventFlagRegistry.emplace(handle, entry);
     return handle;
 }

@@ -72,7 +72,7 @@ int main() {
     Reject([&]{AgcDriver::Pm4::Validate(invalidOffsetCount,0);});
     const std::array<std::uint32_t,5> maxOffsetCount{0xc0033500u,2,1,0xffffffffu,0};
     Reject([&]{AgcDriver::Pm4::Validate(maxOffsetCount,0);});
-    auto* saved=buffer.cursor_up;
+    std::uint32_t* saved=buffer.cursor_up;
     Reject([&]{sceAgcDcbDrawIndex(&buffer,3,nullptr,0);});
     Reject([&]{sceAgcDcbDrawIndex(&buffer,3,indices.data(),1ull<<40);});
     Require(buffer.cursor_up==saved);

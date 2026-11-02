@@ -44,7 +44,7 @@ extern "C" {
 
 int APS5_VABI sceAgcWaitRegMemPatchAddress(std::uint32_t* cmd, const volatile void* address) {
     auto* wait = Agc::Command::ValidateWait(cmd, __func__);
-    const auto guestAddress = reinterpret_cast<std::uintptr_t>(address);
+    const auto guestAddress = GuestArena::HostToGuest(address);
     const auto lowMask = ((wait[0] >> 8u) & 0xffu) == 0x3cu ? 3u : 7u;
     cmd[2] = (cmd[2] & 0xffff0000u) | (static_cast<std::uint32_t>(guestAddress >> 32u) & 0xffffu);
     cmd[3] = static_cast<std::uint32_t>(guestAddress);

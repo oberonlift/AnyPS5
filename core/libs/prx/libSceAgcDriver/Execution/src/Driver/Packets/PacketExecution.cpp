@@ -1,4 +1,5 @@
 #include "prx/libSceAgcDriver/Execution/include/ProfileOutput.hpp"
+#include "prx/libc/include/GuestArena.hpp"
 #include "prx/libSceAgcDriver/Execution/include/Driver/Driver.hpp"
 #include "ThreadOwned.hpp"
 #include "prx/libSceAgcDriver/Execution/include/Driver/Diagnostics.hpp"
@@ -95,7 +96,7 @@ bool keepsDrawPipeline(std::span<const std::uint32_t> packet, std::uint32_t head
             const auto bytes = Pm4::WaitAwaitedBytes(packet);
             const std::uint64_t awaited = (packet[2] & (bytes == 8 ? ~7u : ~3u)) | (static_cast<std::uint64_t>(packet[3]) << 32u);
             if (DrawPipeline::Queue0().Overlaps(awaited, bytes)) return false;
-            GuestMemory::CheckRange(reinterpret_cast<const void*>(awaited), bytes, bytes);
+            GuestMemory::CheckRange(GuestArena::GuestToHost(awaited), bytes, bytes);
             return Pm4::WaitSatisfiedUnchecked(packet);
         }
         case 0x10: {

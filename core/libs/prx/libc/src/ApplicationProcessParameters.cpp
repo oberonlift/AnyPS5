@@ -1,4 +1,5 @@
 #include "prx/libc/include/ApplicationHeap.hpp"
+#include "prx/libc/include/GuestArena.hpp"
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
@@ -112,7 +113,7 @@ const void* ApplicationProcessParameters_nid_no_patch() {
                 result.invalid = true;
                 return 1;
             }
-            result.parameters = reinterpret_cast<const void*>(image->dlpi_addr + header.p_vaddr);
+            result.parameters = GuestArena::GuestToHost(image->dlpi_addr + header.p_vaddr);
         }
         return 1;
     }, &search);

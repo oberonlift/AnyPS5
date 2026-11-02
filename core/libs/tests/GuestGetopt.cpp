@@ -17,7 +17,6 @@ extern int optind_nid_postfix;
 extern int optopt_nid_postfix;
 extern int optreset_nid_postfix;
 extern char* optarg_nid_postfix;
-extern FileStream* __stderrp_nid_postfix;
 }
 
 namespace {

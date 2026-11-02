@@ -44,13 +44,13 @@ std::uint32_t* WriteAtomicMem(CommandBuffer* buffer, std::uint8_t atomicOp, std:
     CheckBits(command, 0xfu, function);
     CheckBits(cachePolicy, 3, function);
     CheckBits(loopInterval, 0x1fffu, function);
-    const auto guestAddress = reinterpret_cast<std::uintptr_t>(address);
+    const auto guestAddress = GuestArena::HostToGuest(address);
     CheckAddress(guestAddress, (atomicOp & 0x60u) == 0x60u ? 8 : 4, function);
     return Emit(buffer, 0x1eu, {atomicOp | (static_cast<std::uint32_t>(command) << 8u) | (static_cast<std::uint32_t>(cachePolicy) << 25u), static_cast<std::uint32_t>(guestAddress), static_cast<std::uint32_t>(guestAddress >> 32u), static_cast<std::uint32_t>(srcData), static_cast<std::uint32_t>(srcData >> 32u), static_cast<std::uint32_t>(compareData), static_cast<std::uint32_t>(compareData >> 32u), loopInterval}, function);
 }
 
 std::uint32_t* WritePrimeUtcl2(CommandBuffer* buffer, const volatile void* address, std::uint32_t sizeInBytes, const char* function) {
-    const auto guestAddress = reinterpret_cast<std::uintptr_t>(address);
+    const auto guestAddress = GuestArena::HostToGuest(address);
     return Emit(buffer, 0x10u, {0, static_cast<std::uint32_t>(guestAddress), static_cast<std::uint32_t>(guestAddress >> 32u), sizeInBytes}, function);
 }
 
@@ -85,7 +85,7 @@ std::uint32_t* WriteWait(CommandBuffer* buffer, bool compute, std::uint8_t size,
         reference &= 0xffffffffu;
         mask &= 0xffffffffu;
     }
-    const auto guestAddress = reinterpret_cast<std::uintptr_t>(address);
+    const auto guestAddress = GuestArena::HostToGuest(address);
     // The address may be left null and filled in later with sceAgcWaitRegMemPatchAddress.
     if (guestAddress != 0) CheckAddress(guestAddress, size == 0 ? 4 : 8, function);
     CheckBits(guestAddress, 0xffffffffffffull, function);

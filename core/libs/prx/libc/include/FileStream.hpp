@@ -13,6 +13,7 @@
 #include <cstdint>
 #include <cstddef>
 #include <type_traits>
+#include "prx/libc/include/GuestArena.hpp"
 #ifdef _WIN32
 #include <io.h>
 #include "prx/libc/include/FileLock.hpp"
@@ -471,6 +472,9 @@ inline std::FILE* GetNativeStream(FileStream* stream) {
 extern "C" {
 extern FileStream _Stdout_nid_postfix;
 extern FileStream _Stderr_nid_postfix;
+extern GuestArena::GuestPointer<FileStream> __stdinp_nid_postfix;
+extern GuestArena::GuestPointer<FileStream> __stdoutp_nid_postfix;
+extern GuestArena::GuestPointer<FileStream> __stderrp_nid_postfix;
 }
 
 #endif

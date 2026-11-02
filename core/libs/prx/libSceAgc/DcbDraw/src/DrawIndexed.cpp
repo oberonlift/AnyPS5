@@ -10,7 +10,7 @@
 extern "C" {
 
 std::uint32_t* APS5_VABI sceAgcDcbDrawIndex(CommandBuffer* buf, std::uint32_t indexCount, const volatile void* indexAddress, std::uint64_t modifier) {
-    const auto address = reinterpret_cast<std::uintptr_t>(indexAddress);
+    const auto address = GuestArena::HostToGuest(indexAddress);
     Agc::Command::CheckAddress(address, 1, __func__);
     return Agc::Command::Emit(buf, 0x27u, {indexCount, static_cast<std::uint32_t>(address), static_cast<std::uint32_t>(address >> 32u), indexCount, Agc::Command::DrawInitiator(modifier, true, __func__)}, __func__);
 }
@@ -48,7 +48,7 @@ std::uint32_t APS5_VABI sceAgcDcbDrawIndexIndirectGetSize() {
 uint32_t* APS5_VABI sceAgcDcbDrawIndexIndirectMulti(CommandBuffer* buf, uint32_t data_offset_in_bytes, uint32_t count_indirect, uint32_t max_count_or_count, const volatile void* count_addr, uint32_t stride_in_bytes, uint64_t modifier) {
     Agc::Command::CheckBits(count_indirect, 1, __func__);
     Agc::Command::Require((data_offset_in_bytes & 3u) == 0 && (stride_in_bytes & 3u) == 0 && stride_in_bytes >= 20, __func__, "invalid indirect draw offset or stride");
-    const auto address = reinterpret_cast<std::uintptr_t>(count_addr);
+    const auto address = GuestArena::HostToGuest(count_addr);
     if (count_indirect != 0) {
         Agc::Command::CheckAddress(address, 4, __func__);
     } else {
@@ -83,8 +83,8 @@ std::uint32_t APS5_VABI sceAgcDcbDrawIndexIndirectMultiGetSize() {
 }
 
 uint32_t* APS5_VABI sceAgcDcbDrawIndexMultiInstanced(CommandBuffer* buf, uint32_t index_count, const volatile void* index_addr, const volatile void* object_ids, uint32_t instance_count, uint64_t) {
-    const auto geometry = static_cast<std::uint64_t>(reinterpret_cast<std::uintptr_t>(index_addr));
-    const auto objects = static_cast<std::uint64_t>(reinterpret_cast<std::uintptr_t>(object_ids));
+    const auto geometry = static_cast<std::uint64_t>(GuestArena::HostToGuest(index_addr));
+    const auto objects = static_cast<std::uint64_t>(GuestArena::HostToGuest(object_ids));
     auto* packet = Agc::Command::Allocate(buf, 15, __func__);
     packet[0] = Agc::Command::Header(0x79u, 3, 4);
     packet[1] = 0x342u;

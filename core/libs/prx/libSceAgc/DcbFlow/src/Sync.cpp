@@ -11,7 +11,7 @@
 extern "C" {
 
 uint32_t* APS5_VABI sceAgcDcbCondExec(CommandBuffer* buf, const volatile uint32_t* address, uint32_t num_dwords) {
-    const auto guestAddress = reinterpret_cast<std::uintptr_t>(address);
+    const auto guestAddress = GuestArena::HostToGuest(address);
     Agc::Command::CheckAddress(guestAddress, 4, __func__);
     Agc::Command::Require(num_dwords <= 0x3fffu, __func__, "conditional execution range is too large");
     return Agc::Command::Emit(buf, 0x22u, {static_cast<std::uint32_t>(guestAddress) & ~3u, static_cast<std::uint32_t>(guestAddress >> 32u), 0, num_dwords & 0x3fffu}, __func__);
@@ -32,7 +32,7 @@ uint32_t APS5_VABI sceAgcDcbWaitOnAddressGetSize(uint32_t size) {
 std::uint32_t* APS5_VABI sceAgcDcbEventWrite(CommandBuffer* buf, std::uint8_t eventType, const volatile void* address) {
     Agc::Command::CheckBits(eventType, 0x3fu, __func__);
     if ((eventType & 0xfeu) == 0x38u) {
-        const auto guestAddress = reinterpret_cast<std::uintptr_t>(address);
+        const auto guestAddress = GuestArena::HostToGuest(address);
         Agc::Command::CheckAddress(guestAddress, 8, __func__);
         return Agc::Command::Emit(buf, 0x46u, {0x100u | eventType, static_cast<std::uint32_t>(guestAddress), static_cast<std::uint32_t>(guestAddress >> 32u)}, __func__);
     }

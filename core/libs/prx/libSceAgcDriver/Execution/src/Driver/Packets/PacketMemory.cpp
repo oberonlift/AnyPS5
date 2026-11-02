@@ -1,4 +1,5 @@
 #include "prx/libSceAgcDriver/Execution/include/Driver/Driver.hpp"
+#include "prx/libc/include/GuestArena.hpp"
 #include "prx/libSceAgcDriver/Execution/include/Driver/Diagnostics.hpp"
 #include "prx/libSceAgcDriver/Execution/include/Driver/Draw/DrawPipeline.hpp"
 #include "prx/libSceAgcDriver/Execution/include/Driver/Synchronization/SynchronizationStatistics.hpp"
@@ -156,7 +157,7 @@ bool Driver::preparePacketMemory(const Submission& submission, QueueState& queue
         bool drained = true;
         const auto copy = opcode == 0x50 ? decodeCopy(packet) : std::nullopt;
         const auto copyBehindPendingSource = [&] {
-            if (!copy.has_value() || copy->bytes > gpuStoreLimit || !GuestMemory::Accessible(reinterpret_cast<const void*>(copy->source), copy->bytes) || !GuestMemory::Accessible(reinterpret_cast<const void*>(copy->destination), copy->bytes, true)) return false;
+            if (!copy.has_value() || copy->bytes > gpuStoreLimit || !GuestMemory::Accessible(GuestArena::GuestToHost(copy->source), copy->bytes) || !GuestMemory::Accessible(GuestArena::GuestToHost(copy->destination), copy->bytes, true)) return false;
             const auto end = copy->source + copy->bytes;
             const std::array<std::pair<std::uint64_t, std::uint64_t>, 1> range{{{copy->source, end}}};
             const auto& queued = deferredLabels().labels;
@@ -214,7 +215,7 @@ bool Driver::preparePacketMemory(const Submission& submission, QueueState& queue
             }
         }
         if (drained && opcode == 0x50) {
-            if (copy.has_value() && copy->bytes > gpuStoreLimit && GuestMemory::Accessible(reinterpret_cast<const void*>(copy->source), copy->bytes) && GuestMemory::Accessible(reinterpret_cast<const void*>(copy->destination), copy->bytes, true)) {
+            if (copy.has_value() && copy->bytes > gpuStoreLimit && GuestMemory::Accessible(GuestArena::GuestToHost(copy->source), copy->bytes) && GuestMemory::Accessible(GuestArena::GuestToHost(copy->destination), copy->bytes, true)) {
                 GuestMemory::TagGpuLockSite(GuestMemory::GpuLockSite::Copy);
                 std::lock_guard gpuLock(GuestMemory::GpuMutex());
                 if (const auto localDevice = device.Load()) {
@@ -240,7 +241,7 @@ bool Driver::preparePacketMemory(const Submission& submission, QueueState& queue
         if (drained && opcode == 0x50 && Pm4::DmaSource(packet) == 2 && Pm4::DmaDestination(packet) != 1) {
             const auto destination = packet[4] | (static_cast<std::uint64_t>(packet[5]) << 32u);
             const std::size_t bytes = packet[6] & 0x3ffffffu;
-            if (bytes != 0 && destination % 16 == 0 && bytes % 16 == 0 && GuestMemory::Accessible(reinterpret_cast<const void*>(destination), bytes, true)) {
+            if (bytes != 0 && destination % 16 == 0 && bytes % 16 == 0 && GuestMemory::Accessible(GuestArena::GuestToHost(destination), bytes, true)) {
                 if (const auto localDevice = device.Load()) {
                     storeBufferFill(submission.queue, destination, bytes, {packet[2], packet[2], packet[2], packet[2]}, localDevice, false, false);
                     ++dmaFills;
@@ -372,7 +373,7 @@ bool Driver::enqueueDmaPacket(std::span<const std::uint32_t> packet, std::uint32
         const auto fillAddress = packet[4] | (static_cast<std::uint64_t>(packet[5]) << 32u);
         const auto fillBytes = Pm4::DmaBytes(packet);
         const auto pattern = packet[2];
-        if (fillAddress % 16 != 0 || fillBytes % 16 != 0 || !GuestMemory::Accessible(reinterpret_cast<const void*>(fillAddress), fillBytes, true) || !device.Load()) return false;
+        if (fillAddress % 16 != 0 || fillBytes % 16 != 0 || !GuestMemory::Accessible(GuestArena::GuestToHost(fillAddress), fillBytes, true) || !device.Load()) return false;
         DrawPipeline::Queue0().Enqueue([this, queue, fillAddress, fillBytes, pattern] {
             GuestMemory::SetCurrentPacket(0x50, queue);
             if (const auto localDevice = device.Load()) {
@@ -384,7 +385,7 @@ bool Driver::enqueueDmaPacket(std::span<const std::uint32_t> packet, std::uint32
     }
     if (source == 2) {
         const auto store = Pm4::ResolveStore(packet, state, immediateLimit);
-        if (!store.has_value() || store->Bytes().empty() || !GuestMemory::Accessible(reinterpret_cast<const void*>(store->address), store->Bytes().size(), true)) return false;
+        if (!store.has_value() || store->Bytes().empty() || !GuestMemory::Accessible(GuestArena::GuestToHost(store->address), store->Bytes().size(), true)) return false;
         const auto address = store->address;
         std::vector<std::byte> bytes(store->Bytes().begin(), store->Bytes().end());
         const auto size = bytes.size();
@@ -409,7 +410,7 @@ bool Driver::enqueueDmaPacket(std::span<const std::uint32_t> packet, std::uint32
     }
     if (Pm4::DmaSource(packet) == 0 || Pm4::DmaSource(packet) == 3) Graphics::RequireNoMultisampleTarget(packet[2] | (static_cast<std::uint64_t>(packet[3]) << 32u), packet[6] & 0x3ffffffu, "a DMA copy");
     const auto copy = Pm4::DecodeMemoryCopy(packet);
-    if (!copy.has_value() || copy->destination % 4 != 0 || copy->bytes % 4 != 0 || !GuestMemory::Accessible(reinterpret_cast<const void*>(copy->source), copy->bytes) || !GuestMemory::Accessible(reinterpret_cast<const void*>(copy->destination), copy->bytes, true)) return false;
+    if (!copy.has_value() || copy->destination % 4 != 0 || copy->bytes % 4 != 0 || !GuestMemory::Accessible(GuestArena::GuestToHost(copy->source), copy->bytes) || !GuestMemory::Accessible(GuestArena::GuestToHost(copy->destination), copy->bytes, true)) return false;
     DrawPipeline::Queue0().Enqueue([this, queue, copy = *copy] {
         DrawPipeline::Queue0().ReleaseRunningReads();
         GuestMemory::SetCurrentPacket(0x50, queue);

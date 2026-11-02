@@ -1,4 +1,5 @@
 #include "prx/libc/include/Api.hpp"
+#include "prx/libc/include/GuestArena.hpp"
 #include "prx/libc/include/FileStream.hpp"
 #include "prx/libc/include/General.hpp"
 #include "prx/libc/include/general/VabiMacros.hpp"
@@ -82,9 +83,9 @@ FileStream input{stdin};
 }
 extern "C" {
 
-FileStream* __stdinp_nid_postfix = &input;
-FileStream* __stdoutp_nid_postfix = &_Stdout_nid_postfix;
-FileStream* __stderrp_nid_postfix = &_Stderr_nid_postfix;
+GuestArena::GuestPointer<FileStream> __stdinp_nid_postfix = &input;
+GuestArena::GuestPointer<FileStream> __stdoutp_nid_postfix = &_Stdout_nid_postfix;
+GuestArena::GuestPointer<FileStream> __stderrp_nid_postfix = &_Stderr_nid_postfix;
 int __isthreaded_nid_postfix = 1;
 
 int APS5_VABI fwide_nid_postfix(FileStream* stream, int mode) {
@@ -171,7 +172,7 @@ int APS5_VABI __srget_nid_postfix(FileStream* stream) { return fgetc_nid_postfix
 int APS5_VABI getchar_nid_postfix() { return fgetc_nid_postfix(__stdinp_nid_postfix); }
 char* APS5_VABI gets_nid_postfix(char* buffer) {
     if (buffer == nullptr) throw std::invalid_argument("gets: null buffer");
-    auto* stream = __stdinp_nid_postfix;
+    FileStream* stream = __stdinp_nid_postfix;
     if (stream && !stream->IsOpen()) { errno = 9; return nullptr; }
     flockfile_nid_postfix(stream);
 

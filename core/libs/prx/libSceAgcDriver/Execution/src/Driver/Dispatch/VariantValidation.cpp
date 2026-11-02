@@ -1,4 +1,5 @@
 #include "prx/libSceAgcDriver/Execution/include/Driver/Driver.hpp"
+#include "prx/libc/include/GuestArena.hpp"
 #include "prx/libSceAgcDriver/Execution/include/Driver/Draw/DrawPipeline.hpp"
 #include "prx/libSceAgcDriver/Execution/include/Driver/Synchronization/DeferredLabels.hpp"
 #include "ThreadOwned.hpp"
@@ -69,9 +70,9 @@ bool Driver::syncPendingRuns(std::uint64_t program, std::uint32_t queue, const S
             return false;
         }
         std::vector<std::byte> before;
-        if (writeEvidenceEnabled() && GuestMemory::Accessible(reinterpret_cast<const void*>(region.guestAddress), region.bytes.size())) {
+        if (writeEvidenceEnabled() && GuestMemory::Accessible(GuestArena::GuestToHost(region.guestAddress), region.bytes.size())) {
             before.resize(region.bytes.size());
-            std::memcpy(before.data(), reinterpret_cast<const void*>(region.guestAddress), before.size());
+            std::memcpy(before.data(), GuestArena::GuestToHost(region.guestAddress), before.size());
         }
         const auto waitsBefore = Graphics::Recorder::ThreadHookWaits();
         const bool timed = profile || traceCapSync();
@@ -163,7 +164,7 @@ EntryOutcome Driver::validateVariant(std::uint64_t program, std::uint32_t queue,
     }
     if (validateLegacy()) {
         for (const auto& region : regions) {
-            if (!GuestMemory::Accessible(reinterpret_cast<const void*>(region.guestAddress), region.bytes.size())) return EntryOutcome::Inaccessible;
+            if (!GuestMemory::Accessible(GuestArena::GuestToHost(region.guestAddress), region.bytes.size())) return EntryOutcome::Inaccessible;
         }
     }
 

@@ -1,4 +1,5 @@
 #include "prx/libSceAgcDriver/Execution/include/ProfileOutput.hpp"
+#include "prx/libc/include/GuestArena.hpp"
 #include "prx/libSceAgcDriver/Execution/include/PerformanceTimer.hpp"
 #include "prx/libSceAgcDriver/Execution/include/CaptureTrace.hpp"
 #include "prx/libSceAgcDriver/Execution/include/Mutex.hpp"
@@ -3167,7 +3168,7 @@ void countCollectRefusal(bool storage, std::uint64_t address, std::size_t bytes)
     if (!BuildProfiled()) return;
     auto& profile = Revalidations();
     (storage ? profile.refusedStorage : profile.refusedSampled).fetch_add(1, std::memory_order_relaxed);
-    const bool accessible = GuestMemory::Accessible(reinterpret_cast<const void*>(address), bytes);
+    const bool accessible = GuestMemory::Accessible(GuestArena::GuestToHost(address), bytes);
     const bool watched = accessible && GuestMemory::Watched(address, bytes);
     (!accessible ? profile.refusedUncommitted : !watched ? profile.refusedUnwatched : profile.refusedOther).fetch_add(1, std::memory_order_relaxed);
     std::lock_guard lock(profile.refusedMutex);
@@ -4797,10 +4798,10 @@ std::size_t ShaderResources::addGuestBuffer(std::span<const std::uint32_t> words
 std::string ShaderResources::Describe() const {
     const auto sample = [](std::uint64_t address, std::uint64_t bytes) {
         // Heaps bound whole can include uncommitted pages; those ranges are not sampled.
-        if (!GuestMemory::Accessible(reinterpret_cast<const void*>(address), static_cast<std::size_t>(bytes))) return -1.0;
+        if (!GuestMemory::Accessible(GuestArena::GuestToHost(address), static_cast<std::size_t>(bytes))) return -1.0;
         std::size_t nonzero = 0;
         std::size_t samples = 0;
-        const auto* data = reinterpret_cast<const std::uint32_t*>(address);
+        const auto* data = static_cast<const std::uint32_t*>(GuestArena::GuestToHost(address));
         const auto words = bytes / 4;
         const auto step = std::max<std::uint64_t>(1, words / 4096);
         for (std::uint64_t i = 0; i < words; i += step, ++samples) nonzero += data[i] != 0;
@@ -4817,7 +4818,7 @@ std::string ShaderResources::Describe() const {
             text += line;
             if (keys == DccKeys::Mixed) {
                 // Where the keys change: first key, how many leading keys match it, and the next key.
-                const auto* bytes = reinterpret_cast<const std::uint8_t*>(range.dccAddress);
+                const auto* bytes = static_cast<const std::uint8_t*>(GuestArena::GuestToHost(range.dccAddress));
                 const auto count = static_cast<std::size_t>(range.bytes / 256u);
                 std::size_t run = 1;
                 while (run < count && bytes[run] == bytes[0]) ++run;
@@ -4842,10 +4843,10 @@ std::string ShaderResources::Describe() const {
         if (allocation.guest) {
             std::snprintf(line, sizeof(line), " buffer%s 0x%llx+0x%zx nz=%.2f", allocation.written ? "" : "(ro)", static_cast<unsigned long long>(allocation.address), allocation.size, sample(allocation.address, allocation.size));
             text += line;
-            if (GuestMemory::Accessible(reinterpret_cast<const void*>(allocation.address), allocation.size)) appendWords(reinterpret_cast<const std::uint32_t*>(allocation.address), allocation.size);
+            if (GuestMemory::Accessible(GuestArena::GuestToHost(allocation.address), allocation.size)) appendWords(static_cast<const std::uint32_t*>(GuestArena::GuestToHost(allocation.address)), allocation.size);
         } else if (allocation.buffer) {
             const auto bytes = allocation.buffer->Bytes();
-            std::snprintf(line, sizeof(line), " data+0x%zx nz=%.2f", allocation.size, sample(reinterpret_cast<std::uint64_t>(bytes.data()), allocation.size));
+            std::snprintf(line, sizeof(line), " data+0x%zx nz=%.2f", allocation.size, sample(GuestArena::HostToGuest(bytes.data()), allocation.size));
             text += line;
             appendWords(reinterpret_cast<const std::uint32_t*>(bytes.data()), allocation.size);
         }
@@ -5701,7 +5702,7 @@ void ShaderResources::resolveImageTables() {
                 const bool depth1D = depthCompare && ((shape == ShaderRecompiler::DescriptorImageShape::Image2D && resource.dimension == TextureDimension::k1D) || (shape == ShaderRecompiler::DescriptorImageShape::Image2DArray && resource.dimension == TextureDimension::k1DArray));
                 if (!firstLayer && !depth1D && !MatchesGuestDimension(shape, resource.dimension)) throw std::runtime_error("AGC graphics: guest texture dimension disagrees with the table entry's image shape (shape " + std::to_string(static_cast<int>(shape)) + ", dimension " + std::to_string(static_cast<int>(resource.dimension)) + ")");
                 guestBytes = DescribeSurface(resource).guestBytes;
-                if (!GuestMemory::Accessible(reinterpret_cast<const void*>(resource.baseAddress), static_cast<std::size_t>(guestBytes)) && GuestMemory::CommittedRanges(resource.baseAddress, static_cast<std::size_t>(guestBytes), false).empty()) throw std::runtime_error("AGC graphics: the table entry's surface at 0x" + HexText(resource.baseAddress) + " (0x" + HexText(guestBytes) + " bytes) is not mapped");
+                if (!GuestMemory::Accessible(GuestArena::GuestToHost(resource.baseAddress), static_cast<std::size_t>(guestBytes)) && GuestMemory::CommittedRanges(resource.baseAddress, static_cast<std::size_t>(guestBytes), false).empty()) throw std::runtime_error("AGC graphics: the table entry's surface at 0x" + HexText(resource.baseAddress) + " (0x" + HexText(guestBytes) + " bytes) is not mapped");
                 static_cast<void>(ResolveTextureFormat(resource.format));
             } catch (const std::runtime_error& error) {
                 table.map[faults + element] = rejectTableElement(table, words, error.what());
@@ -6062,7 +6063,7 @@ std::optional<std::vector<ShaderResources::MovedBuffer>> ShaderResources::MovedR
                 const auto begin = address - item.adjustment;
                 const auto bytes = static_cast<std::size_t>(GuestBufferMemory::ViewBytes(size, item.adjustment));
                 if (bytes > maxDrawSnapshotBytes - movedBytes) return std::nullopt;
-                if (!GuestMemory::Accessible(reinterpret_cast<const void*>(begin), bytes)) return std::nullopt;
+                if (!GuestMemory::Accessible(GuestArena::GuestToHost(begin), bytes)) return std::nullopt;
                 if (guestMemory.WritesOverlap(begin, bytes) || recorder.PendingWriteOverlaps(begin, bytes) || PendingStorageOverlaps(begin, bytes, nullptr) || AnyShadowedOverlaps(begin, bytes)) return std::nullopt;
                 if (moved.empty()) moved.reserve(allocations.size());
                 moved.push_back({index, address, static_cast<std::size_t>(size)});
@@ -6119,7 +6120,7 @@ std::optional<std::vector<ShaderResources::MovedBuffer>> ShaderResources::MovedD
             const auto begin = address - item.adjustment;
             const auto bytes = static_cast<std::size_t>(GuestBufferMemory::ViewBytes(size, item.adjustment));
             if (maxBytes != 0 && proof.bytes + bytes > maxBytes) return refuse(MoveRefusal::Limit);
-            if (!GuestMemory::Accessible(reinterpret_cast<const void*>(begin), bytes)) return refuse(MoveRefusal::Inaccessible);
+            if (!GuestMemory::Accessible(GuestArena::GuestToHost(begin), bytes)) return refuse(MoveRefusal::Inaccessible);
             const bool pending = recorder != nullptr ? recorder->PendingWriteOverlaps(begin, bytes) : Recorder::SnapshotWriteOverlaps(begin, bytes);
             const std::array<std::pair<std::uint64_t, std::uint64_t>, 1> range{{{begin, begin + bytes}}};
             if (guestMemory.WritesOverlap(begin, bytes) || pending || StorageTexture::AnyPendingOverlaps(range) || AnyShadowedOverlaps(begin, bytes)) return refuse(MoveRefusal::Overlap);
@@ -6212,7 +6213,7 @@ std::shared_ptr<ShaderResources::DrawBindings> ShaderResources::PrepareDrawBindi
             const bool uploaded = bytes != 0 && bytes <= uploadLimit;
             if (uploaded) {
                 auto slice = recorder.DrawUpload(bytes);
-                std::memcpy(slice.bytes, reinterpret_cast<const void*>(begin), bytes);
+                std::memcpy(slice.bytes, GuestArena::GuestToHost(begin), bytes);
                 buffer = std::move(slice.buffer);
                 offset = slice.offset;
             } else {
@@ -6220,7 +6221,7 @@ std::shared_ptr<ShaderResources::DrawBindings> ShaderResources::PrepareDrawBindi
                 buffer = recorder.ReusableDrawSnapshot(begin, bytes, Recorder::SnapshotUse::Storage, nullptr, generation, &offset);
                 if (buffer == nullptr) {
                     buffer = std::make_shared<Buffer>(context, bytes, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT);
-                    std::memcpy(buffer->Bytes().data(), reinterpret_cast<const void*>(begin), bytes);
+                    std::memcpy(buffer->Bytes().data(), GuestArena::GuestToHost(begin), bytes);
                     recorder.KeepDrawSnapshot(begin, bytes, generation, registryGeneration, buffer);
                 }
             }

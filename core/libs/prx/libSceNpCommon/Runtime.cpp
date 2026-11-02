@@ -243,7 +243,7 @@ int MapKernelMemory(NpKernelMemory* memory, std::uint64_t size, const char* name
 }
 
 void UnmapKernelMemory(NpKernelMemory* memory) {
-    if (memory->address != nullptr) sceKernelMunmap(reinterpret_cast<std::uint64_t>(memory->address), memory->size);
+    if (memory->address != nullptr) sceKernelMunmap(GuestArena::HostToGuest(memory->address), memory->size);
     memory->address = nullptr;
 }
 

@@ -1,8 +1,10 @@
 #include "prx/libc/include/Api.hpp"
 #include "prx/libc/include/ApplicationHeap.hpp"
+#include "prx/libc/include/GuestArena.hpp"
 #include "prx/libc/include/GuestHeap.hpp"
 #include "prx/libc/include/general/VabiMacros.hpp"
 #include <array>
+#include <type_traits>
 #include <atomic>
 #include <cstdint>
 #include <cstdlib>
@@ -77,9 +79,14 @@ public:
 template<typename TValue>
 TValue read(const void* pointer, std::size_t offset) {
     if (pointer == nullptr) throw std::invalid_argument("application heap: null metadata");
-    TValue value;
-    std::memcpy(&value, static_cast<const std::byte*>(pointer) + offset, sizeof(value));
-    return value;
+    const auto* field = static_cast<const std::byte*>(pointer) + offset;
+    if constexpr (std::is_pointer_v<TValue> && !std::is_function_v<std::remove_pointer_t<TValue>>) {
+        return static_cast<TValue>(GuestArena::StoredPointer(field));
+    } else {
+        TValue value;
+        std::memcpy(&value, field, sizeof(value));
+        return value;
+    }
 }
 
 void ensureInitialized(std::unique_lock<std::mutex>& lock) {

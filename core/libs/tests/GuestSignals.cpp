@@ -129,8 +129,8 @@ int main() {
     Require(pthread_kill_nid_postfix(nullptr, 15) == 3);
     Require(pthread_kill_nid_postfix(nullptr, 128) == 3);
     Require(pthread_kill_nid_postfix(nullptr, 129) == 22);
-    Require(pthread_kill_nid_postfix(reinterpret_cast<Pthread>(std::uintptr_t{0x10}), 15) == 3);
-    Require(pthread_kill_nid_postfix(reinterpret_cast<Pthread>(std::uintptr_t{0x10}), 0) == 3);
+    Require(pthread_kill_nid_postfix(reinterpret_cast<PthreadPrivate*>(std::uintptr_t{0x10}), 15) == 3);
+    Require(pthread_kill_nid_postfix(reinterpret_cast<PthreadPrivate*>(std::uintptr_t{0x10}), 0) == 3);
     {
         EndingThread ending;
         Pthread thread = nullptr;

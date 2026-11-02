@@ -424,6 +424,18 @@ EXPORT_PATTERN = re.compile(r'APS5_EXPORT\(\s*"([^"]+)"\s*,\s*(\w+)\s*\)')
 GUEST_LONG_DOUBLE = "LibcDetail::GuestLongDouble"
 BRIDGE_LONG_DOUBLE = "Ps5Lift::Bridge::LongDouble"
 DISAMBIGUATION = re.compile(r"_nid_disambig\d+$")
+GUEST_POINTER_SLOTS = {
+    **{name: (1,) for name in ("strtol", "strtoul", "strtoll", "strtoull", "strtoimax", "strtoumax", "strtod", "strtof", "strtold", "wcstol", "wcstoul", "wcstoll",
+                               "wcstoull", "wcstod", "wcstof", "wcstold", "_Stoul", "_Stoull", "_Stoll", "_Stod", "_Stof", "_Stold", "_Stodx", "_Stofx", "_Stoldx")},
+    "strtok_r": (2,), "strsep": (0,), "posix_memalign": (0,), "pthread_attr_getstack": (1,), "pthread_attr_getstackaddr": (1,),
+    "scePthreadAttrGetstack": (1,), "scePthreadAttrGetstackaddr": (1,), "sceKernelMapDirectMemory": (0,), "sceKernelMapDirectMemory2": (0,),
+    "sceKernelMapNamedDirectMemory": (0,), "sceKernelMapFlexibleMemory": (0,), "sceKernelMapNamedFlexibleMemory": (0,),
+    "sceKernelMapNamedSystemFlexibleMemory": (0,), "sceKernelReserveVirtualRange": (0,), "sceKernelMmap": (6,),
+    "sceFiberGetSelf": (0,),
+    "scePthreadJoin": (1,), "pthread_join": (1,), "pthread_timedjoin_np": (1,),
+    "sceAgcDriverWaitUntilSafeForRendering": (0,), "sceAgcGetDataPacketPayloadAddress": (0,), "sceAgcGetDataPacketPayloadAddress_0090": (0,),
+    "sceAgcGetSemaphoreLabel": (1,),
+}
 
 cindex = None
 parse_arguments = []
@@ -658,8 +670,11 @@ def describe(cursor, symbol):
     integers = 1 if return_class[0] == "record" and return_class[1].eightbytes == "memory" else 0
     floats = 0
     stack = 0
-    for argument in cursor.get_arguments():
+    slots = GUEST_POINTER_SLOTS.get(export_base(symbol), ())
+    for index, argument in enumerate(cursor.get_arguments()):
         parameter_class, spelling = classify(argument.type, "parameter")
+        if index in slots and parameter_class != "pointer":
+            raise ValueError(f"{symbol}: GUEST_POINTER_SLOTS names parameter {index}, which is not a pointer")
         if parameter_class == "record":
             argument_record = spelling
             spelling = argument_record.name
@@ -712,6 +727,8 @@ def describe(cursor, symbol):
                 integers += 1
             else:
                 stack += 1
+            if index in slots:
+                access = f"GuestSlot({access})"
         parameters.append((spelling, access))
     if return_class[0] == "record":
         return_class = ("record", (return_class[1].name, return_class[1].eightbytes))
@@ -1140,6 +1157,9 @@ KERNEL_IMPORTS = ["printf", "exit", "scePthreadCreate", "scePthreadJoin", "scePt
 FIBER_IMPORTS = ["printf", "fflush", "exit", "_sceFiberInitializeImpl", "sceFiberFinalize", "sceFiberRun", "sceFiberSwitch", "sceFiberReturnToThread", "sceFiberGetSelf",
                  "scePthreadCreate", "scePthreadJoin"]
 LOADER_IMPORTS = ["printf", "exit", "dlopen", "sceKernelGetExecutableModuleHandle", "sceKernelLoadStartModule", "sceKernelDlsym"]
+TRANSLATION_IMPORTS = ["printf", "fflush", "exit", "mmap", "munmap", "strlen", "strchr", "strtol", "qsort", "writev", "pthread_mutex_lock",
+                       "pthread_mutex_unlock", "scePthreadMutexLock", "scePthreadMutexUnlock", "pthread_mutexattr_init", "scePthreadMutexattrSettype",
+                       "pthread_mutexattr_gettype", "pthread_mutexattr_getkind_np", "pthread_mutexattr_destroy", "pthread_self", "pthread_equal"]
 LOG_LINE = re.compile(r"^\[[^\]\s]+:\d+ [^\]]+\] .*\n", re.MULTILINE)
 GUEST_LINK = ["-no-pie", f"-Wl,--image-base={GUEST_BASE:#x}", "-Wl,--dynamic-linker=/lib64/ld-linux-x86-64.so.2"]
 LIBRARY_PROGRAM_TIMEOUT = 600
@@ -1200,8 +1220,14 @@ def build_loader_guest(args, work, optimization):
     return build_stubbed_guest(args, work, optimization, "loader", LOADER_IMPORTS, libraries=[f":{relative}"])
 
 
-LIBRARY_GUESTS = {"libc": build_libc_guest, "exceptions": build_exceptions_guest, "kernel": build_kernel_guest, "fiber": build_fiber_guest, "loader": build_loader_guest}
-GUEST_LIBRARIES = {"libc": ["libc"], "exceptions": ["libc"], "kernel": ["libc", "libkernel", "libkernel_sys"], "fiber": ["libc", "libkernel", "libSceFiber"], "loader": ["libc", "libkernel"]}
+def build_translation_guest(args, work, optimization):
+    return build_stubbed_guest(args, work, optimization, "translation", TRANSLATION_IMPORTS)
+
+
+LIBRARY_GUESTS = {"libc": build_libc_guest, "exceptions": build_exceptions_guest, "kernel": build_kernel_guest, "fiber": build_fiber_guest,
+                  "loader": build_loader_guest, "translation": build_translation_guest}
+GUEST_LIBRARIES = {"libc": ["libc"], "exceptions": ["libc"], "kernel": ["libc", "libkernel", "libkernel_sys"], "fiber": ["libc", "libkernel", "libSceFiber"],
+                   "loader": ["libc", "libkernel"], "translation": ["libc", "libkernel"]}
 
 
 def libc_fixture_command(args):

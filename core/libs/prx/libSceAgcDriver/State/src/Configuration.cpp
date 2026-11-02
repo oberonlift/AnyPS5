@@ -1,4 +1,5 @@
 #include "prx/libSceAgcDriver/State/include/Configuration.hpp"
+#include "prx/libc/include/GuestArena.hpp"
 
 #include <cstdint>
 #include <cstddef>
@@ -31,7 +32,7 @@ int APS5_VABI sceAgcDriverSetHsOffchipParam(uint64_t value0, uint64_t value1, ui
 int APS5_VABI sceAgcDriverSetTFRing(const volatile void* base, uint32_t size) {
  if (base == nullptr || size == 0) throw std::invalid_argument("sceAgcDriverSetTFRing: empty ring");
  std::lock_guard lock(tessellationFactorRingMutex);
- tessellationFactorRing = {reinterpret_cast<uintptr_t>(base), size};
+ tessellationFactorRing = {GuestArena::HostToGuest(base), size};
  return 0;
 }
 

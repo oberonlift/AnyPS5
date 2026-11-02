@@ -1,4 +1,5 @@
 #include "prx/libSceAgcDriver/Execution/include/ProfileOutput.hpp"
+#include "prx/libc/include/GuestArena.hpp"
 #include "prx/libSceAgcDriver/Execution/include/ShaderMemory.hpp"
 #include "prx/libSceAgcDriver/Execution/include/GuestMemory.hpp"
 #include "prx/libSceAgcDriver/Execution/include/Driver/Dispatch/DispatchCache.hpp"
@@ -346,7 +347,7 @@ ShaderMemory::Page& ShaderMemory::page(std::uint64_t base) {
 void ShaderMemory::preparePage(Page& page, std::uint64_t base) {
     // A page is either mapped whole or read word by word where the guest mapped less than a page,
     // or where recorded GPU work writes into it (a whole-page read would wait for that work).
-    if (GuestMemory::Accessible(reinterpret_cast<const void*>(base), PageBytes)) {
+    if (GuestMemory::Accessible(GuestArena::GuestToHost(base), PageBytes)) {
         if (WordwisePages() && pendingWrite != nullptr && pendingWrite(base, PageBytes, {}) != PendingWrite::None) {
             page.wordwise = true;
             ++CaptureTotals().pagesWordwise;
@@ -384,7 +385,7 @@ bool ShaderMemory::read(void* context, std::uint64_t address, std::uint32_t* val
     const auto index = static_cast<std::size_t>((address % PageBytes) / sizeof(*value));
     if (!page.valid.Test(index) && page.lazy) {
         const auto first = index / BlockWords * BlockWords;
-        GuestMemory::CopyGuestBytes(&page.words[first], reinterpret_cast<const void*>((address & ~static_cast<std::uint64_t>(PageBytes - 1)) + first * sizeof(std::uint32_t)), BlockWords * sizeof(std::uint32_t));
+        GuestMemory::CopyGuestBytes(&page.words[first], GuestArena::GuestToHost((address & ~static_cast<std::uint64_t>(PageBytes - 1)) + first * sizeof(std::uint32_t)), BlockWords * sizeof(std::uint32_t));
         page.valid.SetBlock(index);
     }
     const auto spanNeedsSync = [](PendingWrite spanPolicy) {
@@ -417,7 +418,7 @@ bool ShaderMemory::read(void* context, std::uint64_t address, std::uint32_t* val
                     forcedRaw = !spanNeedsSync(policy);
                     policy = PendingWrite::Sync;
                 }
-                if (policy != PendingWrite::None && policy != PendingWrite::Sync && !GuestMemory::Accessible(reinterpret_cast<const void*>(address), sizeof(word))) policy = PendingWrite::Sync;
+                if (policy != PendingWrite::None && policy != PendingWrite::Sync && !GuestMemory::Accessible(GuestArena::GuestToHost(address), sizeof(word))) policy = PendingWrite::Sync;
             }
         }
         // A read is evidence only when the hook waited for unfinished GPU work across it.
@@ -443,7 +444,7 @@ bool ShaderMemory::read(void* context, std::uint64_t address, std::uint32_t* val
             }
         } else if (policy == PendingWrite::Raw || policy == PendingWrite::VerifyRaw) {
             GuestMemory::GuardRead(address, sizeof(word));
-            std::memcpy(&word, reinterpret_cast<const void*>(address), sizeof(word));
+            std::memcpy(&word, GuestArena::GuestToHost(address), sizeof(word));
             ++CaptureTotals().wordsRaw;
             if (policy == PendingWrite::VerifyRaw) {
                 std::uint32_t verifiedWord = 0;
@@ -461,9 +462,9 @@ bool ShaderMemory::read(void* context, std::uint64_t address, std::uint32_t* val
             return false;
         } else {
             // On a word-wise page the bytes before the hook's wait are kept for the observer.
-            const bool observed = page.wordwise && policy == PendingWrite::Sync && self.observe != nullptr && GuestMemory::Accessible(reinterpret_cast<const void*>(address), sizeof(word));
+            const bool observed = page.wordwise && policy == PendingWrite::Sync && self.observe != nullptr && GuestMemory::Accessible(GuestArena::GuestToHost(address), sizeof(word));
             std::uint32_t before = 0;
-            if (observed) std::memcpy(&before, reinterpret_cast<const void*>(address), sizeof(before));
+            if (observed) std::memcpy(&before, GuestArena::GuestToHost(address), sizeof(before));
             const auto waitsBefore = page.wordwise ? hookWaits() : 0;
             const auto started = page.wordwise ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
             if (page.wordwise && policy == PendingWrite::Sync && self.descriptorSpanBytes > sizeof(word)) {
@@ -573,7 +574,7 @@ bool ShaderMemory::readWords(void* context, std::uint64_t address, std::uint32_t
                     }
                     auto last = first + BlockWords;
                     while (last < end && !page->valid.TestBlock(last)) last += BlockWords;
-                    GuestMemory::CopyGuestBytes(&page->words[first], reinterpret_cast<const void*>(base + first * sizeof(std::uint32_t)), (last - first) * sizeof(std::uint32_t));
+                    GuestMemory::CopyGuestBytes(&page->words[first], GuestArena::GuestToHost(base + first * sizeof(std::uint32_t)), (last - first) * sizeof(std::uint32_t));
                     page->valid.SetRun(first, last - first);
                     first = last;
                 }
@@ -645,7 +646,7 @@ bool ShaderMemory::accessible(void* context, std::uint64_t address, std::uint64_
         const auto base = address & ~static_cast<std::uint64_t>(PageBytes - 1);
         const auto pageEnd = std::min<std::uint64_t>(base + PageBytes, end);
         const auto& page = self.page(base);
-        if (!page.wordwise && !page.lazy && !page.valid.All() && !GuestMemory::Accessible(reinterpret_cast<const void*>(address), static_cast<std::size_t>(pageEnd - address))) return false;
+        if (!page.wordwise && !page.lazy && !page.valid.All() && !GuestMemory::Accessible(GuestArena::GuestToHost(address), static_cast<std::size_t>(pageEnd - address))) return false;
         address = pageEnd;
     }
     return true;
@@ -703,7 +704,7 @@ bool ShaderMemory::place(std::uint64_t address, const std::uint32_t* values, std
         const auto position = pageAtOrAfter(base);
         Page* found = position != pages.size() && pages[position].first == base ? pages[position].second : nullptr;
         if (found == nullptr) {
-            if (!overwrite && !GuestMemory::Accessible(reinterpret_cast<const void*>(base), PageBytes)) return false;
+            if (!overwrite && !GuestMemory::Accessible(GuestArena::GuestToHost(base), PageBytes)) return false;
             found = &addPage(position, base);
         }
         auto& page = *found;
@@ -719,8 +720,8 @@ bool ShaderMemory::place(std::uint64_t address, const std::uint32_t* values, std
                 if (!page.valid.Test(index + word)) page.words[index + word] = values[word];
             }
         }
-        if (headOpen && head < index) GuestMemory::CopyGuestBytes(&page.words[head], reinterpret_cast<const void*>(base + head * sizeof(std::uint32_t)), (index - head) * sizeof(std::uint32_t));
-        if (tailOpen && index + words < tail) GuestMemory::CopyGuestBytes(&page.words[index + words], reinterpret_cast<const void*>(base + (index + words) * sizeof(std::uint32_t)), (tail - index - words) * sizeof(std::uint32_t));
+        if (headOpen && head < index) GuestMemory::CopyGuestBytes(&page.words[head], GuestArena::GuestToHost(base + head * sizeof(std::uint32_t)), (index - head) * sizeof(std::uint32_t));
+        if (tailOpen && index + words < tail) GuestMemory::CopyGuestBytes(&page.words[index + words], GuestArena::GuestToHost(base + (index + words) * sizeof(std::uint32_t)), (tail - index - words) * sizeof(std::uint32_t));
         page.valid.SetRun(page.lazy ? head : index, page.lazy ? tail - head : words);
         page.read.SetRun(index, words);
         if (recent) page.recent.SetRun(index, words);
@@ -793,19 +794,19 @@ bool ShaderMemory::supplyWords(void* context, const std::shared_ptr<const Shader
     }
     const auto spanBegin = begin & ~static_cast<std::uint64_t>(PageBytes - 1);
     const auto spanEnd = (end + PageBytes - 1) & ~static_cast<std::uint64_t>(PageBytes - 1);
-    if (!GuestMemory::Accessible(reinterpret_cast<const void*>(spanBegin), static_cast<std::size_t>(spanEnd - spanBegin))) {
+    if (!GuestMemory::Accessible(GuestArena::GuestToHost(spanBegin), static_cast<std::size_t>(spanEnd - spanBegin))) {
         std::uint64_t first = std::numeric_limits<std::uint64_t>::max();
         std::uint64_t past = 0;
         for (const auto& [address, count] : words->runs) {
             const auto from = address & ~static_cast<std::uint64_t>(PageBytes - 1);
             const auto to = (address + static_cast<std::uint64_t>(count) * sizeof(std::uint32_t) + PageBytes - 1) & ~static_cast<std::uint64_t>(PageBytes - 1);
             if (from > past || first == std::numeric_limits<std::uint64_t>::max()) {
-                if (first != std::numeric_limits<std::uint64_t>::max() && !GuestMemory::Accessible(reinterpret_cast<const void*>(first), static_cast<std::size_t>(past - first))) return false;
+                if (first != std::numeric_limits<std::uint64_t>::max() && !GuestMemory::Accessible(GuestArena::GuestToHost(first), static_cast<std::size_t>(past - first))) return false;
                 first = from;
             }
             past = std::max(past, to);
         }
-        if (!GuestMemory::Accessible(reinterpret_cast<const void*>(first), static_cast<std::size_t>(past - first))) return false;
+        if (!GuestMemory::Accessible(GuestArena::GuestToHost(first), static_cast<std::size_t>(past - first))) return false;
     }
     self.supplied.push_back({words, begin, end, true});
     totals.suppliedShared += total;

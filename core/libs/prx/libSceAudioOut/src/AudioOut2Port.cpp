@@ -195,7 +195,7 @@ static void TraceAttribute(AudioOut2PortHandle handle, const AudioOut2Port& port
         for (std::size_t index = 0; index < words && used < sizeof(values); index++) {
             std::uint32_t bits = 0;
             float value = 0.0f;
-            std::memcpy(&bits, static_cast<const std::uint8_t*>(attribute.value) + index * sizeof(bits), sizeof(bits));
+            std::memcpy(&bits, static_cast<const std::uint8_t*>(static_cast<const void*>(attribute.value)) + index * sizeof(bits), sizeof(bits));
             std::memcpy(&value, &bits, sizeof(value));
             used += static_cast<std::size_t>(std::snprintf(values + used, sizeof(values) - used, " %08x(%g)", bits, static_cast<double>(value)));
         }
@@ -293,7 +293,7 @@ int APS5_VABI sceAudioOut2PortSetAttributes(AudioOut2PortHandle port, const Audi
         if (attribute.value == nullptr) {
             verdict = "null value";
         } else if (attribute.attribute_id == ATTRIBUTE_DATA && attribute.value_size == sizeof(entry->data)) {
-            std::memcpy(&entry->data, attribute.value, sizeof(entry->data));
+            entry->data = GuestArena::StoredPointer(attribute.value);
             MarkBufferReused(*entry);
             AudioOut2QueuedData queued{entry->data, CopyGrain(*entry)};
             entry->repeatedData = entry->data != nullptr && entry->lastBuffer == nullptr ? entry->data : nullptr;

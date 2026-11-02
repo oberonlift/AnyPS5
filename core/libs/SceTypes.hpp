@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <cstdio>
 #include "prx/libc/include/general/VabiMacros.hpp"
+#include "prx/libc/include/GuestArena.hpp"
 
 #if defined(__GNUC__) || defined(__clang__)
 typedef float __m128 __attribute__((__vector_size__(16), __aligned__(16)));
@@ -17,18 +18,18 @@ struct alignas(16) __m128 { float v[4]; };
 using Bool = std::uint8_t;
 
 struct SonyLconv {
-    char* monetary[7];
+    GuestArena::GuestPointer<char> monetary[7];
     char chars[14];
     char pad[2];
-    char* decimal_point;
-    char* grouping;
-    char* thousands_sep;
-    char* frac_grouping;
-    char* frac_sep;
-    char* false_text;
-    char* true_text;
-    char* no_text;
-    char* yes_text;
+    GuestArena::GuestPointer<char> decimal_point;
+    GuestArena::GuestPointer<char> grouping;
+    GuestArena::GuestPointer<char> thousands_sep;
+    GuestArena::GuestPointer<char> frac_grouping;
+    GuestArena::GuestPointer<char> frac_sep;
+    GuestArena::GuestPointer<char> false_text;
+    GuestArena::GuestPointer<char> true_text;
+    GuestArena::GuestPointer<char> no_text;
+    GuestArena::GuestPointer<char> yes_text;
 };
 static_assert(offsetof(SonyLconv, decimal_point) == 0x48);
 static_assert(sizeof(SonyLconv) == 0x90);
@@ -90,8 +91,8 @@ struct KernelAioResult {
 struct KernelAioRwRequest {
     std::int64_t offset;
     std::size_t nbyte;
-    void* buf;
-    KernelAioResult* result;
+    GuestArena::GuestPointer<void> buf;
+    GuestArena::GuestPointer<KernelAioResult> result;
     std::int32_t fd;
 };
 
@@ -104,7 +105,7 @@ struct KernelAioSchedulingParam {
 };
 
 struct KernelBatchMapEntry {
-    void* start;
+    GuestArena::GuestPointer<void> start;
     std::uint64_t offset;
     std::uint64_t length;
     char protection;
@@ -190,18 +191,21 @@ struct PthreadCondattrPrivate;
 struct PthreadCondPrivate;
 struct PthreadSemPrivate;
 
-using KernelSema = KernelSemaPrivate*;
-using KernelEventFlag = KernelEventFlagPrivate*;
-using Pthread = PthreadPrivate*;
+using KernelSema = GuestArena::GuestPointer<KernelSemaPrivate>;
+using KernelEventFlag = GuestArena::GuestPointer<KernelEventFlagPrivate>;
+using Pthread = GuestArena::GuestPointer<PthreadPrivate>;
 using PthreadEntry = void* (APS5_VABI *)(void*);
-using PthreadAttr = PthreadAttrPrivate*;
-using PthreadMutex = PthreadMutexPrivate*;
-using PthreadMutexattr = PthreadMutexattrPrivate*;
-using PthreadRwlock = PthreadRwlockPrivate*;
-using PthreadRwlockattr = PthreadRwlockattrPrivate*;
-using PthreadCond = PthreadCondPrivate*;
-using PthreadCondattr = PthreadCondattrPrivate*;
-using PthreadSem = PthreadSemPrivate*;
+using PthreadAttr = GuestArena::GuestPointer<PthreadAttrPrivate>;
+using PthreadMutex = GuestArena::GuestPointer<PthreadMutexPrivate>;
+using PthreadMutexattr = GuestArena::GuestPointer<PthreadMutexattrPrivate>;
+using PthreadRwlock = GuestArena::GuestPointer<PthreadRwlockPrivate>;
+using PthreadRwlockattr = GuestArena::GuestPointer<PthreadRwlockattrPrivate>;
+using PthreadCond = GuestArena::GuestPointer<PthreadCondPrivate>;
+using PthreadCondattr = GuestArena::GuestPointer<PthreadCondattrPrivate>;
+using PthreadSem = GuestArena::GuestPointer<PthreadSemPrivate>;
+static_assert(sizeof(KernelSema) == 8 && sizeof(KernelEventFlag) == 8 && sizeof(Pthread) == 8 && sizeof(PthreadAttr) == 8);
+static_assert(sizeof(PthreadMutex) == 8 && sizeof(PthreadMutexattr) == 8 && sizeof(PthreadRwlock) == 8 && sizeof(PthreadRwlockattr) == 8);
+static_assert(sizeof(PthreadCond) == 8 && sizeof(PthreadCondattr) == 8 && sizeof(PthreadSem) == 8);
 using PthreadKey = int;
 using pthread_entry_func_t = void* (*)(void*);
 using pthread_key_destructor_func_t = void (*)(void*);
@@ -399,10 +403,10 @@ struct RtcTick {
 
 struct CommandBuffer {
     using Callback = bool (APS5_VABI *)(CommandBuffer*, std::uint32_t, void*);
-    std::uint32_t* bottom;
-    std::uint32_t* top;
-    std::uint32_t* cursor_up;
-    std::uint32_t* cursor_down;
+    GuestArena::GuestPointer<std::uint32_t> bottom;
+    GuestArena::GuestPointer<std::uint32_t> top;
+    GuestArena::GuestPointer<std::uint32_t> cursor_up;
+    GuestArena::GuestPointer<std::uint32_t> cursor_down;
     Callback callback;
     void* user_data;
     std::uint32_t reserved_dw;
@@ -433,8 +437,8 @@ struct AcmBatchError {
 };
 
 struct AcmReverbBuffer {
-    void* samples;
-    const void* blockMetadata;
+    GuestArena::GuestPointer<void> samples;
+    GuestArena::GuestPointer<const void> blockMetadata;
 };
 
 struct AcmReverbInput {
@@ -454,7 +458,7 @@ struct AcmReverbFilter {
     std::uint32_t blockCount;
     std::uint32_t channelCount;
     std::uint32_t sampleFormat;
-    const void* blockMetadata;
+    GuestArena::GuestPointer<const void> blockMetadata;
     const AcmReverbBuffer* const* channels;
 };
 
@@ -475,26 +479,26 @@ static_assert(sizeof(AcmReverbFilter) == 32);
 static_assert(offsetof(AcmReverbOutput, previousSamples) == 32);
 
 struct AcmBatchInfo {
-    void* buffer;
+    GuestArena::GuestPointer<void> buffer;
     std::size_t offset;
     std::size_t buffer_size;
 };
 
 struct AjmBatchError {
     std::int32_t error_code;
-    const void* job_addr;
+    GuestArena::GuestPointer<const void> job_addr;
     std::uint32_t cmd_offset;
     const void* job_ra;
 };
 
 struct AjmBatchInfo {
-    void* p_buffer;
+    GuestArena::GuestPointer<void> p_buffer;
     std::uint64_t offset;
     std::uint64_t size;
 };
 
 struct AjmBuffer {
-    void* ptr;
+    GuestArena::GuestPointer<void> ptr;
     std::size_t size;
 };
 
@@ -546,7 +550,7 @@ struct AudioOut2PortParam {
 struct AudioOut2Attribute {
     std::uint32_t attribute_id;
     std::int32_t reserved;
-    const void* value;
+    GuestArena::GuestPointer<const void> value;
     std::size_t value_size;
 };
 
@@ -587,7 +591,7 @@ struct AudioOut2SpeakerInfo {
 struct AudioOut2SystemDebugStateParam {
     std::uint32_t debug_state_id;
     std::int32_t reserved;
-    void* param;
+    GuestArena::GuestPointer<void> param;
     std::size_t param_size;
 };
 
@@ -642,7 +646,7 @@ struct AudioOut2MasteringStatesV2 {
 
 struct AudioOutOutputParam {
     int handle;
-    const void* ptr;
+    GuestArena::GuestPointer<const void> ptr;
 };
 
 struct AudioOutPortState {
@@ -676,7 +680,7 @@ struct Audio3dOpenParameters {
 struct Audio3dAttribute {
     std::uint32_t attribute_id;
     std::uint32_t pad;
-    const void* value;
+    GuestArena::GuestPointer<const void> value;
     std::uint64_t value_size;
 };
 
@@ -689,9 +693,9 @@ struct AudioPropagationStructDescriptor {
 
 struct AudioPropagationSystemMemory {
     AudioPropagationStructDescriptor desc;
-    void* p_cpu_mem;
+    GuestArena::GuestPointer<void> p_cpu_mem;
     std::size_t size_cpu_mem;
-    void* p_gpu_mem;
+    GuestArena::GuestPointer<void> p_gpu_mem;
     std::size_t size_gpu_mem;
 };
 
@@ -732,7 +736,7 @@ union AvPlayerStreamDetails {
 };
 
 struct AvPlayerFrameInfo {
-    std::uint8_t* p_data;
+    GuestArena::GuestPointer<std::uint8_t> p_data;
     std::uint8_t reserved[4];
     std::uint64_t timestamp;
     AvPlayerStreamDetails details;
@@ -792,7 +796,7 @@ union AvPlayerStreamDetailsEx {
 };
 
 struct AvPlayerFrameInfoEx {
-    void* p_data;
+    GuestArena::GuestPointer<void> p_data;
     std::uint8_t reserved[4];
     std::uint64_t timestamp;
     AvPlayerStreamDetailsEx details;
@@ -851,7 +855,7 @@ struct AvPlayerInitData {
     std::int32_t num_output_video_framebuffers;
     bool auto_start;
     std::uint8_t reserved[3];
-    const char* default_language;
+    GuestArena::GuestPointer<const char> default_language;
 };
 
 struct AvPlayerInitDataEx {
@@ -859,7 +863,7 @@ struct AvPlayerInitDataEx {
     AvPlayerMemAllocator memory_replacement;
     AvPlayerFileReplacement file_replacement;
     AvPlayerEventReplacement event_replacement;
-    const char* default_language;
+    GuestArena::GuestPointer<const char> default_language;
     std::int32_t debug_level;
     std::uint32_t audio_decoder_priority;
     std::uint32_t audio_decoder_affinity;
@@ -879,7 +883,7 @@ struct AvPlayerInitDataEx {
 };
 
 struct AvPlayerUri {
-    const char* name;
+    GuestArena::GuestPointer<const char> name;
     std::uint32_t length;
 };
 
@@ -912,21 +916,21 @@ struct AvPlayerInternal {};
 
 struct AudiodecAuInfo {
     std::uint32_t ui_size;
-    void* p_au_addr;
+    GuestArena::GuestPointer<void> p_au_addr;
     std::uint32_t ui_au_size;
 };
 
 struct AudiodecPcmItem {
     std::uint32_t ui_size;
-    void* p_pcm_addr;
+    GuestArena::GuestPointer<void> p_pcm_addr;
     std::uint32_t ui_pcm_size;
 };
 
 struct AudiodecCtrl {
-    void* pParam;
-    void* pBsiInfo;
-    AudiodecAuInfo* pAuInfo;
-    AudiodecPcmItem* pPcmItem;
+    GuestArena::GuestPointer<void> pParam;
+    GuestArena::GuestPointer<void> pBsiInfo;
+    GuestArena::GuestPointer<AudiodecAuInfo> pAuInfo;
+    GuestArena::GuestPointer<AudiodecPcmItem> pPcmItem;
 };
 
 struct AudiodecParamAt9 {
@@ -1051,7 +1055,7 @@ struct VoicePortParam {
 struct VoicePortInfo {
     std::int32_t port_type;
     std::int32_t state;
-    std::uint32_t* edge;
+    GuestArena::GuestPointer<std::uint32_t> edge;
     std::uint32_t byte_count;
     std::uint32_t frame_size;
     std::uint16_t edge_count;
@@ -1063,8 +1067,8 @@ struct NpAuthClientId;
 struct NpAuthAuthorizedAppCodeParameter {
     std::uint64_t size;
     std::int32_t userId;
-    const NpAuthClientId* clientId;
-    const char* scope;
+    GuestArena::GuestPointer<const NpAuthClientId> clientId;
+    GuestArena::GuestPointer<const char> scope;
     std::uint32_t option;
 };
 
@@ -1083,7 +1087,7 @@ struct VoiceResourceInfo {
 static_assert(sizeof(VoiceResourceInfo) == 8);
 
 struct VoiceStartParam {
-    void* container;
+    GuestArena::GuestPointer<void> container;
     std::uint32_t mem_size;
     std::uint8_t reserved[32 - sizeof(void*) - sizeof(std::uint32_t)];
 };
@@ -1282,7 +1286,7 @@ struct ImeExtendedParam {
     ImeColor color_text;
     ImeColor color_special;
     std::uint32_t priority;
-    const char* additional_dictionary_path;
+    GuestArena::GuestPointer<const char> additional_dictionary_path;
     ImeExtKeyboardFilter ext_keyboard_filter;
     std::uint32_t disable_device;
     std::uint32_t ext_keyboard_mode;
@@ -1325,7 +1329,7 @@ struct ImeTextAreaProperty {
 };
 
 struct ImeEditText {
-    char16_t* str;
+    GuestArena::GuestPointer<char16_t> str;
     std::uint32_t caret_index;
     std::uint32_t area_num;
     ImeTextAreaProperty text_area[4];
@@ -1361,12 +1365,12 @@ struct Param {
     ImeTextFilter filter;
     std::uint32_t option;
     std::uint32_t max_text_length;
-    char16_t* input_text_buffer;
+    GuestArena::GuestPointer<char16_t> input_text_buffer;
     float posx;
     float posy;
     std::uint32_t horizontal_alignment;
     std::uint32_t vertical_alignment;
-    void* work;
+    GuestArena::GuestPointer<void> work;
     void* arg;
     EventHandler handler;
     std::int8_t reserved[8];
@@ -1601,7 +1605,7 @@ struct NpGameIntentInfo {
 
 struct NpWebApi2ResponseInformationOption {
     std::int32_t http_status;
-    char* error_object;
+    GuestArena::GuestPointer<char> error_object;
     std::size_t error_object_size;
     std::size_t response_data_size;
 };
@@ -1610,7 +1614,7 @@ struct NpWebApi2IntInitializeArgs {
     std::int32_t lib_http_ctx_id;
     std::int32_t reserved;
     std::uint64_t pool_size;
-    const char* name;
+    GuestArena::GuestPointer<const char> name;
     std::uint64_t struct_size;
 };
 static_assert(sizeof(NpWebApi2IntInitializeArgs) == 32);
@@ -1619,7 +1623,7 @@ struct NpWebApi2IntInitialize2Args {
     std::int32_t lib_http_ctx_id;
     std::int32_t reserved;
     std::uint64_t pool_size;
-    const char* name;
+    GuestArena::GuestPointer<const char> name;
     std::uint32_t push_config_group;
     std::int32_t reserved2;
     std::uint64_t struct_size;
@@ -1662,7 +1666,7 @@ struct SaveDataParam {
 };
 
 struct SaveDataIcon {
-    void* buf;
+    GuestArena::GuestPointer<void> buf;
     std::size_t buf_size;
     std::size_t data_size;
     std::uint8_t reserved[32];
@@ -1692,7 +1696,7 @@ struct SaveDataSearchInfo {
 };
 static_assert(sizeof(SaveDataSearchInfo) == 48);
 struct SaveDataMemoryData {
-    void* buf;
+    GuestArena::GuestPointer<void> buf;
     std::size_t buf_size;
     std::size_t offset;
     std::uint8_t reserved[40];
@@ -1702,7 +1706,7 @@ static_assert(sizeof(SaveDataMemoryData) == 64);
 struct SaveDataMount3 {
     int user_id;
     int pad;
-    const SceSaveDataDirName* dir_name;
+    GuestArena::GuestPointer<const SceSaveDataDirName> dir_name;
     std::uint64_t blocks;
     std::uint64_t system_blocks;
     std::uint32_t mount_mode;
@@ -1714,7 +1718,7 @@ struct SaveDataMount3 {
 struct SaveDataMount2 {
     int user_id;
     int pad;
-    const SceSaveDataDirName* dir_name;
+    GuestArena::GuestPointer<const SceSaveDataDirName> dir_name;
     std::uint64_t blocks;
     std::uint32_t mount_mode;
     std::uint8_t reserved[32];
@@ -1724,8 +1728,8 @@ struct SaveDataMount2 {
 struct SaveDataDirNameSearchCond {
     std::int32_t user_id;
     std::int32_t pad;
-    const SceSaveDataTitleId* title_id;
-    const SceSaveDataDirName* dir_name;
+    GuestArena::GuestPointer<const SceSaveDataTitleId> title_id;
+    GuestArena::GuestPointer<const SceSaveDataDirName> dir_name;
     std::uint32_t key;
     std::uint32_t order;
     std::uint8_t reserved[32];
@@ -1734,11 +1738,11 @@ struct SaveDataDirNameSearchCond {
 struct SaveDataDirNameSearchResult {
     std::uint32_t hit_num;
     std::int32_t pad;
-    SceSaveDataDirName* dir_names;
+    GuestArena::GuestPointer<SceSaveDataDirName> dir_names;
     std::uint32_t dir_names_num;
     std::uint32_t set_num;
-    SaveDataParam* params;
-    SaveDataSearchInfo* infos;
+    GuestArena::GuestPointer<SaveDataParam> params;
+    GuestArena::GuestPointer<SaveDataSearchInfo> infos;
     std::uint8_t reserved[12];
     std::int32_t pad2;
 };
@@ -1746,9 +1750,9 @@ struct SaveDataDirNameSearchResult {
 struct SaveDataMemoryGet2 {
     std::int32_t user_id;
     std::uint8_t padding[4];
-    SaveDataMemoryData* data;
-    SaveDataParam* param;
-    SaveDataIcon* icon;
+    GuestArena::GuestPointer<SaveDataMemoryData> data;
+    GuestArena::GuestPointer<SaveDataParam> param;
+    GuestArena::GuestPointer<SaveDataIcon> icon;
     std::uint32_t slot_id;
     std::uint8_t reserved[28];
 };
@@ -1758,8 +1762,8 @@ struct SaveDataMemorySetup2 {
     std::int32_t user_id;
     std::size_t memory_size;
     std::size_t icon_memory_size;
-    const SaveDataParam* init_param;
-    const SaveDataIcon* init_icon;
+    GuestArena::GuestPointer<const SaveDataParam> init_param;
+    GuestArena::GuestPointer<const SaveDataIcon> init_icon;
     std::uint32_t slot_id;
     std::uint8_t reserved[20];
 };
@@ -1772,9 +1776,9 @@ struct SaveDataMemorySetupResult {
 struct SaveDataMemorySet2 {
     std::int32_t user_id;
     std::uint8_t padding[4];
-    const SaveDataMemoryData* data;
-    const SaveDataParam* param;
-    const SaveDataIcon* icon;
+    GuestArena::GuestPointer<const SaveDataMemoryData> data;
+    GuestArena::GuestPointer<const SaveDataParam> param;
+    GuestArena::GuestPointer<const SaveDataIcon> icon;
     std::uint32_t data_num;
     std::uint32_t slot_id;
     std::uint8_t reserved[24];
@@ -1782,9 +1786,9 @@ struct SaveDataMemorySet2 {
 
 struct SaveDataTransferringMount {
     std::int32_t user_id;
-    const SceSaveDataTitleId* title_id;
-    const SceSaveDataDirName* dir_name;
-    const void* fingerprint;
+    GuestArena::GuestPointer<const SceSaveDataTitleId> title_id;
+    GuestArena::GuestPointer<const SceSaveDataDirName> dir_name;
+    GuestArena::GuestPointer<const void> fingerprint;
     std::uint8_t reserved[32];
 };
 
@@ -1803,8 +1807,8 @@ struct SaveDataCommitParam {
 struct SaveDataDelete {
     std::int32_t user_id;
     std::int32_t pad;
-    const SceSaveDataTitleId* title_id;
-    const SceSaveDataDirName* dir_name;
+    GuestArena::GuestPointer<const SceSaveDataTitleId> title_id;
+    GuestArena::GuestPointer<const SceSaveDataDirName> dir_name;
     std::uint32_t unused;
     std::uint8_t reserved[32];
     std::int32_t pad2;
@@ -1825,9 +1829,9 @@ using SaveDataEventCallback = void (APS5_VABI *)(const SaveDataEvent* event, voi
 struct SaveDataBackup {
     std::int32_t user_id;
     std::int32_t pad;
-    const SceSaveDataTitleId* title_id;
-    const SceSaveDataDirName* dir_name;
-    const void* fingerprint;
+    GuestArena::GuestPointer<const SceSaveDataTitleId> title_id;
+    GuestArena::GuestPointer<const SceSaveDataDirName> dir_name;
+    GuestArena::GuestPointer<const void> fingerprint;
     std::uint8_t reserved[32];
 };
 
@@ -1868,7 +1872,7 @@ static_assert(sizeof(SaveDataRestoreBackupData) == 0x48);
 struct SaveDataConvert {
     std::int32_t user_id;
     std::int32_t pad;
-    const SceSaveDataDirName* dir_name;
+    GuestArena::GuestPointer<const SceSaveDataDirName> dir_name;
     std::uint8_t unknown[48];
 };
 
@@ -1898,8 +1902,8 @@ static_assert(offsetof(ContentExportInitParam, userData) == 16);
 
 struct ContentExportSfParam {
     std::size_t size;
-    const char* metadata;
-    const std::int64_t* contentIds;
+    GuestArena::GuestPointer<const char> metadata;
+    GuestArena::GuestPointer<const std::int64_t> contentIds;
     std::uint32_t contentCount;
     std::uint32_t option;
 };
@@ -1942,12 +1946,12 @@ struct ContentSearchColumnValue {
 struct ContentSearchContentColumn {
     std::int32_t column_type;
     std::int32_t column_operator;
-    const ContentSearchColumnValue* value;
+    GuestArena::GuestPointer<const ContentSearchColumnValue> value;
     std::int32_t logical_connector;
 };
 
 struct ContentSearchContentColumnSet {
-    const ContentSearchContentColumn* columns;
+    GuestArena::GuestPointer<const ContentSearchContentColumn> columns;
     std::int32_t columns_length;
     std::int32_t logical_connector;
 };
@@ -1971,8 +1975,8 @@ struct PngEncCreateParam {
 };
 
 struct PngEncEncodeParam {
-    const std::uint8_t* image_mem_addr;
-    std::uint8_t* png_mem_addr;
+    GuestArena::GuestPointer<const std::uint8_t> image_mem_addr;
+    GuestArena::GuestPointer<std::uint8_t> png_mem_addr;
     std::uint32_t image_mem_size;
     std::uint32_t png_mem_size;
     std::uint32_t image_width;
@@ -2004,14 +2008,14 @@ struct PngDecCreateParam {
 };
 
 struct PngDecParseParam {
-    const void* png_mem_addr;
+    GuestArena::GuestPointer<const void> png_mem_addr;
     std::uint32_t png_mem_size;
     std::uint32_t reserved0;
 };
 
 struct PngDecDecodeParam {
-    const void* png_mem_addr;
-    void* image_mem_addr;
+    GuestArena::GuestPointer<const void> png_mem_addr;
+    GuestArena::GuestPointer<void> image_mem_addr;
     std::uint32_t png_mem_size;
     std::uint32_t image_mem_size;
     std::uint16_t pixel_format;
@@ -2033,8 +2037,8 @@ struct JpegEncCreateParam {
 };
 
 struct JpegEncEncodeParam {
-    const void* image;
-    void* jpeg;
+    GuestArena::GuestPointer<const void> image;
+    GuestArena::GuestPointer<void> jpeg;
     std::uint32_t image_size;
     std::uint32_t jpeg_size;
     std::uint32_t image_width;
@@ -2060,16 +2064,16 @@ struct JpegDecCreateParam {
 };
 
 struct JpegDecParseParam {
-    const void* jpeg_mem_addr;
+    GuestArena::GuestPointer<const void> jpeg_mem_addr;
     std::uint32_t jpeg_mem_size;
     std::uint16_t decode_mode;
     std::uint16_t down_scale;
 };
 
 struct JpegDecDecodeParam {
-    const void* jpeg_mem_addr;
-    void* image_mem_addr;
-    void* coefficient_mem_addr;
+    GuestArena::GuestPointer<const void> jpeg_mem_addr;
+    GuestArena::GuestPointer<void> image_mem_addr;
+    GuestArena::GuestPointer<void> coefficient_mem_addr;
     std::uint32_t jpeg_mem_size;
     std::uint32_t image_mem_size;
     std::uint32_t coefficient_mem_size;
@@ -2117,7 +2121,7 @@ struct JpegDecInputControlParam {
 };
 
 struct PlayGoInitParams {
-    const void* buf_addr;
+    GuestArena::GuestPointer<const void> buf_addr;
     std::uint32_t buf_size;
     std::uint32_t reserved;
 };
@@ -2227,7 +2231,7 @@ struct SystemGestureTouchEvent { std::uint8_t reserve[168]; };
 struct SystemGestureTouchPadData {
     std::int32_t pad_handle;
     std::int32_t report_number;
-    const PadData* pad_data_buffer;
+    GuestArena::GuestPointer<const PadData> pad_data_buffer;
     std::uint8_t reserve[8];
 };
 
@@ -2282,8 +2286,8 @@ struct VideoOutBufferAttribute2 {
 };
 
 struct VideoOutBuffers {
-    const void* data;
-    const void* metadata;
+    GuestArena::GuestPointer<const void> data;
+    GuestArena::GuestPointer<const void> metadata;
     const void* reserved[2];
 };
 
@@ -2394,14 +2398,14 @@ struct LibcHeapInfo {
     std::uint64_t size;
     std::uint32_t unknown1;
     std::uint32_t unknown2;
-    std::uint64_t* mspace_atomic_id_mask;
-    std::uint64_t* mstate_table;
+    GuestArena::GuestPointer<std::uint64_t> mspace_atomic_id_mask;
+    GuestArena::GuestPointer<std::uint64_t> mstate_table;
 };
 
 using Info = LibcHeapInfo;
 
 struct Packet {
-    std::uint32_t* addr;
+    GuestArena::GuestPointer<std::uint32_t> addr;
     std::uint32_t dw_num;
     std::uint8_t flags;
     std::uint8_t reserved[3];

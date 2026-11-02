@@ -22,8 +22,6 @@
 
 extern "C" {
 
-extern FileStream* __stderrp_nid_postfix;
-extern FileStream* __stdoutp_nid_postfix;
 }
 
 static void Require(bool value) { if (!value) std::abort(); }

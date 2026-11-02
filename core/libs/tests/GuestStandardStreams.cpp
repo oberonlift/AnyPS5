@@ -26,9 +26,6 @@
 #endif
 extern "C" {
 
-extern FileStream* __stdinp_nid_postfix;
-extern FileStream* __stdoutp_nid_postfix;
-extern FileStream* __stderrp_nid_postfix;
 extern int __isthreaded_nid_postfix;
 
 }
@@ -90,8 +87,8 @@ static bool CheckFileBytes(const std::string& filename, const std::string& expec
 }
 
 static void CheckGetcharPutchar() {
-    auto* const savedInput = __stdinp_nid_postfix;
-    auto* const savedOutput = __stdoutp_nid_postfix;
+    FileStream* const savedInput = __stdinp_nid_postfix;
+    FileStream* const savedOutput = __stdoutp_nid_postfix;
     FileStream input(TemporaryFile::Open());
     Require(fputc_nid_postfix('T', &input) == 'T' && fputc_nid_postfix(0xff, &input) == 0xff);
     rewind_nid_postfix(&input);
@@ -746,7 +743,7 @@ static int CheckExclusiveStandardOutput() {
 
 static int CheckUpdateStandardOutput() {
     const auto filename = "anyps5-update-stdout-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count());
-    auto* const stream = __stdoutp_nid_postfix;
+    FileStream* const stream = __stdoutp_nid_postfix;
     Require(freopen_nid_postfix(filename.c_str(), "a+b", stream) == stream);
     Require(fputs_nid_postfix("0123456789", stream) >= 0);
     const auto readFirst = [stream] { Require(fseek_nid_postfix(stream, 0, SEEK_SET) == 0 && fgetc_nid_postfix(stream) == '0'); };
@@ -796,7 +793,7 @@ static void CheckSetvbufInvalidMode() {
 #ifdef _WIN32
 static void CheckStandardStreamDeleteSharing() {
     int index = 0;
-    for (auto* stream : {__stdinp_nid_postfix, __stderrp_nid_postfix}) {
+    for (FileStream* stream : {__stdinp_nid_postfix, __stderrp_nid_postfix}) {
         const std::string filename = "anyps5-standard-delete-" + std::to_string(index++) + "-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count());
         auto* const native = stream->GetHandle();
         const int descriptor = ::_fileno(native);
@@ -878,8 +875,8 @@ int main(int argc, char** argv) {
     Require(fileno_nid_postfix(__stdinp_nid_postfix) == 0);
     Require(fileno_nid_postfix(__stdoutp_nid_postfix) == 1);
     Require(fileno_nid_postfix(__stderrp_nid_postfix) == 2);
-    auto* const savedInput = __stdinp_nid_postfix;
-    auto* const savedOutput = __stdoutp_nid_postfix;
+    FileStream* const savedInput = __stdinp_nid_postfix;
+    FileStream* const savedOutput = __stdoutp_nid_postfix;
     FileStream customIn(TemporaryFile::Open());
     Require(fputc_nid_postfix('T', &customIn) == 'T');
     std::rewind(customIn.GetHandle());

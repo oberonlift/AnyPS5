@@ -157,8 +157,8 @@ void testPs4Buffers() {
     VideoOutBufferAttribute attribute{};
     sceVideoOutSetBufferAttribute(&attribute, 0x80000000u, 1, 0, 64, 64, 64);
     check(attribute.pixel_format == 0x80000000u && attribute.tiling_mode == 1 && attribute.aspect_ratio == 0 && attribute.width == 64 && attribute.height == 64 && attribute.pitch_in_pixel == 64 && attribute.option == 0 && attribute.reserved0 == 0 && attribute.reserved1 == 0, "PS4 buffer attribute fields are wrong");
-    void* const pair[2] = {storage.data(), storage.data() + 20480};
-    VideoOutBuffers second{pair[1], nullptr, {nullptr, nullptr}};
+    const GuestArena::GuestPointer<void> pair[2] = {storage.data(), storage.data() + 20480};
+    VideoOutBuffers second{static_cast<void*>(pair[1]), nullptr, {nullptr, nullptr}};
     VideoOutBufferAttribute2 ps5{};
     ps5.width = 64;
     ps5.height = 64;
@@ -167,21 +167,21 @@ void testPs4Buffers() {
     ps5.pixel_format = 0x8000000000000000ull;
     check(expectFailure([&] { sceVideoOutRegisterBuffers2(handle, 3, 5, &second, 1, &ps5, 0, nullptr); }).find("64 KiB alignment") != std::string::npos, "a PS5 buffer was accepted at 4 KiB alignment");
     check(sceVideoOutRegisterBuffers(handle, 0, pair, 2, &attribute) == 0, "the first PS4 set index is not 0");
-    void* const third[1] = {storage.data() + 49152};
+    const GuestArena::GuestPointer<void> third[1] = {storage.data() + 49152};
     check(sceVideoOutRegisterBuffers(handle, 2, third, 1, &attribute) == 1, "the second PS4 set index is not 1");
     {
         const auto cfg = VideoOutDriver::Get().GetConfig(handle);
         std::lock_guard lock(cfg->mutex);
-        check(cfg->groups[0].attribute.pixel_format == 0x8000000000000000ull && cfg->buffers[1].dataAddress == reinterpret_cast<uint64_t>(pair[1]) && cfg->buffers[2].groupIndex == 1, "PS4 buffers were registered wrongly");
+        check(cfg->groups[0].attribute.pixel_format == 0x8000000000000000ull && cfg->buffers[1].dataAddress == GuestArena::HostToGuest(pair[1]) && cfg->buffers[2].groupIndex == 1, "PS4 buffers were registered wrongly");
     }
     VideoOutBufferAttribute2 tiledChange{};
     tiledChange.width = 64;
     tiledChange.height = 64;
     tiledChange.pixel_format = 0x8000000000000000ull;
     check(expectFailure([&] { sceVideoOutSubmitChangeBufferAttribute2(handle, 0, &tiledChange, nullptr); }).find("only supported for linear and PS4 buffers") != std::string::npos, "a PS4 buffer set was changed to tiled");
-    void* const odd[1] = {storage.data() + 65536 + 256};
+    const GuestArena::GuestPointer<void> odd[1] = {storage.data() + 65536 + 256};
     check(expectFailure([&] { sceVideoOutRegisterBuffers(handle, 3, odd, 1, &attribute); }).find("4 KiB alignment") != std::string::npos, "a PS4 buffer was accepted below 4 KiB alignment");
-    void* const fourth[1] = {storage.data() + 65536};
+    const GuestArena::GuestPointer<void> fourth[1] = {storage.data() + 65536};
     auto tiled = attribute;
     tiled.tiling_mode = 0;
     tiled.pitch_in_pixel = 0;

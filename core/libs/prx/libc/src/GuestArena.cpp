@@ -441,6 +441,12 @@ const bool g_reserved = (Arena::Get(), true);
 
 }
 
+#ifdef ANYPS5_GUEST_LIFTED
+std::uint64_t GuestArenaTranslation_nid_no_patch() {
+    return GuestArena::GuestTranslation;
+}
+#endif
+
 bool GuestArenaAvailable_nid_postfix() {
     return Arena::Get().Available();
 }

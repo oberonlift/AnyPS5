@@ -329,6 +329,15 @@ elseif(TARGET mimalloc)
             COMMENT "Copying libmimalloc.dylib beside the libraries"
     )
     list(APPEND PATCHED_OUTPUTS ${PATCHED_DIR}/libmimalloc.dylib)
+    if(ANYPS5_GUEST_LIFTED)
+        add_custom_command(
+                OUTPUT ${UNPATCHED_DIR}/libmimalloc.dylib
+                COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:mimalloc> ${UNPATCHED_DIR}/libmimalloc.dylib
+                DEPENDS mimalloc
+                COMMENT "Copying libmimalloc.dylib beside the lifted build's libraries"
+        )
+        list(APPEND PATCHED_OUTPUTS ${UNPATCHED_DIR}/libmimalloc.dylib)
+    endif()
 endif()
 
 include(prx/libSceFreeType/BuildInfo.cmake)

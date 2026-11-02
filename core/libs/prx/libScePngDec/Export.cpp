@@ -135,7 +135,7 @@ int32_t APS5_VABI scePngDecDecode(void* handle, const PngDecDecodeParam* param, 
     const Context* context = toContext(handle);
     if (!context) return SCE_PNG_DEC_ERROR_INVALID_HANDLE;
     if (!param) return SCE_PNG_DEC_ERROR_INVALID_ADDR;
-    if (!param->png_mem_addr || !param->image_mem_addr || (reinterpret_cast<std::uintptr_t>(param->image_mem_addr) & 3u) != 0) return SCE_PNG_DEC_ERROR_INVALID_ADDR;
+    if (!param->png_mem_addr || !param->image_mem_addr || (reinterpret_cast<std::uintptr_t>(static_cast<const void*>(param->image_mem_addr)) & 3u) != 0) return SCE_PNG_DEC_ERROR_INVALID_ADDR;
     if (param->png_mem_size == 0 || param->image_mem_size == 0) return SCE_PNG_DEC_ERROR_INVALID_SIZE;
     if (param->pixel_format == 132) throw std::runtime_error("scePngDecDecode: pixel format 132 is not implemented");
     if (param->pixel_format != PIXEL_FORMAT_R8G8B8A8 && param->pixel_format != PIXEL_FORMAT_B8G8R8A8) return SCE_PNG_DEC_ERROR_INVALID_PARAM;
@@ -166,7 +166,7 @@ int32_t APS5_VABI scePngDecDecode(void* handle, const PngDecDecodeParam* param, 
     const bool swapRedBlue = param->pixel_format == PIXEL_FORMAT_B8G8R8A8;
     const bool fillAlpha = !hasAlpha(*header);
     const auto alpha = static_cast<std::uint8_t>(param->alpha_value);
-    auto* output = static_cast<std::uint8_t*>(param->image_mem_addr);
+    auto* output = static_cast<std::uint8_t*>(static_cast<void*>(param->image_mem_addr));
     for (std::uint32_t y = 0; y < image->height; ++y) {
         const std::uint8_t* in = image->pixels.data() + y * rowSize;
         std::uint8_t* out = output + y * pitch;

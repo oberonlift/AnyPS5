@@ -292,7 +292,7 @@ llvm::Value* FunctionLifter::AtomicUpdate(const llvm::AtomicRMWInst::BinOp opera
 }
 
 llvm::Value* FunctionLifter::AtomicUpdate(llvm::Value* address, const llvm::AtomicRMWInst::BinOp operation, llvm::Value* operand) {
-    auto* pointer = _builder.CreateIntToPtr(address, _module.Pointer());
+    auto* pointer = HostPointer(address);
     return _builder.CreateAtomicRMW(operation, pointer, operand, llvm::MaybeAlign(operand->getType()->getIntegerBitWidth() / 8), llvm::AtomicOrdering::SequentiallyConsistent);
 }
 

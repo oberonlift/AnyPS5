@@ -19,6 +19,7 @@
 #include <atomic>
 #include <cstdint>
 #include <cstdio>
+#include <cstring>
 #include <cerrno>
 #include <exception>
 #include <stdexcept>
@@ -33,7 +34,7 @@
 #include <pthread.h>
 #include <sys/mman.h>
 #endif
-#ifdef __APPLE__
+#if defined(__APPLE__) && !defined(ANYPS5_GUEST_LIFTED)
 #include "prx/libSceAgcDriver/Execution/include/Driver/DriverMemory.hpp"
 #endif
 
@@ -57,7 +58,7 @@ void PrintFailure(std::exception_ptr error) {
     std::fflush(stderr);
 }
 
-#ifdef __APPLE__
+#if defined(__APPLE__) && !defined(ANYPS5_GUEST_LIFTED)
 constexpr std::uint64_t DriverMemoryAddress = MacOsDriverMemoryBase;
 constexpr std::size_t DriverMemoryBytes = DriverMemorySpan;
 constexpr std::uint64_t FsTableAddress = RetargetPs5DriverMemory(0xfe0040000ull);
@@ -93,14 +94,14 @@ void MapDriverMemory() {
     if (reinterpret_cast<std::uint64_t>(mapped) != DriverMemoryAddress) throw std::runtime_error("the AGC driver memory was not mapped at its fixed address");
     auto* routineTable = reinterpret_cast<std::uint64_t*>(FsRoutineTableAddress);
     for (std::uint64_t record = 0; record < FsRoutineRecords; ++record) {
-        routineTable[record * 2u] = FsRoutineAddress;
+        routineTable[record * 2u] = FsRoutineAddress - GuestArena::GuestTranslation;
         routineTable[record * 2u + 1u] = 0u;
     }
     auto* routine = reinterpret_cast<std::uint32_t*>(FsRoutineAddress);
     routine[0] = ScalarSetpcB64LinkS14;
     routine[1] = ScalarEndProgram;
     auto* slot = reinterpret_cast<std::uint64_t*>(FsTableAddress);
-    slot[0] = (FsRoutineTableAddress & 0xffffffffffffull) | 16ull << 48u;
+    slot[0] = ((FsRoutineTableAddress - GuestArena::GuestTranslation) & 0xffffffffffffull) | 16ull << 48u;
     slot[1] = FsTableDword3 << 32u | FsRoutineRecords;
 #ifndef _WIN32
     GuestWriteWatch::GuestWriteWatchRegister_nid_postfix(mapped, DriverMemoryBytes);
@@ -108,6 +109,21 @@ void MapDriverMemory() {
     GuestAllocations::Mutation mutation;
     mutation.Add(mapped, DriverMemoryBytes, true, true, true);
 }
+
+}
+
+#ifdef ANYPS5_TRANSLATED_GUEST
+std::uint64_t PlaceDriverProgram(std::size_t slot, std::span<const std::uint32_t, 64> code) {
+    constexpr std::uint64_t ProgramsAddress = DriverMemoryAddress + 0x80000ull;
+    constexpr std::size_t ProgramSlots = 4;
+    if (slot >= ProgramSlots) throw std::logic_error("AGC driver: no driver program slot " + std::to_string(slot));
+    auto* placed = reinterpret_cast<std::uint32_t*>(ProgramsAddress + slot * code.size_bytes());
+    std::memcpy(placed, code.data(), code.size_bytes());
+    return GuestArena::HostToGuest(placed);
+}
+#endif
+
+namespace {
 
 bool StackHoldsImport() {
 #ifdef _WIN32

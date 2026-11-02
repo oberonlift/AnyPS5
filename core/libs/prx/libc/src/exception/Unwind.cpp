@@ -1,4 +1,5 @@
 #include "prx/libc/include/Api.hpp"
+#include "prx/libc/include/GuestArena.hpp"
 #include "prx/libc/include/exceptions/Unwind.hpp"
 #include "prx/libc/include/exceptions/CompactUnwind.hpp"
 #include "prx/libc/include/exceptions/Runtime.hpp"
@@ -201,7 +202,7 @@ int FindFrame(dl_phdr_info* info, std::size_t, void* argument) {
         const auto& ph = info->dlpi_phdr[i];
         Word start = info->dlpi_addr + ph.p_vaddr;
         if (ph.p_type == PT_LOAD && query.pc >= start && query.pc - start < ph.p_memsz) contains = true;
-        if (ph.p_type == PT_GNU_EH_FRAME) header = reinterpret_cast<const Byte*>(start);
+        if (ph.p_type == PT_GNU_EH_FRAME) header = static_cast<const Byte*>(GuestArena::GuestToHost(start));
         if (ph.p_type == PT_LOAD && (ph.p_flags & PF_X)) query.text = start;
         if (ph.p_type == PT_LOAD && (ph.p_flags & PF_W)) query.data = start;
     }
@@ -212,7 +213,8 @@ int FindFrame(dl_phdr_info* info, std::size_t, void* argument) {
 
 void SearchHeader(const Byte* header, Lookup& query) {
     const Byte* p = header + 4;
-    Encoded(p, header[1], Word(header));
+    const Word base = GuestArena::HostToGuest(header);
+    Encoded(p, header[1], base);
     Word count = Encoded(p, header[2]);
     if (header[3] == 255) return;
     unsigned width = EncodingSize(header[3]);
@@ -221,12 +223,12 @@ void SearchHeader(const Byte* header, Lookup& query) {
     while (lo < hi) {
         Word mid = lo + (hi - lo) / 2;
         p = table + mid * width * 2;
-        Word begin = Encoded(p, header[3], Word(header));
+        Word begin = Encoded(p, header[3], base);
         if (begin <= query.pc) lo = mid + 1; else hi = mid;
     }
     if (lo) {
         p = table + (lo - 1) * width * 2 + width;
-        query.fde = reinterpret_cast<const Byte*>(Encoded(p, header[3], Word(header)));
+        query.fde = static_cast<const Byte*>(GuestArena::GuestToHost(Encoded(p, header[3], base)));
     }
 }
 
@@ -563,7 +565,7 @@ bool Expression(const Byte* p, const _Unwind_Context& context, Word cfa, Word& r
         if (op >= 112 && op <= 128) { stack[size++] = context.registers[op - 112] + Sleb(p); continue; }
         switch (op) {
         case 3: stack[size++] = Read<Word>(p); break;
-        case 6: if (!size) return false; std::memcpy(&stack[size-1], reinterpret_cast<void*>(stack[size-1]), 8); break;
+        case 6: if (!size) return false; std::memcpy(&stack[size-1], GuestArena::GuestToHost(stack[size-1]), 8); break;
         case 8: stack[size++] = Read<Byte>(p); break;
         case 9: stack[size++] = Read<std::int8_t>(p); break;
         case 10: stack[size++] = Read<std::uint16_t>(p); break;
@@ -655,11 +657,11 @@ bool Step(_Unwind_Context& context) {
         Word value;
         switch (rule.kind) {
         case 0: break;
-        case 1: std::memcpy(&next.registers[i], reinterpret_cast<void*>(context.cfa + rule.value), 8); break;
+        case 1: std::memcpy(&next.registers[i], GuestArena::GuestToHost(context.cfa + rule.value), 8); break;
         case 2: if (rule.value < 0 || rule.value >= 17) return false; next.registers[i] = context.registers[rule.value]; break;
         case 3: case 6:
             if (!Expression(rule.expression, context, context.cfa, value)) return false;
-            if (rule.kind == 3) std::memcpy(&value, reinterpret_cast<void*>(value), 8);
+            if (rule.kind == 3) std::memcpy(&value, GuestArena::GuestToHost(value), 8);
             next.registers[i] = value; break;
         case 4: next.registers[i] = context.cfa + rule.value; break;
         case 5: next.registers[i] = 0; break;

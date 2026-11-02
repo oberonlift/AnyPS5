@@ -20,9 +20,52 @@ struct GuestUnwind {};
 
 constexpr int IntegerRegisters[6] = {PS5LIFT_RDI, PS5LIFT_RSI, PS5LIFT_RDX, PS5LIFT_RCX, PS5LIFT_R8, PS5LIFT_R9};
 
+constexpr bool Unmoved(const std::uint64_t value) {
+    return value < 4096 || value > ~std::uint64_t{4096};
+}
+
+inline void* HostAddress(const std::uint64_t address) {
+    return reinterpret_cast<void*>(Unmoved(address) ? address : address + PS5LIFT_GUEST_BASE);
+}
+
+inline std::uint64_t GuestAddress(const void* const pointer) {
+    const auto address = reinterpret_cast<std::uint64_t>(pointer);
+    return Unmoved(address) ? address : address - PS5LIFT_GUEST_BASE;
+}
+
+class GuestSlot {
+public:
+    explicit GuestSlot(void* const slot) : _slot(slot) {
+        if (_slot == nullptr) return;
+        std::uint64_t bits = 0;
+        std::memcpy(&bits, _slot, sizeof(bits));
+        _value = HostAddress(bits);
+    }
+
+    ~GuestSlot() {
+        if (_slot == nullptr) return;
+        const auto bits = GuestAddress(_value);
+        std::memcpy(_slot, &bits, sizeof(bits));
+    }
+
+    GuestSlot(const GuestSlot&) = delete;
+    GuestSlot& operator=(const GuestSlot&) = delete;
+
+    operator void*() { return _slot == nullptr ? nullptr : &_value; }
+
+private:
+    void* _slot;
+    void* _value = nullptr;
+};
+
+template <typename T>
+constexpr bool IsObjectPointer = std::is_pointer_v<T> && !std::is_function_v<std::remove_pointer_t<T>>;
+
 template <typename T>
 T FromBits(const std::uint64_t bits) {
-    if constexpr (std::is_pointer_v<T>) {
+    if constexpr (IsObjectPointer<T>) {
+        return static_cast<T>(HostAddress(bits));
+    } else if constexpr (std::is_pointer_v<T>) {
         return reinterpret_cast<T>(bits);
     } else if constexpr (std::is_same_v<T, bool>) {
         return (bits & 0xff) != 0;
@@ -50,7 +93,7 @@ T Floating(const Ps5LiftState* state, const int index) {
 template <typename T>
 T Stack(const Ps5LiftState* state, const int slot) {
     std::uint64_t bits = 0;
-    std::memcpy(&bits, reinterpret_cast<const void*>(state->Gpr[PS5LIFT_RSP] + 8 + 8 * static_cast<std::uint64_t>(slot)), sizeof(bits));
+    std::memcpy(&bits, HostAddress(state->Gpr[PS5LIFT_RSP] + 8 + 8 * static_cast<std::uint64_t>(slot)), sizeof(bits));
     return FromBits<T>(bits);
 }
 
@@ -64,7 +107,7 @@ T Integer128(const Ps5LiftState* state, const int index) {
 template <typename T>
 T Stack128(const Ps5LiftState* state, const int slot) {
     unsigned __int128 value = 0;
-    std::memcpy(&value, reinterpret_cast<const void*>(state->Gpr[PS5LIFT_RSP] + 8 + 8 * static_cast<std::uint64_t>(slot)), sizeof(value));
+    std::memcpy(&value, HostAddress(state->Gpr[PS5LIFT_RSP] + 8 + 8 * static_cast<std::uint64_t>(slot)), sizeof(value));
     return static_cast<T>(value);
 }
 
@@ -83,7 +126,7 @@ template <typename T>
 T StackRecord(const Ps5LiftState* state, const int slot) {
     static_assert(std::is_trivially_copyable_v<T>);
     T value;
-    std::memcpy(&value, reinterpret_cast<const void*>(state->Gpr[PS5LIFT_RSP] + 8 + 8 * static_cast<std::uint64_t>(slot)), sizeof(T));
+    std::memcpy(&value, HostAddress(state->Gpr[PS5LIFT_RSP] + 8 + 8 * static_cast<std::uint64_t>(slot)), sizeof(T));
     return value;
 }
 
@@ -109,7 +152,7 @@ void ReturnRecord(Ps5LiftState* state, const T& value) {
 template <typename T>
 void ReturnIndirect(Ps5LiftState* state, const std::uint64_t address, const T& value) {
     static_assert(std::is_trivially_copyable_v<T>);
-    std::memcpy(reinterpret_cast<void*>(address), &value, sizeof(T));
+    std::memcpy(HostAddress(address), &value, sizeof(T));
     state->Gpr[PS5LIFT_RAX] = address;
 }
 
@@ -143,7 +186,7 @@ private:
 };
 
 inline const void* ExtendedSlot(const Ps5LiftState* state, const int slot) {
-    return reinterpret_cast<const void*>(state->Gpr[PS5LIFT_RSP] + 8 + 8 * static_cast<std::uint64_t>(slot));
+    return HostAddress(state->Gpr[PS5LIFT_RSP] + 8 + 8 * static_cast<std::uint64_t>(slot));
 }
 
 template <typename T = LongDouble>
@@ -157,7 +200,7 @@ T Extended(const Ps5LiftState* state, const int slot) {
 template <typename T>
 void ReturnExtended(Ps5LiftState* state, const T& value) {
     static_assert(sizeof(T) == 16 && std::is_trivially_copyable_v<T>, "a guest long double is 16 bytes holding x87's 80 bits");
-    ps5lift_x87(state, PS5LIFT_X87_LOAD, PS5LIFT_X87_FLOAT80, reinterpret_cast<std::uint64_t>(&value), 0);
+    ps5lift_x87(state, PS5LIFT_X87_LOAD, PS5LIFT_X87_FLOAT80, GuestAddress(&value), 0);
 }
 
 #ifdef PS5LIFT_HOST_LONG_DOUBLE_HOLDS_EXTENDED
@@ -186,7 +229,7 @@ inline long double HostExtended(const Ps5LiftState* state, const int slot) {
 inline void ReturnExtended(Ps5LiftState* state, const long double value) {
     unsigned char extended[16] = {};
     ps5lift_extended_from_host(state, &value, extended);
-    ps5lift_x87(state, PS5LIFT_X87_LOAD, PS5LIFT_X87_FLOAT80, reinterpret_cast<std::uint64_t>(extended), 0);
+    ps5lift_x87(state, PS5LIFT_X87_LOAD, PS5LIFT_X87_FLOAT80, GuestAddress(extended), 0);
 }
 #endif
 
@@ -198,7 +241,7 @@ public:
         _list.GpOffset = static_cast<std::uint32_t>(8 * integers);
         _list.FpOffset = static_cast<std::uint32_t>(48 + 16 * floats);
         _list.OverflowArea = state->Gpr[PS5LIFT_RSP] + 8 + 8 * static_cast<std::uint64_t>(stack);
-        _list.SaveArea = reinterpret_cast<std::uint64_t>(_saveArea);
+        _list.SaveArea = GuestAddress(_saveArea);
     }
 
     VariadicArguments(const VariadicArguments&) = delete;
@@ -225,6 +268,8 @@ void Return(Ps5LiftState* state, const T value) {
     } else if constexpr (std::is_floating_point_v<T>) {
         std::memset(state->Vector[0], 0, 16);
         std::memcpy(state->Vector[0], &value, sizeof(T));
+    } else if constexpr (IsObjectPointer<T>) {
+        state->Gpr[PS5LIFT_RAX] = GuestAddress(value);
     } else if constexpr (std::is_pointer_v<T>) {
         state->Gpr[PS5LIFT_RAX] = reinterpret_cast<std::uint64_t>(value);
     } else if constexpr (std::is_signed_v<T>) {
@@ -239,7 +284,9 @@ constexpr bool IsFloating = std::is_floating_point_v<T>;
 
 template <typename T>
 std::uint64_t ToBits(const T value) {
-    if constexpr (std::is_pointer_v<T>) {
+    if constexpr (IsObjectPointer<T>) {
+        return GuestAddress(value);
+    } else if constexpr (std::is_pointer_v<T>) {
         return reinterpret_cast<std::uint64_t>(value);
     } else if constexpr (std::is_floating_point_v<T>) {
         std::uint64_t bits = 0;
@@ -266,10 +313,10 @@ R GuestResult(const Ps5LiftState* state) {
 inline void RunGuest(Ps5LiftState* state, const std::uint64_t target, const std::uint64_t* stackArguments, const int stackCount, const int vectors) {
     const auto savedRsp = state->Gpr[PS5LIFT_RSP];
     auto rsp = (savedRsp - 8 * static_cast<std::uint64_t>(stackCount)) & ~std::uint64_t{15};
-    std::memcpy(reinterpret_cast<void*>(rsp), stackArguments, 8 * static_cast<std::size_t>(stackCount));
+    std::memcpy(HostAddress(rsp), stackArguments, 8 * static_cast<std::size_t>(stackCount));
     rsp -= 8;
     constexpr std::uint64_t ReturnSentinel = 0;
-    std::memcpy(reinterpret_cast<void*>(rsp), &ReturnSentinel, sizeof(ReturnSentinel));
+    std::memcpy(HostAddress(rsp), &ReturnSentinel, sizeof(ReturnSentinel));
     state->Gpr[PS5LIFT_RSP] = rsp;
     state->Gpr[PS5LIFT_RAX] = static_cast<std::uint64_t>(vectors);
     ps5lift_dispatch(state, target);

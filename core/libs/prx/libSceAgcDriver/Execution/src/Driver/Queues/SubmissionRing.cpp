@@ -1,4 +1,5 @@
 #include "prx/libSceAgcDriver/Execution/include/Driver/Queues/SubmissionRing.hpp"
+#include "prx/libc/include/GuestArena.hpp"
 #include "prx/libSceAgcDriver/Execution/include/Driver/Diagnostics.hpp"
 #include "prx/libSceAgcDriver/Execution/include/Pm4.hpp"
 #include "prx/libc/include/FailureReport.hpp"
@@ -250,7 +251,7 @@ void RecordSubmission(std::uint32_t queue, std::uint64_t serial, std::span<const
     auto& entry = ring.entries[recorded % capacity];
     entry.tenthsOfMs = tenthsOfMs;
     entry.serial = serial;
-    entry.guest = reinterpret_cast<std::uintptr_t>(guest);
+    entry.guest = GuestArena::HostToGuest(guest);
     entry.dwords = commands.size();
     entry.kept = std::min(commands.size(), KeptWords);
     entry.rewindTail = rewindTail;

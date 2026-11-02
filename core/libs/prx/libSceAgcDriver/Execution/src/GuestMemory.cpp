@@ -73,6 +73,14 @@ void require(bool condition, const char* reason) {
     if (!condition) throw std::runtime_error(std::string("AGC driver: ") + reason);
 }
 
+std::uint64_t HostAddress(std::uint64_t address) {
+    return reinterpret_cast<std::uint64_t>(GuestArena::GuestToHost(address));
+}
+
+std::uint64_t GuestAddress(std::uint64_t address) {
+    return GuestArena::HostToGuest(reinterpret_cast<const void*>(address));
+}
+
 // A code address relative to its module, for symbolizing debug traces with nm.
 unsigned long long ModuleOffset(const void* address) {
 #ifdef _WIN32
@@ -622,7 +630,7 @@ void ForgetPages(std::uintptr_t address, std::size_t bytes) {
     forgetCalls.fetch_add(1, std::memory_order_relaxed);
     forgetBytes.fetch_add(bytes, std::memory_order_relaxed);
     const auto started = forgetSerial.fetch_add(1, std::memory_order_release) + 1;
-    Pages().forget(address, bytes);
+    Pages().forget(HostAddress(address), bytes);
     const auto done = started + 1;
     if (bytes != 0) {
         const auto first = address / ForgetBlockBytes;
@@ -981,10 +989,12 @@ Commitment DescribeCommitted(std::uint64_t address, std::size_t bytes, bool writ
     require(bytes <= std::numeric_limits<std::uint64_t>::max() - address, "address range overflow");
     const TimedAccess timed(CounterVerify, bytes);
     Commitment result;
-    const bool queried = describePages(static_cast<std::uintptr_t>(address), bytes, [&](const PageRun& run) {
+    const bool queried = describePages(static_cast<std::uintptr_t>(HostAddress(address)), bytes, [&](const PageRun& run) {
         if (run.readable && (!writable || run.writable)) {
-            if (!result.ranges.empty() && result.ranges.back().second == run.begin) result.ranges.back().second = run.end;
-            else result.ranges.emplace_back(run.begin, run.end);
+            const auto begin = GuestAddress(run.begin);
+            const auto end = GuestAddress(run.end);
+            if (!result.ranges.empty() && result.ranges.back().second == begin) result.ranges.back().second = end;
+            else result.ranges.emplace_back(begin, end);
         }
         return true;
     });
@@ -1827,11 +1837,11 @@ std::uint64_t collectWrites(std::uint64_t address, std::size_t bytes, bool memoi
 }
 
 std::uint64_t CollectWrites(std::uint64_t address, std::size_t bytes) {
-    return collectWrites(address, bytes, true);
+    return collectWrites(HostAddress(address), bytes, true);
 }
 
 std::uint64_t CollectWritesUncached(std::uint64_t address, std::size_t bytes) {
-    return collectWrites(address, bytes, false);
+    return collectWrites(HostAddress(address), bytes, false);
 }
 
 std::uint64_t WriteGeneration() {
@@ -1840,6 +1850,7 @@ std::uint64_t WriteGeneration() {
 
 std::uint64_t CollectWrittenBlocks(std::uint64_t address, std::size_t bytes, std::uint64_t since, std::vector<std::pair<std::uint64_t, std::uint64_t>>& written) {
     written.clear();
+    address = HostAddress(address);
     if (bytes == 0 || bytes > std::numeric_limits<std::uint64_t>::max() - address) return 0;
     auto& tracker = Tracker();
     const auto lock = lockTracker(tracker);
@@ -1874,7 +1885,9 @@ std::uint64_t CollectWrittenBlocks(std::uint64_t address, std::size_t bytes, std
         spanEnd = stop;
     }
     walkSpan();
-    const auto append = [&](std::uint64_t begin, std::uint64_t stop) {
+    const auto append = [&](std::uint64_t hostBegin, std::uint64_t hostStop) {
+        const auto begin = GuestAddress(hostBegin);
+        const auto stop = GuestAddress(hostStop);
         if (!written.empty() && written.back().second == begin) written.back().second = stop;
         else written.emplace_back(begin, stop);
     };
@@ -1965,9 +1978,9 @@ void beforeUnwatch(std::uint64_t address, std::size_t bytes) {
         tracker.initialize();
         if (!tracker.watched || !tracker.coverage.ExcludedSpan(address, bytes, &begin, &end)) return;
     }
-    hook(begin, static_cast<std::size_t>(end - begin));
+    hook(GuestAddress(begin), static_cast<std::size_t>(end - begin));
 #else
-    hook(address, bytes);
+    hook(GuestAddress(address), bytes);
 #endif
 }
 
@@ -2013,6 +2026,7 @@ void SetFreshCollectHook(FreshCollectHook hook) {
 #endif
 
 void Unwatch(std::uint64_t address, std::size_t bytes) {
+    address = HostAddress(address);
     if (bytes == 0 || bytes > std::numeric_limits<std::uint64_t>::max() - address) return;
     beforeUnwatch(address, bytes);
     auto& tracker = Tracker();
@@ -2049,6 +2063,7 @@ void Rewatch(std::span<const std::pair<std::uint64_t, std::uint64_t>> ranges) {
 }
 
 bool ImportWatched(std::uint64_t address, std::size_t bytes, const std::function<bool()>& import, bool staysWatched, bool importMayWriteGuest) {
+    address = HostAddress(address);
     if (bytes == 0 || bytes > std::numeric_limits<std::uint64_t>::max() - address) return import();
     if (!staysWatched) {
         constexpr std::uint64_t page = 4096;
@@ -2146,6 +2161,7 @@ bool WriteWatched() {
 }
 
 bool Watched(std::uint64_t address, std::size_t bytes) {
+    address = HostAddress(address);
     if (bytes == 0 || bytes > std::numeric_limits<std::uint64_t>::max() - address) return false;
     auto& tracker = Tracker();
     const auto lock = lockTracker(tracker);
@@ -2154,6 +2170,7 @@ bool Watched(std::uint64_t address, std::size_t bytes) {
 }
 
 bool UnchangedSince(std::uint64_t address, std::size_t bytes, std::uint64_t generation) {
+    address = HostAddress(address);
     if (bytes == 0 || bytes > std::numeric_limits<std::uint64_t>::max() - address) return false;
     auto& tracker = Tracker();
     const auto lock = lockTracker(tracker);
@@ -2167,7 +2184,8 @@ bool UnchangedSinceAll(std::span<const UnchangedQuery> queries) {
     const auto lock = lockTracker(tracker);
     tracker.initialize();
     if (!tracker.watched) return false;
-    for (const auto& [address, bytes, generation] : queries) {
+    for (const auto& [guest, bytes, generation] : queries) {
+        const auto address = HostAddress(guest);
         if (generation == 0 || bytes == 0 || !tracker.covers(address, bytes)) return false;
         if (!tracker.rangeUnchanged(address, bytes, generation)) return false;
     }
@@ -2192,14 +2210,17 @@ bool UnchangedCommittedSince(std::span<const std::pair<std::uint64_t, std::uint6
     const auto lock = lockTracker(tracker);
     tracker.initialize();
     if (!tracker.watched || generation == 0) return false;
-    for (const auto& [begin, end] : ranges) {
+    for (const auto& [guestBegin, guestEnd] : ranges) {
+        const auto begin = HostAddress(guestBegin);
+        const auto end = HostAddress(guestEnd);
         if (end <= begin || !tracker.covers(begin, static_cast<std::size_t>(end - begin)) || tracker.newestStamp(begin, end) > generation || tracker.refusedSince(begin, end, generation)) return false;
     }
     return true;
 }
 
-static GuestAllocations::Lease::Ranges pinStoreRanges(std::uint64_t address, std::size_t bytes) {
+static GuestAllocations::Lease::Ranges pinStoreRanges(std::uint64_t host, std::size_t bytes) {
     GuestAllocations::Lease::Ranges pinned;
+    const auto address = GuestAddress(host);
     if (bytes > std::numeric_limits<std::uint64_t>::max() - address) return pinned;
     const auto end = address + bytes;
     for (auto at = address; at < end;) {
@@ -2243,9 +2264,10 @@ std::uint64_t storeOwn(std::uint64_t address, std::size_t bytes, const std::func
 }
 
 std::uint64_t StoreOwnBytes(std::uint64_t address, std::size_t bytes, const std::function<void()>& store) {
-    return storeOwn(address, bytes, [&] {
+    const auto host = HostAddress(address);
+    return storeOwn(host, bytes, [&] {
         store();
-        return std::pair<std::uint64_t, std::uint64_t>{address, address + bytes};
+        return std::pair<std::uint64_t, std::uint64_t>{host, host + bytes};
     });
 }
 
@@ -2257,7 +2279,7 @@ static void copyOwnBytes(std::uint64_t address, std::span<const std::byte> sourc
 }
 
 std::uint64_t StoreOwnBytes(std::uint64_t address, std::span<const std::byte> source) {
-    return StoreOwnBytes(address, source.size(), [&] { copyOwnBytes(address, source); });
+    return StoreOwnBytes(address, source.size(), [&] { copyOwnBytes(HostAddress(address), source); });
 }
 
 static std::uint64_t markWritten(std::uint64_t address, std::size_t bytes, bool complete) {
@@ -2302,14 +2324,15 @@ static std::uint64_t markWritten(std::uint64_t address, std::size_t bytes, bool 
 }
 
 std::uint64_t MarkWritten(std::uint64_t address, std::size_t bytes) {
-    return markWritten(address, bytes, true);
+    return markWritten(HostAddress(address), bytes, true);
 }
 
 std::uint64_t MarkPossiblyWritten(std::uint64_t address, std::size_t bytes) {
-    return markWritten(address, bytes, false);
+    return markWritten(HostAddress(address), bytes, false);
 }
 
 bool StoredOver(std::uint64_t address, std::size_t bytes, std::uint64_t generation) {
+    address = HostAddress(address);
     auto& tracker = Tracker();
     const auto lock = lockTracker(tracker);
     tracker.initialize();
@@ -2321,6 +2344,7 @@ bool StoredOver(std::uint64_t address, std::size_t bytes, std::uint64_t generati
 }
 
 bool StoredAllSince_nid_no_patch(std::uint64_t address, std::size_t bytes, std::uint64_t generation) {
+    address = HostAddress(address);
     if (generation == 0 || bytes == 0 || bytes > std::numeric_limits<std::uint64_t>::max() - address) return false;
     auto& tracker = Tracker();
     const auto lock = lockTracker(tracker);
@@ -2362,6 +2386,7 @@ void AdvanceTrackerGenerationForTest(std::uint64_t generation) {
 }
 
 std::uint64_t NewestStamp(std::uint64_t address, std::size_t bytes) {
+    address = HostAddress(address);
     auto& tracker = Tracker();
     const auto lock = lockTracker(tracker);
     tracker.initialize();
@@ -2430,6 +2455,7 @@ std::uint64_t UntrackedHint(std::uint64_t address, std::size_t bytes) {
 
 bool UnchangedSinceCollected(std::uint64_t address, std::size_t bytes, std::uint64_t generation) {
     if (CollectWritesUncached(address, bytes) == 0) return false;
+    address = HostAddress(address);
     auto& tracker = Tracker();
     const auto lock = lockTracker(tracker);
     if (!tracker.watched || generation == 0 || bytes == 0 || !tracker.covers(address, bytes)) return false;
@@ -2446,6 +2472,7 @@ bool UnchangedSinceLastCollect(std::uint64_t address, std::size_t bytes, std::ui
 }
 
 bool WrittenSince(std::uint64_t address, std::size_t bytes, std::uint64_t generation) {
+    address = HostAddress(address);
     auto& tracker = Tracker();
     const auto lock = lockTracker(tracker);
     tracker.initialize();
@@ -2461,6 +2488,7 @@ bool WrittenSince(std::uint64_t address, std::size_t bytes, std::uint64_t genera
 bool ChangedBlocks(std::uint64_t address, std::size_t bytes, std::span<const std::uint64_t> generations, std::span<std::uint8_t> changed, std::span<std::uint8_t> cpu) {
     std::fill(changed.begin(), changed.end(), BlockWritten);
     std::fill(cpu.begin(), cpu.end(), std::uint8_t{1});
+    address = HostAddress(address);
     auto& tracker = Tracker();
     const auto lock = lockTracker(tracker);
     tracker.initialize();
@@ -2852,7 +2880,8 @@ namespace {
 std::atomic<void (*)(std::uint64_t, std::size_t)> flushHook{nullptr};
 std::atomic<void (*)(std::uint64_t, std::size_t)> readGuard{nullptr};
 
-void PrepareHostRead(std::uintptr_t address, std::size_t bytes) {
+void PrepareHostRead(std::uintptr_t host, std::size_t bytes) {
+    const auto address = GuestAddress(host);
     if (const auto guard = readGuard.load(std::memory_order_acquire)) guard(address, bytes);
     FlushGpuWrites(address, bytes);
 }
@@ -2882,7 +2911,7 @@ void Read(std::uint64_t address, std::span<std::byte> destination, std::size_t a
     FlushGpuWrites(address, destination.size());
     const TimedAccess timed(CounterRead, destination.size());
     CountReadCaller(__builtin_return_address(0));
-    const auto* source = reinterpret_cast<const void*>(address);
+    const auto* source = static_cast<const void*>(GuestArena::GuestToHost(address));
     try {
         CheckRange(source, destination.size(), alignment);
     } catch (const std::runtime_error&) {
@@ -2978,12 +3007,12 @@ bool equalsCommittedBytes(std::uint64_t address, const std::byte* expected, std:
 }
 
 void copyCommitted(std::uint64_t address, std::span<std::byte> destination) {
-    if (Accessible(reinterpret_cast<const void*>(address), destination.size())) {
-        copyCommittedBytes(destination.data(), address, destination.size());
+    if (Accessible(GuestArena::GuestToHost(address), destination.size())) {
+        copyCommittedBytes(destination.data(), HostAddress(address), destination.size());
         return;
     }
     std::memset(destination.data(), 0, destination.size());
-    for (const auto& [begin, end] : CommittedRanges(address, destination.size())) copyCommittedBytes(destination.data() + (begin - address), begin, static_cast<std::size_t>(end - begin));
+    for (const auto& [begin, end] : CommittedRanges(address, destination.size())) copyCommittedBytes(destination.data() + (begin - address), HostAddress(begin), static_cast<std::size_t>(end - begin));
 }
 
 }
@@ -3014,9 +3043,9 @@ bool EqualsCommitted(std::uint64_t address, std::span<const std::byte> bytes) {
 bool EqualsCommittedUnsynced(std::uint64_t address, std::span<const std::byte> bytes) {
     if (bytes.empty()) return true;
     const TimedAccess timed(CounterCompare, bytes.size());
-    if (Accessible(reinterpret_cast<const void*>(address), bytes.size())) return equalsCommittedBytes(address, bytes.data(), bytes.size());
+    if (Accessible(GuestArena::GuestToHost(address), bytes.size())) return equalsCommittedBytes(HostAddress(address), bytes.data(), bytes.size());
     for (const auto& [begin, end] : CommittedRanges(address, bytes.size())) {
-        if (!equalsCommittedBytes(begin, bytes.data() + (begin - address), static_cast<std::size_t>(end - begin))) return false;
+        if (!equalsCommittedBytes(HostAddress(begin), bytes.data() + (begin - address), static_cast<std::size_t>(end - begin))) return false;
     }
     return true;
 }
@@ -3025,10 +3054,11 @@ Compare CompareMapped(std::uint64_t address, std::span<const std::byte> bytes) {
     if (bytes.empty()) return Compare::Equal;
     if (address == 0 || bytes.size() > std::numeric_limits<std::uintptr_t>::max() - address) return Compare::Unmapped;
     auto outcome = Compare::Equal;
+    const auto host = HostAddress(address);
     // Each run's page state is consulted right before its bytes are compared.
-    const bool queried = describePages(static_cast<std::uintptr_t>(address), bytes.size(), [&](const PageRun& run) {
+    const bool queried = describePages(static_cast<std::uintptr_t>(host), bytes.size(), [&](const PageRun& run) {
         if (!run.readable) outcome = Compare::Unmapped;
-        else if (std::memcmp(reinterpret_cast<const void*>(run.begin), bytes.data() + (run.begin - address), static_cast<std::size_t>(run.end - run.begin)) != 0) outcome = Compare::Differs;
+        else if (std::memcmp(reinterpret_cast<const void*>(run.begin), bytes.data() + (run.begin - host), static_cast<std::size_t>(run.end - run.begin)) != 0) outcome = Compare::Differs;
         return outcome == Compare::Equal;
     });
     return queried ? outcome : Compare::Unmapped;
@@ -3038,9 +3068,10 @@ Compare CopyMapped(std::uint64_t address, std::span<std::byte> out) {
     if (out.empty()) return Compare::Equal;
     if (address == 0 || out.size() > std::numeric_limits<std::uintptr_t>::max() - address) return Compare::Unmapped;
     auto outcome = Compare::Equal;
-    const bool queried = describePages(static_cast<std::uintptr_t>(address), out.size(), [&](const PageRun& run) {
+    const auto host = HostAddress(address);
+    const bool queried = describePages(static_cast<std::uintptr_t>(host), out.size(), [&](const PageRun& run) {
         if (!run.readable) outcome = Compare::Unmapped;
-        else std::memcpy(out.data() + (run.begin - address), reinterpret_cast<const void*>(run.begin), static_cast<std::size_t>(run.end - run.begin));
+        else std::memcpy(out.data() + (run.begin - host), reinterpret_cast<const void*>(run.begin), static_cast<std::size_t>(run.end - run.begin));
         return outcome == Compare::Equal;
     });
     return queried ? outcome : Compare::Unmapped;
@@ -3048,7 +3079,7 @@ Compare CopyMapped(std::uint64_t address, std::span<std::byte> out) {
 
 void WriteChangedCommitted(std::uint64_t address, std::span<const std::byte> current, std::span<const std::byte> original) {
     require(current.size() == original.size(), "write-back snapshot sizes differ");
-    if (Accessible(reinterpret_cast<const void*>(address), current.size(), true)) {
+    if (Accessible(GuestArena::GuestToHost(address), current.size(), true)) {
         WriteChanged(address, current, original);
         return;
     }
@@ -3098,10 +3129,11 @@ static void writeChanged(std::uint64_t address, std::span<const std::byte> curre
     const ReadSiteScope site(ReadSite::Store);
     FlushGpuWrites(address, current.size());
     const TimedAccess timed(CounterChangedWrite, current.size());
-    auto* destination = reinterpret_cast<std::byte*>(address);
+    const auto host = HostAddress(address);
+    auto* destination = reinterpret_cast<std::byte*>(host);
     const auto size = current.size();
     // Stamped like a GPU write: a collect memoized for this packet would not see the page fault.
-    storeOwn(address, size, [&] {
+    storeOwn(host, size, [&] {
         CheckRange(destination, size, 1, true);
         std::size_t firstChanged = size;
         std::size_t lastChanged = 0;
@@ -3137,7 +3169,7 @@ static void writeChanged(std::uint64_t address, std::span<const std::byte> curre
             firstChanged = std::min(firstChanged, at);
             lastChanged = std::max(lastChanged, at + 1);
         }
-        return firstChanged < lastChanged ? std::pair<std::uint64_t, std::uint64_t>{address + firstChanged, address + lastChanged} : std::pair<std::uint64_t, std::uint64_t>{0, 0};
+        return firstChanged < lastChanged ? std::pair<std::uint64_t, std::uint64_t>{host + firstChanged, host + lastChanged} : std::pair<std::uint64_t, std::uint64_t>{0, 0};
     });
 }
 
@@ -3204,11 +3236,11 @@ void Write(std::uint64_t address, std::span<const std::byte> source, std::size_t
     FlushGpuWrites(address, source.size());
     const TimedAccess timed(CounterWrite, source.size());
     CountWriteCaller(__builtin_return_address(0));
-    auto* destination = reinterpret_cast<void*>(address);
+    auto* destination = GuestArena::GuestToHost(address);
     // Stamped like a GPU write: a collect memoized for this packet would not see the page fault.
     StoreOwnBytes(address, source.size(), [&] {
         CheckRange(destination, source.size(), alignment, true);
-        if (source.size() >= PageBytes) copyOwnBytes(address, source);
+        if (source.size() >= PageBytes) copyOwnBytes(HostAddress(address), source);
         else std::memcpy(destination, source.data(), source.size());
     });
 }
@@ -3220,7 +3252,7 @@ extern "C" void AgcDriverCheckGuestMemory_nid_postfix(const void* pointer, std::
 }
 
 extern "C" void AgcDriverStoreGuestLabel_nid_postfix(std::uint64_t* pointer, std::uint64_t value) {
-    AgcDriver::GuestMemory::StoreOwnBytes(reinterpret_cast<std::uintptr_t>(pointer), sizeof(*pointer), [&] {
+    AgcDriver::GuestMemory::StoreOwnBytes(GuestArena::HostToGuest(pointer), sizeof(*pointer), [&] {
         AgcDriver::GuestMemory::CheckRange(pointer, sizeof(*pointer), std::atomic_ref<std::uint64_t>::required_alignment, true);
         std::atomic_ref(*pointer).store(value, std::memory_order_release);
     });

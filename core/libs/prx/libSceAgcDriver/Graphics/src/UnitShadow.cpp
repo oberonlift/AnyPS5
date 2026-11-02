@@ -1,4 +1,5 @@
 #include "prx/libSceAgcDriver/Graphics/include/MemoryAccounting.hpp"
+#include "prx/libc/include/GuestArena.hpp"
 #include "prx/libSceAgcDriver/Graphics/include/UnitShadow.hpp"
 #include "prx/libSceAgcDriver/Graphics/include/SlimMutex.hpp"
 #include "prx/libSceAgcDriver/Graphics/include/GuestBufferMemory.hpp"
@@ -340,7 +341,7 @@ void verifyPublished(const UnitShadow& shadow, const std::vector<SlabCopies>& co
             host.Invalidate();
             const auto address = shadow.importBase + region.dstOffset - shadow.importLead;
             Stats().verified.fetch_add(1, std::memory_order_relaxed);
-            if (!GuestMemory::Accessible(reinterpret_cast<const void*>(address), static_cast<std::size_t>(region.size)) || std::memcmp(reinterpret_cast<const void*>(address), host.Bytes().data(), static_cast<std::size_t>(region.size)) != 0) {
+            if (!GuestMemory::Accessible(GuestArena::GuestToHost(address), static_cast<std::size_t>(region.size)) || std::memcmp(GuestArena::GuestToHost(address), host.Bytes().data(), static_cast<std::size_t>(region.size)) != 0) {
                 Stats().mismatches.fetch_add(1, std::memory_order_relaxed);
                 static std::atomic<int> reports{0};
                 if (reports.fetch_add(1) < 8) std::fprintf(stderr, "[shadow] verify: published bytes differ from the slab at 0x%llx+0x%llx\n", static_cast<unsigned long long>(address), static_cast<unsigned long long>(region.size));

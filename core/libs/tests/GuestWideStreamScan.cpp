@@ -12,7 +12,6 @@
 #include <string>
 
 extern "C" {
-extern FileStream* __stdinp_nid_postfix;
 
 }
 

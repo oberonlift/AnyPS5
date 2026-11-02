@@ -1,5 +1,6 @@
 #include "Runtime.hpp"
 
+#include <ps5lift/Bridge.hpp>
 #include <ps5lift/State.h>
 
 #include <cstddef>
@@ -28,9 +29,9 @@ T Get(const unsigned char* buffer, const std::size_t offset) {
 }
 
 void Save(Ps5LiftState* state, const bool mask) {
-    auto* buffer = reinterpret_cast<unsigned char*>(state->Gpr[PS5LIFT_RDI]);
+    auto* buffer = static_cast<unsigned char*>(Ps5Lift::Bridge::HostAddress(state->Gpr[PS5LIFT_RDI]));
     const auto rsp = state->Gpr[PS5LIFT_RSP];
-    Put(buffer, 0, Get<std::uint64_t>(reinterpret_cast<const unsigned char*>(rsp), 0));
+    Put(buffer, 0, Get<std::uint64_t>(static_cast<const unsigned char*>(Ps5Lift::Bridge::HostAddress(rsp)), 0));
     for (std::size_t i = 0; i < std::size(SavedRegisters); ++i) {
         const auto reg = SavedRegisters[i];
         Put(buffer, 8 + 8 * i, reg == PS5LIFT_RSP ? rsp + 8 : state->Gpr[reg]);
@@ -43,7 +44,7 @@ void Save(Ps5LiftState* state, const bool mask) {
 }
 
 void Jump(Ps5LiftState* state, const bool mask) {
-    const auto* buffer = reinterpret_cast<const unsigned char*>(state->Gpr[PS5LIFT_RDI]);
+    const auto* buffer = static_cast<const unsigned char*>(Ps5Lift::Bridge::HostAddress(state->Gpr[PS5LIFT_RDI]));
     const auto value = static_cast<std::uint32_t>(state->Gpr[PS5LIFT_RSI]);
     if (mask && JumpBufferRestoreMask != nullptr) JumpBufferRestoreMask(buffer);
     for (std::size_t i = 0; i < std::size(SavedRegisters); ++i) state->Gpr[SavedRegisters[i]] = Get<std::uint64_t>(buffer, 8 + 8 * i);

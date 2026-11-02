@@ -31,11 +31,11 @@ std::mutex& InitializationMutex() {
 }
 
 PthreadMutex destroyedMutex() {
-    return reinterpret_cast<PthreadMutex>(std::uintptr_t{2});
+    return reinterpret_cast<PthreadMutexPrivate*>(std::uintptr_t{2});
 }
 
 PthreadMutex adaptiveInitializer() {
-    return reinterpret_cast<PthreadMutex>(std::uintptr_t{1});
+    return reinterpret_cast<PthreadMutexPrivate*>(std::uintptr_t{1});
 }
 
 bool isInitializedMutex(PthreadMutex mutex) {
@@ -140,7 +140,7 @@ int MutexOperations::Timedlock(PthreadMutex* mutex, const KernelTimespec* abstim
     if (std::chrono::duration<long double>(duration) >= std::chrono::duration<long double>(std::chrono::system_clock::duration::max()))
         throw std::overflow_error("Absolute mutex timeout exceeds the host clock range");
     const auto deadline = std::chrono::system_clock::time_point(std::chrono::duration_cast<std::chrono::system_clock::duration>(duration));
-    auto* current = resolveMutex(mutex, true);
+    PthreadMutexPrivate* current = resolveMutex(mutex, true);
     return acquireMutex(current, [&](auto& native) {
 #ifdef _WIN32
         for (;;) {
@@ -229,7 +229,7 @@ int APS5_VABI scePthreadMutexDestroy(PthreadMutex* mutex) {
 }
 
 int APS5_VABI scePthreadMutexLock(PthreadMutex* mutex) {
-    auto* current = resolveMutex(mutex, true);
+    PthreadMutexPrivate* current = resolveMutex(mutex, true);
     return acquireMutex(current, [current](auto& native) {
 #ifdef _WIN32
         return TimedWait::ParkAcquire(current, [&] { return native.try_lock(); }, nullptr);
@@ -244,7 +244,7 @@ int APS5_VABI scePthreadMutexLock(PthreadMutex* mutex) {
 int APS5_VABI scePthreadMutexUnlock(PthreadMutex* mutex) {
     if (!mutex)
         throw std::invalid_argument("Mutex pointer is null");
-    auto* current = std::atomic_ref<PthreadMutex>(*mutex).load(std::memory_order_acquire);
+    PthreadMutexPrivate* current = std::atomic_ref<PthreadMutex>(*mutex).load(std::memory_order_acquire);
     if (current == destroyedMutex())
         return SCE_KERNEL_ERROR_EINVAL;
     if (!isInitializedMutex(current) || current->_owner.load(std::memory_order_acquire) != std::this_thread::get_id())
@@ -269,7 +269,7 @@ int APS5_VABI scePthreadMutexUnlock(PthreadMutex* mutex) {
 
 int APS5_VABI scePthreadMutexTimedlock(PthreadMutex* mutex, KernelUseconds usec) {
     const auto deadline = TimedWait::DeadlineNanos(usec);
-    auto* current = resolveMutex(mutex, true);
+    PthreadMutexPrivate* current = resolveMutex(mutex, true);
     if (current && current->_type != MutexType::Recursive && current->_owner.load(std::memory_order_acquire) == std::this_thread::get_id()) {
         TimedWait::SleepUntil(deadline);
         return sceTimedOut;
@@ -284,7 +284,7 @@ int APS5_VABI scePthreadMutexTrylock(PthreadMutex* mutex) {
 }
 
 int APS5_VABI scePthreadMutexGetspinloops(PthreadMutex* mutex, int* count) {
-    auto* current = resolveMutex(mutex, true);
+    PthreadMutexPrivate* current = resolveMutex(mutex, true);
     if (!current)
         return SCE_KERNEL_ERROR_EINVAL;
     if (!count)
@@ -294,7 +294,7 @@ int APS5_VABI scePthreadMutexGetspinloops(PthreadMutex* mutex, int* count) {
 }
 
 int APS5_VABI scePthreadMutexSetspinloops(PthreadMutex* mutex, int count) {
-    auto* current = resolveMutex(mutex, true);
+    PthreadMutexPrivate* current = resolveMutex(mutex, true);
     if (!current)
         return SCE_KERNEL_ERROR_EINVAL;
     current->_spinloops = count;
@@ -302,7 +302,7 @@ int APS5_VABI scePthreadMutexSetspinloops(PthreadMutex* mutex, int count) {
 }
 
 int APS5_VABI scePthreadMutexGetyieldloops(PthreadMutex* mutex, int* count) {
-    auto* current = resolveMutex(mutex, true);
+    PthreadMutexPrivate* current = resolveMutex(mutex, true);
     if (!current)
         return SCE_KERNEL_ERROR_EINVAL;
     if (!count)
@@ -312,7 +312,7 @@ int APS5_VABI scePthreadMutexGetyieldloops(PthreadMutex* mutex, int* count) {
 }
 
 int APS5_VABI scePthreadMutexSetyieldloops(PthreadMutex* mutex, int count) {
-    auto* current = resolveMutex(mutex, true);
+    PthreadMutexPrivate* current = resolveMutex(mutex, true);
     if (!current)
         return SCE_KERNEL_ERROR_EINVAL;
     current->_yieldloops = count;

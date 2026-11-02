@@ -1,4 +1,5 @@
 #include "prx/libc/include/GuestAllocations.hpp"
+#include "prx/libc/include/GuestArena.hpp"
 #include <algorithm>
 #include <atomic>
 #include <chrono>
@@ -93,6 +94,14 @@ void require(bool condition, const char* reason) {
     if (!condition) throw std::runtime_error(reason);
 }
 
+std::uint64_t guestAddress(const void* pointer) {
+    return GuestArena::HostToGuest(pointer);
+}
+
+const void* hostPointer(std::uint64_t address) {
+    return GuestArena::GuestToHost(address);
+}
+
 // A mutation holds the registry lock and remembers the ranges it changed, which are reported to the
 // invalidator once the generation has moved on, so a cache that observed the old state meanwhile
 // notices either way.
@@ -104,7 +113,7 @@ struct MutationState {
 };
 
 void recordChange(void* mutation, const void* pointer, std::size_t bytes) {
-    if (mutation != nullptr && bytes != 0) static_cast<MutationState*>(mutation)->changed.emplace_back(reinterpret_cast<std::uintptr_t>(pointer), bytes);
+    if (mutation != nullptr && bytes != 0) static_cast<MutationState*>(mutation)->changed.emplace_back(guestAddress(pointer), bytes);
 }
 
 #if !defined(_WIN32) && !defined(__APPLE__) && !defined(__EMSCRIPTEN__)
@@ -212,7 +221,7 @@ void GuestAllocationsSetGpuMapObserver_nid_postfix(void (*callback)(const Mapped
 }
 
 void GuestAllocationsNoteGpuMapping_nid_postfix(void* mutation, const void* pointer, std::size_t bytes) {
-    if (mutation != nullptr && bytes != 0) static_cast<MutationState*>(mutation)->gpuMapped.emplace_back(reinterpret_cast<std::uintptr_t>(pointer), bytes);
+    if (mutation != nullptr && bytes != 0) static_cast<MutationState*>(mutation)->gpuMapped.emplace_back(guestAddress(pointer), bytes);
 }
 
 void GuestAllocationsSetPinWaiter_nid_postfix(bool (*callback)(std::uintptr_t, std::size_t)) {
@@ -343,8 +352,8 @@ std::uintptr_t registerImagePages(const ImagePages& collected) {
     for (auto page = pages.begin(); page != pages.end();) {
         auto last = page;
         while (std::next(last) != pages.end() && std::next(last)->first == last->first + pageSize && std::next(last)->second.readable == page->second.readable && std::next(last)->second.writable == page->second.writable) ++last;
-        const auto address = page->first;
-        const auto bytes = static_cast<std::size_t>(last->first + pageSize - address);
+        const auto address = guestAddress(reinterpret_cast<const void*>(page->first));
+        const auto bytes = static_cast<std::size_t>(last->first + pageSize - page->first);
         const auto next = replacement.lower_bound(address);
         require(next == replacement.end() || address + bytes <= next->first, "guest image overlaps a registered allocation");
         if (next != replacement.begin()) {
@@ -355,7 +364,7 @@ std::uintptr_t registerImagePages(const ImagePages& collected) {
         page = std::next(last);
     }
     state.ranges.swap(replacement);
-    return static_cast<std::uintptr_t>(std::prev(pages.end())->first + pageSize);
+    return static_cast<std::uintptr_t>(guestAddress(reinterpret_cast<const void*>(std::prev(pages.end())->first + pageSize)));
 }
 }
 
@@ -377,7 +386,7 @@ void GuestAllocationsRegisterImage_nid_postfix(void*, const void* image) {
     require(image != nullptr, "cannot register a guest image without a base");
     auto& state = registry();
     const auto base = reinterpret_cast<std::uintptr_t>(image);
-    if (state.registeredImages.contains(base)) return;
+    if (state.registeredImages.contains(guestAddress(image))) return;
     ImagePages collected{.base = base, .pageSize = static_cast<std::uint64_t>(::sysconf(_SC_PAGESIZE))};
 #ifdef __APPLE__
     collectMachImagePages(collected);
@@ -387,13 +396,13 @@ void GuestAllocationsRegisterImage_nid_postfix(void*, const void* image) {
     require(collected.found, "cannot locate a guest image");
     require(!collected.pages.empty(), "guest image has no loadable segments");
     require(collected.pages.begin()->first == base, "guest image does not start at its base");
-    state.registeredImages.emplace(base, registerImagePages(collected));
+    state.registeredImages.emplace(guestAddress(image), registerImagePages(collected));
 }
 #endif
 
 void GuestAllocationsUnregisterImage_nid_postfix(void* mutation, const void* image) {
     auto& state = registry();
-    const auto found = state.registeredImages.find(reinterpret_cast<std::uintptr_t>(image));
+    const auto found = state.registeredImages.find(guestAddress(image));
     if (found == state.registeredImages.end()) return;
     const auto [begin, end] = *found;
     GuestAllocationsRequireUnpinned_nid_postfix(mutation, image, end - begin);
@@ -404,7 +413,7 @@ void GuestAllocationsUnregisterImage_nid_postfix(void* mutation, const void* ima
 
 void GuestAllocationsAdd_nid_postfix(void* mutation, void* pointer, std::size_t bytes, bool readable, bool writable, bool gpu) {
     recordChange(mutation, pointer, bytes);
-    const auto address = reinterpret_cast<std::uintptr_t>(pointer);
+    const auto address = guestAddress(pointer);
     require(address != 0 && bytes <= std::numeric_limits<std::uint64_t>::max() - address, "invalid guest allocation range");
     require(!writable || readable, "writable guest allocation must be readable");
     auto& ranges = registry().ranges;
@@ -424,7 +433,7 @@ void GuestAllocationsAdd_nid_postfix(void* mutation, void* pointer, std::size_t 
 }
 
 void GuestAllocationsRequireUnpinned_nid_postfix(void* mutation, const void* pointer, std::size_t bytes) {
-    const auto address = reinterpret_cast<std::uintptr_t>(pointer);
+    const auto address = guestAddress(pointer);
     require(bytes <= std::numeric_limits<std::uint64_t>::max() - address, "guest allocation range overflow");
     const auto end = address + bytes;
     auto& ranges = registry().ranges;
@@ -510,7 +519,7 @@ decltype(registry().ranges)::iterator firstRangeTouching(std::uintptr_t address)
 }
 
 void GuestAllocationsRequireAvailable_nid_postfix(void*, const void* pointer, std::size_t bytes) {
-    const auto address = reinterpret_cast<std::uintptr_t>(pointer);
+    const auto address = guestAddress(pointer);
     require(address != 0 && bytes != 0 && bytes <= std::numeric_limits<std::uint64_t>::max() - address, "invalid fixed guest mapping");
     const auto first = firstRangeTouching(address);
     for (auto it = first; it != registry().ranges.end(); ++it) {
@@ -525,7 +534,7 @@ void GuestAllocationsRequireAvailable_nid_postfix(void*, const void* pointer, st
 }
 
 bool GuestAllocationsOverlaps_nid_postfix(void*, const void* pointer, std::size_t bytes) {
-    const auto address = reinterpret_cast<std::uintptr_t>(pointer);
+    const auto address = guestAddress(pointer);
     require(address != 0 && bytes != 0 && bytes <= std::numeric_limits<std::uint64_t>::max() - address, "invalid guest allocation range");
     const auto first = firstRangeTouching(address);
     for (auto it = first; it != registry().ranges.end(); ++it) {
@@ -537,7 +546,7 @@ bool GuestAllocationsOverlaps_nid_postfix(void*, const void* pointer, std::size_
 }
 
 bool GuestAllocationsForRegistered_nid_postfix(void*, const void* pointer, std::size_t bytes, const std::function<void(const void*, std::size_t)>& visit) {
-    const auto address = reinterpret_cast<std::uintptr_t>(pointer);
+    const auto address = guestAddress(pointer);
     require(address != 0 && bytes != 0 && bytes <= std::numeric_limits<std::uint64_t>::max() - address, "invalid guest allocation range");
     const auto end = address + bytes;
     const auto& ranges = registry().ranges;
@@ -554,12 +563,12 @@ bool GuestAllocationsForRegistered_nid_postfix(void*, const void* pointer, std::
             last = finish;
             continue;
         }
-        if (any) visit(reinterpret_cast<const void*>(first), last - first);
+        if (any) visit(hostPointer(first), last - first);
         first = base;
         last = finish;
         any = true;
     }
-    if (any) visit(reinterpret_cast<const void*>(first), last - first);
+    if (any) visit(hostPointer(first), last - first);
     return any;
 }
 
@@ -594,13 +603,13 @@ void GuestAllocationsGuestPages_nid_postfix(std::uintptr_t address, std::size_t 
 
 void GuestAllocationsTrimToRegistered_nid_postfix(void*, std::size_t page, const void** pointer, std::size_t* bytes) {
 #ifdef __APPLE__
-    auto start = reinterpret_cast<std::uintptr_t>(*pointer);
+    auto start = guestAddress(*pointer);
     const auto end = start + *bytes;
     const auto& ranges = registry().ranges;
     const auto following = ranges.upper_bound(start);
     const bool startCovered = following != ranges.begin() && std::prev(following)->first + std::prev(following)->second->bytes > start;
     if (!startCovered && following != ranges.end() && following->first < end && following->first - start < page) start = following->first;
-    *pointer = reinterpret_cast<const void*>(start);
+    *pointer = hostPointer(start);
     *bytes = end - start;
 #else
     static_cast<void>(page);
@@ -610,7 +619,7 @@ void GuestAllocationsTrimToRegistered_nid_postfix(void*, std::size_t page, const
 }
 
 bool GuestAllocationsCovers_nid_postfix(void*, const void* pointer, std::size_t bytes) {
-    const auto address = reinterpret_cast<std::uintptr_t>(pointer);
+    const auto address = guestAddress(pointer);
     require(address != 0 && bytes != 0 && bytes <= std::numeric_limits<std::uint64_t>::max() - address, "invalid guest allocation range");
     const auto end = address + bytes;
     auto cursor = address;
@@ -629,7 +638,7 @@ bool GuestAllocationsCovers_nid_postfix(void*, const void* pointer, std::size_t 
 }
 
 Range GuestAllocationsFind_nid_postfix(void*, const void* pointer) {
-    const auto address = reinterpret_cast<std::uintptr_t>(pointer);
+    const auto address = guestAddress(pointer);
     const auto exact = registry().ranges.find(address);
     if (exact != registry().ranges.end() && exact->second->allocationAddress == address && exact->second->allocationBytes == exact->second->bytes) {
         const auto& range = *exact->second;
@@ -666,8 +675,7 @@ struct RangePatch {
     std::vector<std::pair<std::uint64_t, std::shared_ptr<const Range>>> inserted;
 };
 
-RangePatch replaceRange(const void* pointer, std::size_t bytes, bool remove, bool readable, bool writable, bool gpu) {
-    const std::uint64_t address = reinterpret_cast<std::uintptr_t>(pointer);
+RangePatch replaceRange(std::uint64_t address, std::size_t bytes, bool remove, bool readable, bool writable, bool gpu) {
     require(bytes != 0 && bytes <= std::numeric_limits<std::uint64_t>::max() - address, "invalid guest protection or unmap range");
     require(!writable || readable, "writable guest allocation must be readable");
     const auto end = address + bytes;
@@ -728,7 +736,7 @@ bool allocationRemains(const Range& range, const RangePatch& patch) {
 void GuestAllocationsProtect_nid_postfix(void* mutation, const void* pointer, std::size_t bytes, bool readable, bool writable, bool gpu, const std::function<void()>& apply) {
     GuestAllocationsRequireUnpinned_nid_postfix(mutation, pointer, bytes);
     recordChange(mutation, pointer, bytes);
-    const auto patch = replaceRange(pointer, bytes, false, readable, writable, gpu);
+    const auto patch = replaceRange(guestAddress(pointer), bytes, false, readable, writable, gpu);
     StagedPatch staged(patch);
     apply();
     staged.apply();
@@ -737,8 +745,8 @@ void GuestAllocationsProtect_nid_postfix(void* mutation, const void* pointer, st
 void GuestAllocationsUnmap_nid_postfix(void* mutation, const void* pointer, std::size_t bytes, const std::function<void(const void*, std::size_t, const void*, bool)>& apply) {
     GuestAllocationsRequireUnpinned_nid_postfix(mutation, pointer, bytes);
     recordChange(mutation, pointer, bytes);
-    const auto end = reinterpret_cast<std::uintptr_t>(pointer) + bytes;
-    auto cursor = reinterpret_cast<std::uintptr_t>(pointer);
+    const auto end = guestAddress(pointer) + bytes;
+    auto cursor = guestAddress(pointer);
     bool any = false;
     while (cursor < end) {
         const auto found = registry().ranges.upper_bound(cursor);
@@ -755,17 +763,17 @@ void GuestAllocationsUnmap_nid_postfix(void* mutation, const void* pointer, std:
         const auto range = *containing;
         require(range.releasable, "guest image memory cannot be unmapped");
         const auto pieceEnd = std::min<std::uint64_t>(end, range.address + range.bytes);
-        const auto patch = replaceRange(reinterpret_cast<const void*>(cursor), pieceEnd - cursor, true, false, false, false);
+        const auto patch = replaceRange(cursor, pieceEnd - cursor, true, false, false, false);
         const bool last = !allocationRemains(range, patch);
         StagedPatch staged(patch);
-        apply(reinterpret_cast<const void*>(cursor), pieceEnd - cursor, reinterpret_cast<const void*>(range.allocationAddress), last);
+        apply(hostPointer(cursor), pieceEnd - cursor, hostPointer(range.allocationAddress), last);
         staged.apply();
         if (const auto observer = unmapObserver.load(std::memory_order_acquire)) observer(cursor, pieceEnd - cursor);
         any = true;
         cursor = pieceEnd;
     }
     require(any, "unmap address is not registered");
-    if (const auto observer = unmapObserver.load(std::memory_order_acquire)) observer(reinterpret_cast<std::uintptr_t>(pointer), bytes);
+    if (const auto observer = unmapObserver.load(std::memory_order_acquire)) observer(guestAddress(pointer), bytes);
 }
 
 void GuestAllocationsSetUnmapObserver_nid_postfix(void (*callback)(std::uintptr_t, std::size_t)) {

@@ -1,4 +1,5 @@
 #include "prx/libc/include/exceptions/Unwind.hpp"
+#include "prx/libc/include/GuestArena.hpp"
 #include "prx/libc/include/exceptions/Runtime.hpp"
 
 extern "C" _Unwind_Reason_Code APS5_VABI __gxx_personality_v0_nid_postfix(
@@ -9,7 +10,7 @@ extern "C" _Unwind_Reason_Code APS5_VABI __gxx_personality_v0_nid_postfix(
     using namespace LibcException;
     if (version != 1) return _URC_FATAL_PHASE1_ERROR;
     if (!context->lsda) return _URC_CONTINUE_UNWIND;
-    const Byte* p = reinterpret_cast<const Byte*>(context->lsda);
+    const Byte* p = static_cast<const Byte*>(GuestArena::GuestToHost(context->lsda));
     Byte landingEncoding = *p++;
     Word landingBase = landingEncoding == 255 ? context->region : Encoded(p, landingEncoding, context->dataBase, context->region, context->textBase);
     Byte typeEncoding = *p++;
@@ -42,7 +43,7 @@ extern "C" _Unwind_Reason_Code APS5_VABI __gxx_personality_v0_nid_postfix(
                 if (filter == 0) cleanup = true;
                 else if (filter > 0 && !(actions & _UA_FORCE_UNWIND) && typeTable) {
                     const Byte* entry = typeTable - filter * EncodingSize(typeEncoding);
-                    auto* caught = reinterpret_cast<const std::type_info*>(Encoded(entry, typeEncoding, context->dataBase, context->region, context->textBase));
+                    auto* caught = static_cast<const std::type_info*>(GuestArena::GuestToHost(Encoded(entry, typeEncoding, context->dataBase, context->region, context->textBase)));
                     void* candidate = adjusted;
                     if (!caught || (header && Match(caught, Primary(header)->type, candidate))) {
                         matched = true; selector = filter; adjusted = candidate; break;
@@ -64,7 +65,7 @@ extern "C" _Unwind_Reason_Code APS5_VABI __gxx_personality_v0_nid_postfix(
             if (!cleanup) return _URC_CONTINUE_UNWIND;
             selector = 0;
         }
-        context->registers[0] = reinterpret_cast<Word>(exception);
+        context->registers[0] = GuestArena::HostToGuest(exception);
         context->registers[1] = selector;
         context->registers[16] = landingBase + landing;
         return _URC_INSTALL_CONTEXT;
@@ -79,7 +80,7 @@ extern "C" _Unwind_Reason_Code APS5_VABI __gcc_personality_v0_nid_postfix(
     using namespace LibcUnwind;
     if (version != 1) return _URC_FATAL_PHASE1_ERROR;
     if (!(actions & _UA_CLEANUP_PHASE) || !context->lsda) return _URC_CONTINUE_UNWIND;
-    const Byte* p = reinterpret_cast<const Byte*>(context->lsda);
+    const Byte* p = static_cast<const Byte*>(GuestArena::GuestToHost(context->lsda));
     Byte landingEncoding = *p++;
     Word landingBase = landingEncoding == 255 ? context->region : Encoded(p, landingEncoding, context->dataBase, context->region, context->textBase);
     if (*p++ != 255) Uleb(p);
@@ -94,7 +95,7 @@ extern "C" _Unwind_Reason_Code APS5_VABI __gcc_personality_v0_nid_postfix(
         Uleb(p);
         if (ip < context->region + start || ip - context->region - start >= size) continue;
         if (!landing) return _URC_CONTINUE_UNWIND;
-        context->registers[0] = reinterpret_cast<Word>(exception);
+        context->registers[0] = GuestArena::HostToGuest(exception);
         context->registers[1] = 0;
         context->registers[16] = landingBase + landing;
         return _URC_INSTALL_CONTEXT;

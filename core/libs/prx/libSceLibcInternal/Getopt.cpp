@@ -16,7 +16,6 @@ static_assert(offsetof(GuestOption, value) == 24);
 
 extern "C" {
 extern const char* __progname_nid_postfix;
-extern FileStream* __stderrp_nid_postfix;
 
 int opterr_nid_postfix = 1;
 int optind_nid_postfix = 1;

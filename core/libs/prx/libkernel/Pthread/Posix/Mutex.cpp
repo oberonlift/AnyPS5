@@ -22,7 +22,7 @@ constexpr int POSIX_SCHED_RR = 3;
 constexpr std::uintptr_t POSIX_ADAPTIVE_MUTEX_INITIALIZER = 1;
 constexpr std::uintptr_t POSIX_MUTEX_DESTROYED = 2;
 
-bool _isStaticInitializer(PthreadMutex mutex) {
+bool _isStaticInitializer(PthreadMutexPrivate* mutex) {
     const auto value = reinterpret_cast<std::uintptr_t>(mutex);
     return value == 0 || value == POSIX_ADAPTIVE_MUTEX_INITIALIZER;
 }
@@ -30,7 +30,7 @@ bool _isStaticInitializer(PthreadMutex mutex) {
 PthreadMutexPrivate* _priorityProtected(PthreadMutex* mutex, const char* funcName) {
     if (!mutex) throw std::runtime_error(std::string(funcName) + ": null mutex");
     const PthreadMutex current = std::atomic_ref<PthreadMutex>(*mutex).load(std::memory_order_acquire);
-    if (reinterpret_cast<std::uintptr_t>(current) <= POSIX_MUTEX_DESTROYED || current->_protocol != POSIX_PRIO_PROTECT) return nullptr;
+    if (reinterpret_cast<std::uintptr_t>(static_cast<PthreadMutexPrivate*>(current)) <= POSIX_MUTEX_DESTROYED || current->_protocol != POSIX_PRIO_PROTECT) return nullptr;
     return current;
 }
 
@@ -44,7 +44,7 @@ void _initializeStatic(PthreadMutex* mutex, const char* funcName) {
     PthreadMutex current = slot.load(std::memory_order_acquire);
     if (!_isStaticInitializer(current)) return;
     auto* created = new PthreadMutexPrivate();
-    created->SetType(reinterpret_cast<std::uintptr_t>(current) == POSIX_ADAPTIVE_MUTEX_INITIALIZER ? MutexType::Adaptive : MutexType::ErrorCheck);
+    created->SetType(reinterpret_cast<std::uintptr_t>(static_cast<PthreadMutexPrivate*>(current)) == POSIX_ADAPTIVE_MUTEX_INITIALIZER ? MutexType::Adaptive : MutexType::ErrorCheck);
     if (!slot.compare_exchange_strong(current, created, std::memory_order_acq_rel, std::memory_order_acquire))
         delete created;
 }

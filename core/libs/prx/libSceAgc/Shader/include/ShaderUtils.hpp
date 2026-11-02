@@ -1,6 +1,8 @@
 #ifndef CORE_LIBS_PRX_LIBSCEAGC_SHADER_INCLUDE_SHADERUTILS_HPP
 #define CORE_LIBS_PRX_LIBSCEAGC_SHADER_INCLUDE_SHADERUTILS_HPP
 
+#include <bit>
+#include "prx/libc/include/GuestArena.hpp"
 #include <cstdint>
 #include "SceShaders.hpp"
 #include "prx/libSceAgc/Shader/include/ShaderConstants.hpp"
@@ -14,6 +16,17 @@ void ResolveRelativePtr(T*& field) {
         reinterpret_cast<std::uintptr_t>(field) + reinterpret_cast<std::uintptr_t>(&field)
     );
 }
+
+#ifdef ANYPS5_TRANSLATED_GUEST
+template <typename T>
+void ResolveRelativePtr(GuestArena::GuestFormPointer<T>& field) {
+    const auto offset = std::bit_cast<std::uint64_t>(field);
+    if (offset == 0) {
+        return;
+    }
+    field = reinterpret_cast<T*>(offset + reinterpret_cast<std::uintptr_t>(&field));
+}
+#endif
 
 bool GetProgramAddressRegisterOffset(std::uint8_t type, std::uint32_t& loOffset);
 int PatchProgramAddressRegister(ShaderRegister* regs, std::uint32_t numRegs, std::uint8_t type, std::uint64_t base);

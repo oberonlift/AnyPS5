@@ -63,7 +63,7 @@ static void Check(const Wait& wait) {
     PthreadMutex uninitialized = nullptr;
     Require(wait.run(&cond, &uninitialized) == wait.notOwned);
 
-    PthreadMutex adaptive = reinterpret_cast<PthreadMutex>(ADAPTIVE_INITIALIZER);
+    PthreadMutex adaptive = reinterpret_cast<PthreadMutexPrivate*>(ADAPTIVE_INITIALIZER);
     Require(wait.run(&cond, &adaptive) == wait.notOwned);
 
     PthreadMutex destroyed = nullptr;

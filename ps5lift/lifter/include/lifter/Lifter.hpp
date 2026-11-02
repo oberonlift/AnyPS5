@@ -28,11 +28,14 @@ enum class FloatModel {
     Fast
 };
 
+constexpr std::uint64_t DarwinGuestBase = 0x400000000000ull;
+
 struct LiftOptions {
     MemoryModel Memory = MemoryModel::Tso;
     FloatModel Float = FloatModel::Exact;
     bool PreserveFlags = false;
     bool ImportNids = false;
+    std::uint64_t GuestBase = 0;
 };
 
 struct LiftReport {

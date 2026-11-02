@@ -546,7 +546,7 @@ static void* APS5_VABI VersionedWorker(void* argument) {
 static void* APS5_VABI DetachedWorker(void*) { return nullptr; }
 
 static void VersionedSync() {
-    PthreadMutex recursiveMutex = reinterpret_cast<PthreadMutex>(std::uintptr_t{1});
+    PthreadMutex recursiveMutex = reinterpret_cast<PthreadMutexPrivate*>(std::uintptr_t{1});
     Require(_ZNSt8__sce_v29_Mtx_initEPP13pthread_mutexi_nid_postfix(reinterpret_cast<void**>(&recursiveMutex), plain | recursive) == success && recursiveMutex != nullptr);
     Require(_ZNSt8__sce_v29_Mtx_lockEPP13pthread_mutex_nid_postfix(reinterpret_cast<void**>(&recursiveMutex)) == success);
     Require(_ZNSt8__sce_v29_Mtx_lockEPP13pthread_mutex_nid_postfix(reinterpret_cast<void**>(&recursiveMutex)) == success);

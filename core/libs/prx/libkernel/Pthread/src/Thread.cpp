@@ -1,5 +1,6 @@
 #include "prx/libc/include/GuestGs.hpp"
 #include "prx/libkernel/Pthread/include/ThreadLifecycle.hpp"
+#include "prx/libc/include/GuestArena.hpp"
 #include "prx/libkernel/Pthread/include/Cancel.hpp"
 #include "prx/libkernel/include/Api.hpp"
 #include "prx/libc/include/Api.hpp"
@@ -504,7 +505,7 @@ static void RestoreStackPages(std::uintptr_t start, std::size_t bytes) noexcept 
     const bool restored = ::mprotect(reinterpret_cast<void*>(start), bytes, PROT_READ | PROT_WRITE) == 0;
 #endif
     if (!restored) std::fprintf(stderr, "[thread] cannot restore the protection of guest stack pages 0x%llx+0x%zx at thread exit\n", static_cast<unsigned long long>(start), bytes);
-    GuestAllocations::GuestAllocationsInvalidate_nid_postfix(start, bytes);
+    GuestAllocations::GuestAllocationsInvalidate_nid_postfix(GuestArena::HostToGuest(reinterpret_cast<const void*>(start)), bytes);
 }
 
 static void ReplaceStackProtection(std::map<std::uintptr_t, std::size_t>& ranges, std::uintptr_t start, std::size_t bytes, bool readWrite) {

@@ -24,7 +24,7 @@ int APS5_VABI pthread_attr_get_np_nid_postfix(Pthread thread, PthreadAttr* attr)
     if (!thread || !Valid(attr)) return PosixThread::GUEST_EINVAL;
     const auto live = LockLiveGuestThread(thread);
     if (!live) return PosixThread::GUEST_ESRCH;
-    auto* p = *attr;
+    PthreadAttrPrivate* p = *attr;
     p->_stacksize = thread->stackSize;
     p->stackAddress = thread->stackAddress;
     p->_detachstate = thread->_detached ? 1 : 0;

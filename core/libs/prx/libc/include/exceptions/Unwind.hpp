@@ -7,6 +7,7 @@
 #include <cstring>
 
 #include "prx/libc/include/General.hpp"
+#include "prx/libc/include/GuestArena.hpp"
 #include "prx/libc/include/specifics/itanium/UnwindAbi.hpp"
 
 extern "C" const std::uintptr_t* UnwindCursorSlots_nid_no_patch();
@@ -64,7 +65,7 @@ inline std::intptr_t Sleb(const Byte*& p) {
 inline Word Encoded(const Byte*& p, Byte encoding, Word data = 0, Word function = 0, Word text = 0) {
     if (encoding == 255) return 0;
     if ((encoding & 112) == 80) p = reinterpret_cast<const Byte*>((Word(p) + 7) & ~Word(7));
-    Word location = Word(p), value;
+    Word location = GuestArena::HostToGuest(p), value;
     switch (encoding & 15) {
     case 0: value = Read<Word>(p); break;
     case 1: value = Uleb(p); break;
@@ -86,7 +87,7 @@ inline Word Encoded(const Byte*& p, Byte encoding, Word data = 0, Word function 
     case 64: value += function; break;
     default: std::abort();
     }
-    if (encoding & 128) std::memcpy(&value, reinterpret_cast<void*>(value), sizeof(value));
+    if (encoding & 128) std::memcpy(&value, GuestArena::GuestToHost(value), sizeof(value));
     return value;
 }
 

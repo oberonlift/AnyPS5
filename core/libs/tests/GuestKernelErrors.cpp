@@ -182,19 +182,19 @@ int main() {
     Require(scePthreadRwlockUnlock(&rwlock) == SCE_OK);
     Require(scePthreadRwlockDestroy(&rwlock) == SCE_OK);
 
-    PthreadMutex adaptiveStatic = reinterpret_cast<PthreadMutex>(std::uintptr_t{1});
+    PthreadMutex adaptiveStatic = reinterpret_cast<PthreadMutexPrivate*>(std::uintptr_t{1});
     Require(scePthreadMutexLock(&adaptiveStatic) == SCE_OK);
-    Require(adaptiveStatic != reinterpret_cast<PthreadMutex>(std::uintptr_t{1}));
+    Require(adaptiveStatic != reinterpret_cast<PthreadMutexPrivate*>(std::uintptr_t{1}));
     Require(scePthreadMutexLock(&adaptiveStatic) == SCE_KERNEL_ERROR_EDEADLK);
     Require(scePthreadMutexTrylock(&adaptiveStatic) == SCE_KERNEL_ERROR_EBUSY);
     Require(scePthreadMutexUnlock(&adaptiveStatic) == SCE_OK);
     Require(scePthreadMutexDestroy(&adaptiveStatic) == SCE_OK);
-    adaptiveStatic = reinterpret_cast<PthreadMutex>(std::uintptr_t{1});
+    adaptiveStatic = reinterpret_cast<PthreadMutexPrivate*>(std::uintptr_t{1});
     Require(scePthreadMutexTrylock(&adaptiveStatic) == SCE_OK);
     Require(scePthreadMutexTrylock(&adaptiveStatic) == SCE_KERNEL_ERROR_EBUSY);
     Require(scePthreadMutexUnlock(&adaptiveStatic) == SCE_OK);
     Require(scePthreadMutexDestroy(&adaptiveStatic) == SCE_OK);
-    adaptiveStatic = reinterpret_cast<PthreadMutex>(std::uintptr_t{1});
+    adaptiveStatic = reinterpret_cast<PthreadMutexPrivate*>(std::uintptr_t{1});
     Require(scePthreadMutexDestroy(&adaptiveStatic) == SCE_OK);
 
     Require(scePthreadMutexattrInit(&attr) == SCE_OK);
@@ -223,7 +223,7 @@ int main() {
     Require(pthread_mutex_unlock_nid_postfix(&posixAdaptive) == 0);
     Require(pthread_mutex_destroy_nid_postfix(&posixAdaptive) == 0);
 
-    auto staticAdaptive = reinterpret_cast<PthreadMutex>(std::uintptr_t{1});
+    PthreadMutex staticAdaptive = reinterpret_cast<PthreadMutexPrivate*>(std::uintptr_t{1});
     Require(pthread_mutex_lock_nid_postfix(&staticAdaptive) == 0);
     Require(pthread_mutex_lock_nid_postfix(&staticAdaptive) == POSIX_EDEADLK);
     Require(pthread_mutex_unlock_nid_postfix(&staticAdaptive) == 0);

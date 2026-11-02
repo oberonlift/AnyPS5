@@ -1584,7 +1584,7 @@ int DoMprotect(const void* addr, size_t len, int prot, bool requireMappedStart) 
         if (!protectedPages) throw std::system_error(errno, std::generic_category(), "mprotect failed");
         if (inside != requested) RecordProtection(requestedPointer, static_cast<std::size_t>(inside - requested), prot);
         NoteGuestStackProtection(inside, insideBytes, (prot & 3) == 3);
-        GuestAllocations::GuestAllocationsInvalidate_nid_postfix(inside, insideBytes);
+        GuestAllocations::GuestAllocationsInvalidate_nid_postfix(GuestArena::HostToGuest(reinterpret_cast<const void*>(inside)), insideBytes);
         RecordProtection(insidePointer, insideBytes, prot);
         return 0;
     }

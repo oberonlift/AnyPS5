@@ -48,10 +48,10 @@ int main() {
     Require(sceNetThreadJoin(thread) == 0, "sceNetThreadJoin failed");
     Require(run.started == 1, "the thread did not run its entry with its argument");
 
-    Pthread untouched = reinterpret_cast<Pthread>(&run);
+    Pthread untouched = reinterpret_cast<PthreadPrivate*>(&run);
     *sceNetErrnoLoc() = 0;
     Require(sceNetThreadCreate(&untouched, nullptr, "anyps5-net-thread") == (NetError | Einval), "a null parameter was not refused with EINVAL");
-    Require(*sceNetErrnoLoc() == Einval && untouched == reinterpret_cast<Pthread>(&run), "a refused create set no errno or wrote the thread");
+    Require(*sceNetErrnoLoc() == Einval && untouched == reinterpret_cast<PthreadPrivate*>(&run), "a refused create set no errno or wrote the thread");
 
     NetThreadParameter exiting{ExitEarly, &run, 0, 1};
     Require(sceNetThreadCreate(&thread, &exiting, nullptr) == 0, "sceNetThreadCreate failed without a name");

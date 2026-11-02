@@ -11,7 +11,7 @@ namespace {
 
 void PatchJump(std::uint32_t* cmd, const volatile std::uint32_t* target, std::uint32_t sizeInDwords, const char* function) {
     Agc::Command::ValidatePacket(cmd, 0x3fu, 4, function);
-    const auto address = reinterpret_cast<std::uintptr_t>(target);
+    const auto address = GuestArena::HostToGuest(target);
     Agc::Command::CheckAddress(address, 4, function);
     Agc::Command::CheckBits(sizeInDwords, 0xfffffu, function);
     cmd[1] = static_cast<std::uint32_t>(address);

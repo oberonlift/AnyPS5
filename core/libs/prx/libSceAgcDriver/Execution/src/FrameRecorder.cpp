@@ -380,7 +380,7 @@ void FrameRecorder::collectShaderPages(std::span<const Shader* const> shaders, s
     for (const auto* shader : shaders) {
         if (shader == nullptr || !GuestMemory::Accessible(shader, sizeof(Shader))) continue;
         note(shader);
-        note(const_cast<const void*>(shader->code), shader->shader_size);
+        note(const_cast<const void*>(static_cast<const volatile void*>(shader->code)), shader->shader_size);
         note(shader->user_data);
         note(shader->cx_registers);
         note(shader->sh_registers);
@@ -389,7 +389,7 @@ void FrameRecorder::collectShaderPages(std::span<const Shader* const> shaders, s
         note(shader->output_semantics);
         if (shader->user_data == nullptr || !GuestMemory::Accessible(shader->user_data, sizeof(ShaderUserData))) continue;
         note(shader->user_data->direct_resource_offset);
-        for (const auto* sharps : shader->user_data->sharp_resource_offset) note(sharps);
+        for (const ShaderSharp* sharps : shader->user_data->sharp_resource_offset) note(sharps);
     }
 }
 

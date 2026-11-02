@@ -3,6 +3,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 
 #ifdef _WIN32
 struct _EXCEPTION_POINTERS;
@@ -14,8 +15,87 @@ namespace GuestArena {
 
 #ifdef ANYPS5_ENABLE_ASAN
 inline constexpr std::uintptr_t GuestAddressOffset = 0x0000100000000000ull;
+#elif defined(ANYPS5_GUEST_LIFTED) && defined(__APPLE__)
+inline constexpr std::uintptr_t GuestAddressOffset = 0x0000400000000000ull;
 #else
 inline constexpr std::uintptr_t GuestAddressOffset = 0;
+#endif
+
+#if defined(ANYPS5_GUEST_LIFTED) && defined(__APPLE__)
+#define ANYPS5_TRANSLATED_GUEST 1
+inline constexpr std::uintptr_t GuestTranslation = GuestAddressOffset;
+#else
+inline constexpr std::uintptr_t GuestTranslation = 0;
+#endif
+
+inline constexpr bool UntranslatedAddress(const std::uint64_t address) {
+    return address < 4096 || address > ~std::uint64_t{4096};
+}
+
+inline void* GuestToHost(const std::uint64_t address) {
+    return reinterpret_cast<void*>(UntranslatedAddress(address) ? address : address + GuestTranslation);
+}
+
+inline std::uint64_t HostToGuest(const volatile void* const pointer) {
+    const auto address = reinterpret_cast<std::uint64_t>(pointer);
+    return UntranslatedAddress(address) ? address : address - GuestTranslation;
+}
+
+inline constexpr std::uint64_t GuestSpaceBytes = std::uint64_t{1} << 40;
+
+inline bool InGuestSpace(const void* const pointer) {
+    return GuestTranslation != 0 && reinterpret_cast<std::uint64_t>(pointer) - GuestTranslation < GuestSpaceBytes;
+}
+
+inline void* StoredPointer(const void* const field) {
+    std::uint64_t value = 0;
+    std::memcpy(&value, field, sizeof(value));
+    return InGuestSpace(field) ? GuestToHost(value) : reinterpret_cast<void*>(value);
+}
+
+#ifdef ANYPS5_TRANSLATED_GUEST
+template<typename T>
+class GuestFormPointer {
+public:
+    GuestFormPointer() = default;
+    GuestFormPointer(std::nullptr_t) : _address(0) {}
+    GuestFormPointer(T* const pointer) : _address(HostToGuest(pointer)) {}
+
+    operator T*() const {
+        return static_cast<T*>(GuestToHost(_address));
+    }
+
+    T* operator->() const {
+        return *this;
+    }
+
+    GuestFormPointer& operator+=(const std::ptrdiff_t count) {
+        return *this = static_cast<T*>(*this) + count;
+    }
+
+    GuestFormPointer& operator-=(const std::ptrdiff_t count) {
+        return *this = static_cast<T*>(*this) - count;
+    }
+
+    GuestFormPointer& operator++() {
+        return *this += 1;
+    }
+
+    GuestFormPointer operator++(int) {
+        const auto previous = *this;
+        *this += 1;
+        return previous;
+    }
+
+private:
+    std::uint64_t _address;
+};
+
+template<typename T>
+using GuestPointer = GuestFormPointer<T>;
+#else
+template<typename T>
+using GuestPointer = T*;
 #endif
 
 #ifndef _WIN32
@@ -30,6 +110,9 @@ using SharedBackingRunsResolver = bool (*)(std::uintptr_t address, std::size_t b
 
 extern "C" {
 
+#ifdef ANYPS5_GUEST_LIFTED
+std::uint64_t GuestArenaTranslation_nid_no_patch();
+#endif
 bool GuestArenaAvailable_nid_postfix();
 bool GuestArenaContains_nid_postfix(const void* pointer, std::size_t bytes);
 void* GuestArenaAllocate_nid_postfix(std::size_t bytes, std::size_t alignment);

@@ -106,6 +106,7 @@ private:
     bool InReadOnlySegment(const ZydisDecodedOperand& operand, const unsigned bits) const;
     llvm::Value* Load(llvm::Value* address, const unsigned bits, const bool ordered);
     void Store(llvm::Value* address, llvm::Value* value, const bool ordered);
+    llvm::Value* HostPointer(llvm::Value* address);
     llvm::LoadInst* GuestLoad(llvm::Value* address, const unsigned bits);
     llvm::StoreInst* GuestStore(llvm::Value* address, llvm::Value* value);
 

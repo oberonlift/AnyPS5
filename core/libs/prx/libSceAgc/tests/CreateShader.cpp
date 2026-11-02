@@ -50,7 +50,7 @@ void fill(Binary& binary, ShaderRegs::ShaderBinaryType type, std::uint32_t low) 
 Shader* create(Binary& binary) {
     registered = nullptr;
     registrations = 0;
-    Shader* created = nullptr;
+    GuestArena::GuestPointer<Shader> created = nullptr;
     check(sceAgcCreateShader(&created, &binary.shader, code.data()) == 0, "sceAgcCreateShader failed");
     check(created == &binary.shader && registered == &binary.shader && registrations == 1, "the created shader is not the header, registered once");
     check(binary.shader.code == code.data(), "the code address was not stored in the header");

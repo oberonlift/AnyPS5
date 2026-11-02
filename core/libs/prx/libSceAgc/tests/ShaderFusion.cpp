@@ -139,14 +139,14 @@ void testFusion(std::size_t misalignment, std::uint32_t terminator = SSetpcS6) {
     Shader fused{};
     check(sceAgcFuseShaderHalves_0200(&fused, &halves.front, &halves.back, scratch) == 0, "fusion failed");
     for (std::size_t i = 0; i < 16; ++i) check(scratch[size.m_size + i] == 0xcd, "fusion wrote past the reported size");
-    const auto base = reinterpret_cast<std::uintptr_t>(fused.code);
+    const auto base = reinterpret_cast<std::uintptr_t>(static_cast<const volatile void*>(fused.code));
     const auto* memory = reinterpret_cast<const std::uint8_t*>(base);
     check(fused.type == static_cast<std::uint8_t>(ShaderRegs::ShaderBinaryType::Gs), "fused shader is not a GS");
     check(base % 256 == 0 && fused.shader_size == 256 + halves.back.shader_size, "fused code placement is wrong");
     check(word(memory, 0) == SMovS0 && word(memory, 1) == VMovV0, "front program was not copied");
     for (std::size_t i = 2; i < 64; ++i) check(word(memory, i) == SNop, "front program does not fall through to the back half");
     check(std::memcmp(memory + 256, halves.backCode.data(), halves.back.shader_size) == 0, "back program was not copied");
-    check(reinterpret_cast<std::uintptr_t>(fused.sh_registers) == reinterpret_cast<std::uintptr_t>(scratch), "fused registers are not in the caller's memory");
+    check(static_cast<ShaderRegister*>(fused.sh_registers) == static_cast<const void*>(scratch), "fused registers are not in the caller's memory");
     const auto* backLo = find(fused, 0x088u);
     const auto* frontLo = find(fused, 0x0C8u);
     check(backLo != nullptr && backLo->value == static_cast<std::uint32_t>((base + 256) >> 8u), "back program address was not patched");
@@ -184,19 +184,19 @@ void testScratchReuse() {
     Shader firstFused{};
     Shader secondFused{};
     check(sceAgcFuseShaderHalves_0200(&firstFused, &first.front, &first.back, scratch.data()) == 0, "first fusion failed");
-    const auto firstCode = reinterpret_cast<std::uintptr_t>(firstFused.code);
+    const auto firstCode = reinterpret_cast<std::uintptr_t>(static_cast<const volatile void*>(firstFused.code));
     check(sceAgcFuseShaderHalves_0200(&secondFused, &second.front, &second.back, scratch.data()) == 0, "second fusion failed");
-    const auto secondCode = reinterpret_cast<std::uintptr_t>(secondFused.code);
+    const auto secondCode = reinterpret_cast<std::uintptr_t>(static_cast<const volatile void*>(secondFused.code));
     check(firstCode != secondCode, "two fused programs share one code address");
     check(word(reinterpret_cast<const void*>(firstCode), 64) == SMovS0, "fusing into reused memory overwrote the first fused program");
     check(word(reinterpret_cast<const void*>(secondCode), 64) == VMovV0, "second fused program has the wrong back half");
     Shader again{};
     check(sceAgcFuseShaderHalves_0200(&again, &first.front, &first.back, scratch.data()) == 0, "repeated fusion failed");
-    check(reinterpret_cast<std::uintptr_t>(again.code) == firstCode, "the same halves were fused into a second program");
+    check(reinterpret_cast<std::uintptr_t>(static_cast<const volatile void*>(again.code)) == firstCode, "the same halves were fused into a second program");
     first.backCode[0] = VMovV0;
     Shader changed{};
     check(sceAgcFuseShaderHalves_0200(&changed, &first.front, &first.back, scratch.data()) == 0, "fusion of changed halves failed");
-    check(reinterpret_cast<std::uintptr_t>(changed.code) != firstCode && word(reinterpret_cast<const void*>(firstCode), 64) == SMovS0, "changed halves reused the earlier fused program");
+    check(reinterpret_cast<std::uintptr_t>(static_cast<const volatile void*>(changed.code)) != firstCode && word(reinterpret_cast<const void*>(firstCode), 64) == SMovS0, "changed halves reused the earlier fused program");
 }
 
 void testOffchipLdsEnable() {
@@ -374,7 +374,7 @@ void testHullHalves() {
     Shader fused{};
     check(sceAgcFuseShaderHalves_0200(&fused, &front, &back, scratch.data()) == 0, "hull fusion failed");
     check(fused.type == static_cast<std::uint8_t>(ShaderRegs::ShaderBinaryType::Hs) && fused.code == back.code && fused.sh_registers == scratch.data() && fused.user_data == nullptr, "hull halves were not fused at the register level");
-    const auto address = reinterpret_cast<std::uint64_t>(front.code);
+    const auto address = GuestArena::HostToGuest(front.code);
     check(scratch[0].value == 0x11u && scratch[1].value == 0x22u, "hull checksums were not taken from the front half");
     check(scratch[2].value == 7u && scratch[3].value == (6u << 1u), "hull resource registers were not merged");
     check(scratch[4].value == static_cast<std::uint32_t>(address >> 8u) && scratch[5].value == (0xab00u | static_cast<std::uint32_t>((address >> 40u) & 0xffu)), "hull local program address does not point at the front half");

@@ -1,4 +1,5 @@
 #include "prx/libSceAgcDriver/Execution/include/Driver/Driver.hpp"
+#include "prx/libc/include/GuestArena.hpp"
 #include "prx/libSceAgcDriver/Execution/include/Driver/Memory/BufferFill.hpp"
 #include "prx/libSceAgcDriver/Execution/include/Mutex.hpp"
 #include "ThreadOwned.hpp"
@@ -278,7 +279,7 @@ bool Driver::fillBuffer(QueueState& queue, std::uint32_t queueId, std::span<cons
         GuestMemory::TagGpuLockSite(GuestMemory::GpuLockSite::Fill);
         inputLock.lock();
         recordLabelsForPacket(localDevice.get(), queueId);
-        if (!GuestMemory::Accessible(reinterpret_cast<const void*>(memoryFill->valueAddress), 4)) return false;
+        if (!GuestMemory::Accessible(GuestArena::GuestToHost(memoryFill->valueAddress), 4)) return false;
         GuestMemory::Read(memoryFill->valueAddress, std::as_writable_bytes(std::span(pattern).first(1)), 4);
         std::fill(pattern.begin() + 1, pattern.end(), pattern[0]);
         base = memoryFill->address;
@@ -291,13 +292,13 @@ bool Driver::fillBuffer(QueueState& queue, std::uint32_t queueId, std::span<cons
         GuestMemory::TagGpuLockSite(GuestMemory::GpuLockSite::Fill);
         inputLock.lock();
         recordLabelsForPacket(localDevice.get(), queueId);
-        if (!GuestMemory::Accessible(reinterpret_cast<const void*>(range->control), 8)) return false;
+        if (!GuestMemory::Accessible(GuestArena::GuestToHost(range->control), 8)) return false;
         std::array<std::uint32_t, 2> control;
         GuestMemory::Read(range->control, std::as_writable_bytes(std::span(control)), 4);
         const auto count = range->UniformBytes(control[0], control[1]);
         if (!count) return false;
         if (*count == 0) return true;
-        if (!GuestMemory::Accessible(reinterpret_cast<const void*>(range->source), 4)) return false;
+        if (!GuestMemory::Accessible(GuestArena::GuestToHost(range->source), 4)) return false;
         GuestMemory::Read(range->source, std::as_writable_bytes(std::span(pattern).first(1)), 4);
         std::fill(pattern.begin() + 1, pattern.end(), pattern[0]);
         base = range->destination;
@@ -321,7 +322,7 @@ bool Driver::fillBuffer(QueueState& queue, std::uint32_t queueId, std::span<cons
             GuestMemory::TagGpuLockSite(GuestMemory::GpuLockSite::Fill);
             inputLock.lock();
             recordLabelsForPacket(localDevice.get(), queueId);
-            if (!GuestMemory::Accessible(reinterpret_cast<const void*>(source), sizeof(pattern))) return false;
+            if (!GuestMemory::Accessible(GuestArena::GuestToHost(source), sizeof(pattern))) return false;
             GuestMemory::Read(source, std::as_writable_bytes(std::span(pattern)), 4);
         } else {
             pattern = {userData[4], userData[5], userData[6], userData[7]};
@@ -363,7 +364,7 @@ void Driver::storeBufferFill(std::uint32_t queueId, std::uint64_t base, std::siz
 
     recordLabelsForPacket(localDevice.get(), queueId);
     phase(FillLabels);
-    GuestMemory::CheckRange(reinterpret_cast<const void*>(base), bytes, 16, true);
+    GuestMemory::CheckRange(GuestArena::GuestToHost(base), bytes, 16, true);
     phase(FillCheck);
     const auto coverage = Graphics::StorageTexture::ClassifyFill(base, bytes);
     phase(FillClassify);

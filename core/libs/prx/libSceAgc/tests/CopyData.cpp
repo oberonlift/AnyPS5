@@ -22,7 +22,7 @@ void check(bool condition, const char* message) {
 template <typename TAction>
 void expectFailure(Storage& storage, TAction action, const char* message) {
     const auto before = storage.words;
-    const auto* cursor = storage.buffer.cursor_up;
+    const std::uint32_t* cursor = storage.buffer.cursor_up;
     try {
         action();
     } catch (const std::runtime_error&) {

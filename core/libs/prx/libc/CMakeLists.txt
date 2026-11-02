@@ -196,6 +196,9 @@ if(BUILD_TESTING)
             "PATH=path_list_prepend:$<TARGET_FILE_DIR:libc>")
     endif()
 endif()
+if(APPLE AND ANYPS5_GUEST_LIFTED)
+    target_sources(libc PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../libkernel/System/src/MimallocMacOs.cpp)
+endif()
 
 target_include_directories(libc PRIVATE
         ${LIBS_INCLUDE_DIR}

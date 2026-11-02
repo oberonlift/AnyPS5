@@ -1,4 +1,5 @@
 #include "prx/libSceAgcDriver/Graphics/include/DccMetadata.hpp"
+#include "prx/libc/include/GuestArena.hpp"
 #include "prx/libSceAgcDriver/Execution/include/GuestMemory.hpp"
 #include "prx/libSceAgcDriver/Graphics/include/GuestBufferMemory.hpp"
 #include "prx/libSceAgcDriver/Graphics/include/Recorder.hpp"
@@ -330,7 +331,7 @@ LandedKeys KeysAfterPendingWrites(const Recorder& recorder, std::uint64_t begin,
     }
     for (const auto& [from, to] : unwritten) {
         if (landed.mixed) break;
-        const auto* keys = reinterpret_cast<const std::uint8_t*>(from);
+        const auto* keys = static_cast<const std::uint8_t*>(GuestArena::GuestToHost(from));
         if (AllKeysEqual(keys + 1, static_cast<std::size_t>(to - from) - 1, keys[0])) see(keys[0]);
         else landed.mixed = true;
     }
@@ -357,7 +358,7 @@ std::optional<DccKeys> PendingStoreKeys(Recorder& recorder, std::uint64_t begin,
         if (AnyShadowedOverlaps(begin, count)) return std::nullopt;
     }
     if (note != 0 && recorder.NewestWriteNote(begin, count) == note) return keys;
-    if (!GuestMemory::Accessible(reinterpret_cast<const void*>(begin), count)) return std::nullopt;
+    if (!GuestMemory::Accessible(GuestArena::GuestToHost(begin), count)) return std::nullopt;
     const auto landed = KeysAfterPendingWrites(recorder, begin, count);
     if (landed.mixed) return DccKeys::Mixed;
     if (landed.unknown || landed.value < 0) return std::nullopt;
@@ -367,7 +368,7 @@ std::optional<DccKeys> PendingStoreKeys(Recorder& recorder, std::uint64_t begin,
 // Whether the keys already read as uncompressed: scans the same bytes as ReadDccKeys, so it counts
 // as a scan too.
 bool AlreadyUncompressed(std::uint64_t metaAddress, std::size_t count) {
-    const auto* keys = reinterpret_cast<const std::uint8_t*>(metaAddress);
+    const auto* keys = static_cast<const std::uint8_t*>(GuestArena::GuestToHost(metaAddress));
     const auto start = ScanProfileEnabled() ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
     const bool uncompressed = AllKeysEqual(keys, count, 0xff);
     if (ScanProfileEnabled()) CountScan(count, start);
@@ -489,7 +490,7 @@ namespace {
 // than the bytes.
 DccKeys readDccKeys(std::uint64_t metaAddress, std::size_t count, bool& memoized) {
     memoized = false;
-    if (metaAddress == 0 || count == 0 || !GuestMemory::Accessible(reinterpret_cast<const void*>(metaAddress), count)) return DccKeys::Unreadable;
+    if (metaAddress == 0 || count == 0 || !GuestMemory::Accessible(GuestArena::GuestToHost(metaAddress), count)) return DccKeys::Unreadable;
     // A driver store still pending on the GPU is not in the bytes yet.
     if (const auto memo = MemoizedKeys(metaAddress, metaAddress + count)) {
         memoized = true;
@@ -509,7 +510,7 @@ DccKeys readDccKeys(std::uint64_t metaAddress, std::size_t count, bool& memoized
             recorder->SyncThrough(metaAddress, count);
         }
     }
-    const auto* keys = reinterpret_cast<const std::uint8_t*>(metaAddress);
+    const auto* keys = static_cast<const std::uint8_t*>(GuestArena::GuestToHost(metaAddress));
     const auto first = keys[0];
     const auto start = ScanProfileEnabled() ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
     const bool uniform = AllKeysEqual(keys + 1, count - 1, first);
@@ -557,7 +558,7 @@ std::size_t StoredKeyCount(std::uint64_t metaAddress, std::uint64_t surfaceBytes
     const auto keys = DccKeyBytes(surfaceBytes);
     Require(keyCount >= keys, "a DCC key range covers fewer keys than one per 256 surface bytes");
     if (metaAddress == 0 || keyCount == 0) return 0;
-    if (GuestMemory::Accessible(reinterpret_cast<const void*>(metaAddress), keyCount, true)) return keyCount;
+    if (GuestMemory::Accessible(GuestArena::GuestToHost(metaAddress), keyCount, true)) return keyCount;
     if (keyCount == keys) return 0;
     char message[256];
     std::snprintf(message, sizeof(message), "AGC graphics: DCC metadata 0x%llx is not writable over the 0x%zx key bytes of its surface (0x%zx at one per 256 bytes): metadata smaller than the console's DCC extent is not modeled", static_cast<unsigned long long>(metaAddress), keyCount, keys);
@@ -583,7 +584,7 @@ DccKeys CurrentDccKeys(std::uint64_t metaAddress, std::uint64_t surfaceBytes, st
 }
 
 std::optional<std::uint8_t> CurrentUniformMetadataByte(std::uint64_t address, std::size_t bytes) {
-    if (address == 0 || bytes == 0 || !GuestMemory::Accessible(reinterpret_cast<const void*>(address), bytes)) return std::nullopt;
+    if (address == 0 || bytes == 0 || !GuestMemory::Accessible(GuestArena::GuestToHost(address), bytes)) return std::nullopt;
     if (GuestMemory::GpuMutex().HeldByThisThread()) {
         if (AnyShadowedOverlaps(address, bytes)) PublishShadow(address, bytes, PublishScope::Whole, PublishReason::Keys);
         if (auto* recorder = Recorder::Active(); recorder != nullptr && (recorder->PendingWriteOverlaps(address, bytes) || AnyShadowedOverlaps(address, bytes))) {
@@ -614,7 +615,7 @@ bool IsDccClear(DccKeys keys) {
 }
 
 std::optional<std::uint8_t> LandedUniformMetadataByte(std::uint64_t address, std::size_t bytes) {
-    if (address == 0 || bytes == 0 || !GuestMemory::Accessible(reinterpret_cast<const void*>(address), bytes)) return std::nullopt;
+    if (address == 0 || bytes == 0 || !GuestMemory::Accessible(GuestArena::GuestToHost(address), bytes)) return std::nullopt;
     if (AnyShadowedOverlaps(address, bytes)) PublishShadow(address, bytes, PublishScope::Whole, PublishReason::Keys);
     if (AnyShadowedOverlaps(address, bytes)) return std::nullopt;
     GuestMemory::FlushGpuWrites(address, bytes);
@@ -624,7 +625,7 @@ std::optional<std::uint8_t> LandedUniformMetadataByte(std::uint64_t address, std
         if (landed.mixed || landed.unknown || landed.value < 0) return std::nullopt;
         return static_cast<std::uint8_t>(landed.value);
     }
-    const auto* data = reinterpret_cast<const std::uint8_t*>(address);
+    const auto* data = static_cast<const std::uint8_t*>(GuestArena::GuestToHost(address));
     if (!AllKeysEqual(data + 1, bytes - 1, data[0])) return std::nullopt;
     return data[0];
 }
@@ -863,7 +864,7 @@ DccKeys EncodedKeys(const GuestTextureResource& resource, DccKeys keys) {
 
 bool PendingFillsLeaveUncompressed(const Recorder& recorder, const GuestTextureResource& resource, std::size_t count) {
     const auto begin = resource.dccAddress;
-    if (!GuestMemory::Accessible(reinterpret_cast<const void*>(begin), count) || AnyShadowedOverlaps(begin, count)) return false;
+    if (!GuestMemory::Accessible(GuestArena::GuestToHost(begin), count) || AnyShadowedOverlaps(begin, count)) return false;
     const auto landed = KeysAfterPendingWrites(recorder, begin, count);
     return landed.mixed || (landed.value >= 0 && EncodedKeys(resource, ByteKeys(static_cast<std::uint8_t>(landed.value))) == DccKeys::Uncompressed);
 }

@@ -111,7 +111,7 @@ int APS5_VABI scePngEncEncode(void* handle, const PngEncEncodeParam* param, PngE
     const PngEncContext* ctx = context(handle);
     if (!ctx) return PNG_ENC_ERROR_INVALID_HANDLE;
     if (!param) return PNG_ENC_ERROR_INVALID_ADDR;
-    if (!param->image_mem_addr || reinterpret_cast<std::uintptr_t>(param->image_mem_addr) % 4 != 0 || !param->png_mem_addr) return PNG_ENC_ERROR_INVALID_ADDR;
+    if (!param->image_mem_addr || reinterpret_cast<std::uintptr_t>(static_cast<const void*>(param->image_mem_addr)) % 4 != 0 || !param->png_mem_addr) return PNG_ENC_ERROR_INVALID_ADDR;
     if (param->image_mem_size == 0 || param->png_mem_size == 0) return PNG_ENC_ERROR_INVALID_SIZE;
     const std::uint32_t width = param->image_width;
     const std::uint32_t height = param->image_height;
@@ -150,7 +150,7 @@ int APS5_VABI scePngEncEncode(void* handle, const PngEncEncodeParam* param, PngE
     const bool overflow = png.size() > param->png_mem_size;
     if (outputInfo) *outputInfo = {overflow ? 0 : static_cast<std::uint32_t>(png.size()), overflow ? 0 : height};
     if (overflow) return PNG_ENC_ERROR_DATA_OVERFLOW;
-    std::copy(png.begin(), png.end(), param->png_mem_addr);
+    std::copy(png.begin(), png.end(), static_cast<std::uint8_t*>(param->png_mem_addr));
     return static_cast<int>(png.size());
 }
 

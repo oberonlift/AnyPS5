@@ -1051,8 +1051,6 @@ int APS5_VABI puts_nid_postfix(const char* s) {
     return 0;
 }
 
-extern FileStream* __stdinp_nid_postfix;
-
 int APS5_VABI vfscanf_nid_postfix(FileStream* stream, const char* format, VaList* args) {
 #ifndef _WIN32
     if (HasNarrowCharacterScan(format) && LibcDetail::FindQuadScanDirective(format) == nullptr) {

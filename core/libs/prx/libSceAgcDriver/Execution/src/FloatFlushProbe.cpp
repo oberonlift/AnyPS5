@@ -1,12 +1,14 @@
 #include "prx/libSceAgcDriver/Execution/include/FloatFlushProbe.hpp"
 #include "prx/libSceAgcDriver/Execution/include/FloatProbeTolerance.hpp"
 #include "prx/libSceAgcDriver/Execution/include/VulkanDevice.hpp"
+#include "prx/libc/include/GuestArena.hpp"
 
 #include <algorithm>
 #include <array>
 #include <optional>
 #include <span>
 #include <utility>
+#include <stdexcept>
 #include <vector>
 
 namespace AgcDriver {
@@ -233,6 +235,9 @@ void CompareTranscendental(FloatFlushProbeResult& result, const std::vector<std:
 }
 
 FloatFlushProbeResult ProbeFloat32FlushToZero(VulkanDevice& device, const ShaderRecompiler::SpirvTarget& target) {
+#ifdef ANYPS5_TRANSLATED_GUEST
+    throw std::runtime_error("AGC driver: the f32 denormal flush probe runs from the driver's own memory, which a translated guest's GPU cannot address");
+#endif
     FloatFlushProbeResult result;
     const std::array<std::optional<ShaderRecompiler::ShaderFloatMode>, 3> modes{std::nullopt, ShaderRecompiler::ShaderFloatMode{0xc0u, true, false, false}, ShaderRecompiler::ShaderFloatMode{0x00u, false, true, false}};
     const std::array<std::pair<std::span<const std::uint32_t>, const std::uint32_t (*)[Inputs]>, 3> programs{{{MixedCode, MixedRows}, {TinyCode, TinyRows}, {MixedTinyCode, MixedTinyRows}}};

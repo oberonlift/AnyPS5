@@ -101,7 +101,7 @@ ComputeCommandSizes MeasureComputeCommands() {
     encoded = encoded && sceAgcAcbWaitRegMem(&buffer, 0, 3, 3, nullptr, 0, ~std::uint64_t{0}, 0x190) != nullptr;
     encoded = encoded && sceAgcAcbRewind(&buffer, 1) != nullptr;
     encoded = encoded && sceAgcCbReleaseMem(&buffer, 0x2f, 0x200, 1, 3, nullptr, 1, 0, 0, 0, 0, 0) != nullptr;
-    const auto* tail = buffer.cursor_up;
+    const std::uint32_t* tail = buffer.cursor_up;
     encoded = encoded && sceAgcAcbWriteData(&buffer, 2, 3, 0, userData.data(), 1, 1, 0) != nullptr;
     const auto syncBytes = static_cast<std::uint64_t>(buffer.cursor_up - words.data()) * 4;
     const auto syncTailWords = static_cast<std::size_t>(buffer.cursor_up - tail);

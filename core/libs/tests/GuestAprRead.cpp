@@ -47,7 +47,7 @@ public:
         }
         stream.close();
         Require(!stream.fail(), "cannot create the synthetic APR file");
-        const char* path = FilePath;
+        const GuestArena::GuestPointer<const char> path = FilePath;
         std::uint32_t failed = 0;
         Require(sceKernelAprResolveFilepathsToIds(&path, 1, &id, &failed) == 0 && failed == 0, "cannot resolve the synthetic APR file");
     }
@@ -182,7 +182,7 @@ void TestQueries() {
     constexpr int GuestEinval = 22;
     constexpr int GuestEnoent = 2;
     constexpr int GuestEfault = 14;
-    const char* names[] = {"generated.bin", "missing.bin"};
+    const GuestArena::GuestPointer<const char> names[] = {"generated.bin", "missing.bin"};
     std::array<std::uint32_t, 2> ids{0, 0};
     std::array<std::uint64_t, 2> sizes{1, 1};
     std::uint32_t failed = 7;

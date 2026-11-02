@@ -448,7 +448,7 @@ static void CheckBatchMapStopsAtInvalidEntry() {
         Require(sceKernelBatchMap2(entries, 3, &processed, 0) == SCE_KERNEL_ERROR_EINVAL);
         Require(processed == 1);
         Require(entries[0].start != nullptr && entries[1].start == nullptr && entries[2].start == nullptr);
-        Require(sceKernelMunmap(reinterpret_cast<std::uint64_t>(entries[0].start), page) == 0);
+        Require(sceKernelMunmap(GuestArena::HostToGuest(entries[0].start), page) == 0);
     }
     KernelBatchMapEntry entries[3] = {flexible(), flexible(), flexible()};
     entries[1].operation = protect;
@@ -464,7 +464,7 @@ static void CheckBatchMapStopsAtInvalidEntry() {
     processed = -1;
     Require(sceKernelBatchMap2(unmaps, 2, &processed, 0) == SCE_KERNEL_ERROR_EINVAL && processed == 1);
     Require(sceKernelBatchMap2(entries, 1, &processed, 0) == 0 && processed == 1);
-    Require(sceKernelMunmap(reinterpret_cast<std::uint64_t>(entries[0].start), page) == 0);
+    Require(sceKernelMunmap(GuestArena::HostToGuest(entries[0].start), page) == 0);
 }
 
 static void CheckBatchMapPlacesAtTheGivenStart() {

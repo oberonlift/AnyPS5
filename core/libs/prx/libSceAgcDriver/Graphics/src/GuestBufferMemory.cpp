@@ -683,7 +683,7 @@ const char* bindImport(const Context& context, HostImport& entry, VkExternalMemo
 }
 
 const char* createHostPointerImport(const Context& context, HostImport& entry, VkResult& failure) {
-    void* const host = entry.alias != nullptr ? entry.alias : reinterpret_cast<void*>(entry.base);
+    void* const host = entry.alias != nullptr ? entry.alias : GuestArena::GuestToHost(entry.base);
     VkMemoryHostPointerPropertiesEXT pointer{VK_STRUCTURE_TYPE_MEMORY_HOST_POINTER_PROPERTIES_EXT};
     if (const auto result = context.Function<PFN_vkGetMemoryHostPointerPropertiesEXT>("vkGetMemoryHostPointerPropertiesEXT")(context.device, VK_EXTERNAL_MEMORY_HANDLE_TYPE_HOST_ALLOCATION_BIT_EXT, host, &pointer); result != VK_SUCCESS) {
         failure = result;
@@ -1037,7 +1037,7 @@ const char* createBackingImport(const Context& context, HostImport& entry, int f
 }
 
 bool resolveBackingRuns(std::uint64_t rangeBase, std::uint64_t rangeBytes, int& file, std::array<GuestArena::SharedBackingRun, DmaBufRunLimit>& runs, std::size_t& count) {
-    const auto base = static_cast<std::uintptr_t>(rangeBase);
+    const auto base = reinterpret_cast<std::uintptr_t>(GuestArena::GuestToHost(rangeBase));
     const auto bytes = static_cast<std::size_t>(rangeBytes);
     if (GuestArena::GuestArenaSharedBackingRuns_nid_postfix(base, bytes, &file, runs.data(), runs.size(), &count)) return true;
     std::uint64_t offset = 0;
@@ -2354,7 +2354,7 @@ const HostImport* importRunAt(const Context& context, HostImports& state, Import
         if (entry.alias == nullptr) return nullptr;
     }
 #else
-    if (!GuestMemory::Accessible(reinterpret_cast<const void*>(base), static_cast<std::size_t>(bytes), true)) return failedImport();
+    if (!GuestMemory::Accessible(GuestArena::GuestToHost(base), static_cast<std::size_t>(bytes), true)) return failedImport();
 #endif
     VkResult result = VK_SUCCESS;
     const char* step = nullptr;
@@ -2920,7 +2920,7 @@ constexpr std::uint8_t SparseZero = 2;
 // Compares a block's guest bytes with the mirror's shadow and copies a changed block into the device
 bool compareBlock(const RefreshBlock& block) {
     const auto offset = static_cast<std::size_t>(block.address - block.mirror->base);
-    const auto* guest = reinterpret_cast<const std::byte*>(block.address);
+    const auto* guest = static_cast<const std::byte*>(GuestArena::GuestToHost(block.address));
     if (block.mirror->resident != nullptr) {
         auto* target = block.mirror->resident->Block(block.address);
         if (block.fill == SparseZero) {
@@ -3061,7 +3061,7 @@ void syncRange(std::uint64_t address, std::uint64_t bytes) {
 }
 
 void prepareRange(std::uint64_t address, std::uint64_t bytes) {
-    Require(GuestMemory::Accessible(reinterpret_cast<const void*>(address), static_cast<std::size_t>(bytes)), "image mirror range became inaccessible");
+    Require(GuestMemory::Accessible(GuestArena::GuestToHost(address), static_cast<std::size_t>(bytes)), "image mirror range became inaccessible");
     syncRange(address, bytes);
 }
 
@@ -3368,7 +3368,7 @@ std::shared_ptr<ImageMirror> acquireMirror(const Context& context, const std::sh
         if (refreshSparseMirror(*mirror, blocks)) return mirror;
     }
     Pieces pieces;
-    if (!GuestMemory::Accessible(reinterpret_cast<const void*>(selected.address), selected.bytes, range->writable && !heap)) {
+    if (!GuestMemory::Accessible(GuestArena::GuestToHost(selected.address), selected.bytes, range->writable && !heap)) {
         if (!heap || !sparseMirrorsEnabled()) return nullptr;
         pieces = GuestMemory::DescribeCommitted(selected.address, selected.bytes).ranges;
         if (pieces.empty()) return nullptr;
@@ -4060,7 +4060,7 @@ void ClearHostImports(VkDevice device) {
 namespace {
 
 void runImportProbe(const Context& context, std::uint64_t base, std::uint64_t bytes, const std::function<const char*(HostImport&, VkResult&)>& importStep, const std::function<bool(std::uint32_t&)>& collect, ImportProbe& probe, const std::function<const char*(HostImport&, VkResult&)>& settleStep = {}) {
-    HostImport import{base, bytes, VK_NULL_HANDLE, VK_NULL_HANDLE, 0};
+    HostImport import{GuestArena::HostToGuest(reinterpret_cast<const void*>(base)), bytes, VK_NULL_HANDLE, VK_NULL_HANDLE, 0};
     VkBuffer destination = VK_NULL_HANDLE;
     VkDeviceMemory destinationMemory = VK_NULL_HANDLE;
     VkCommandBuffer commands[3]{};
@@ -5561,7 +5561,7 @@ void GuestBufferMemory::AddSnapshot(const GuestMemorySnapshot& snapshot) {
             return;
         }
         const auto offset = static_cast<std::size_t>(snapshot.address - owner->begin);
-        const auto* source = live ? reinterpret_cast<const std::byte*>(snapshot.address) : owner->snapshot.data() + offset;
+        const auto* source = live ? static_cast<const std::byte*>(GuestArena::GuestToHost(snapshot.address)) : owner->snapshot.data() + offset;
         if (std::memcmp(source, snapshot.bytes.data(), snapshot.bytes.size()) != 0) {
             std::size_t first = 0;
             while (first < snapshot.bytes.size() && source[first] == snapshot.bytes[first]) ++first;
@@ -6523,7 +6523,7 @@ void GuestBufferMemory::recordGpuCopies(std::span<Region* const> copies, bool ad
         auto copyOffset = region->begin - region->copySourceBase;
         if (!pendingWriter && !writable) {
             inputSnapshot = std::make_shared<Buffer>(context, static_cast<std::size_t>(bytes), VK_BUFFER_USAGE_TRANSFER_SRC_BIT);
-            std::memcpy(inputSnapshot->Bytes().data(), reinterpret_cast<const void*>(address), static_cast<std::size_t>(bytes));
+            std::memcpy(inputSnapshot->Bytes().data(), GuestArena::GuestToHost(address), static_cast<std::size_t>(bytes));
             copySource = inputSnapshot->Handle();
             copyOffset = 0;
             recorder->Keep(inputSnapshot, inputSnapshot->Bytes().size());

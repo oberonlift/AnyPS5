@@ -1,5 +1,6 @@
 #include "Runtime.hpp"
 
+#include <ps5lift/Bridge.hpp>
 #include <ps5lift/State.h>
 
 extern "C" {
@@ -452,7 +453,8 @@ void Ps5Lift::RequireNoPendingX87Exceptions(const Ps5LiftState& state) {
     if (pending != 0) ps5lift_fail("fwait with unmasked x87 exceptions 0x%x pending; the console raises SIGFPE", pending);
 }
 
-extern "C" std::uint32_t ps5lift_x87(Ps5LiftState* state, const std::uint32_t operation, const std::uint32_t format, const std::uint64_t address, const std::uint32_t index) {
+extern "C" std::uint32_t ps5lift_x87(Ps5LiftState* state, const std::uint32_t operation, const std::uint32_t format, const std::uint64_t guest, const std::uint32_t index) {
+    const auto address = reinterpret_cast<std::uint64_t>(Ps5Lift::Bridge::HostAddress(guest));
     switch (operation) {
     case PS5LIFT_X87_INITIALIZE:
         state->X87Control = InitialControl;

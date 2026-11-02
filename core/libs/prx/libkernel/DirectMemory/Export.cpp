@@ -1,4 +1,5 @@
 #include "prx/libkernel/include/Api.hpp"
+#include "prx/libc/include/GuestArena.hpp"
 #include "prx/libc/include/Api.hpp"
 #include <cstdint>
 #include <cstddef>
@@ -330,10 +331,11 @@ int APS5_VABI sceKernelMprotect(const void* addr, size_t len, int prot) {
 }
 
 int APS5_VABI sceKernelMunmap(uint64_t vaddr, size_t len) {
- const int result = DoMunmap(reinterpret_cast<void*>(vaddr), len);
+ const auto host = reinterpret_cast<uintptr_t>(GuestArena::GuestToHost(vaddr));
+ const int result = DoMunmap(reinterpret_cast<void*>(host), len);
  if (result == 0) {
-  _releaseFlexible(static_cast<uintptr_t>(vaddr), len);
-  ForgetLockedRange(static_cast<uintptr_t>(vaddr), static_cast<uintptr_t>(vaddr) + len);
+  _releaseFlexible(host, len);
+  ForgetLockedRange(host, host + len);
  }
  return result;
 }
@@ -381,10 +383,10 @@ int APS5_VABI sceKernelVirtualQuery(const void* addr, int flags, VirtualQueryInf
   info->end = reservedEnd;
   return 0;
  }
- const auto best = GuestAllocations::GuestAllocationsLookup_nid_postfix(address, (flags & findNext) != 0);
+ const auto best = GuestAllocations::GuestAllocationsLookup_nid_postfix(GuestArena::HostToGuest(addr), (flags & findNext) != 0);
  if (best != nullptr) {
-  info->start = best->address;
-  info->end = best->address + best->bytes;
+  info->start = reinterpret_cast<uintptr_t>(GuestArena::GuestToHost(best->address));
+  info->end = info->start + best->bytes;
   info->protection = (best->readable ? 1 : 0) | (best->writable ? 2 : 0) | (!best->releasable ? 4 : 0);
   int recorded = 0;
   if (GuestProtection(std::max<uintptr_t>(address, info->start), &recorded)) info->protection = recorded;
@@ -610,12 +612,15 @@ int APS5_VABI sceKernelBatchMap2(KernelBatchMapEntry* entries, int num_entries, 
    break;
   }
   switch (entry.operation) {
-  case OpMapDirect:
-   result = DoMapDirect(&entry.start, entry.length, static_cast<uint8_t>(entry.protection), flags, static_cast<int64_t>(entry.offset), 0);
-   if (result == 0) _releaseFlexible(reinterpret_cast<uintptr_t>(entry.start), entry.length);
+  case OpMapDirect: {
+   void* start = entry.start;
+   result = DoMapDirect(&start, entry.length, static_cast<uint8_t>(entry.protection), flags, static_cast<int64_t>(entry.offset), 0);
+   entry.start = start;
+   if (result == 0) _releaseFlexible(reinterpret_cast<uintptr_t>(start), entry.length);
    break;
+  }
   case OpUnmap:
-   result = sceKernelMunmap(reinterpret_cast<uint64_t>(entry.start), entry.length);
+   result = sceKernelMunmap(GuestArena::HostToGuest(entry.start), entry.length);
    break;
   case OpProtect:
    result = DoMprotect(entry.start, entry.length, static_cast<uint8_t>(entry.protection));
@@ -623,9 +628,12 @@ int APS5_VABI sceKernelBatchMap2(KernelBatchMapEntry* entries, int num_entries, 
   case OpTypeProtect:
    result = DoMtypeprotect(entry.start, entry.length, static_cast<uint8_t>(entry.type), static_cast<uint8_t>(entry.protection));
    break;
-  case OpMapFlexible:
-   result = _mapFlexible(&entry.start, entry.length, static_cast<uint8_t>(entry.protection), flags);
+  case OpMapFlexible: {
+   void* start = entry.start;
+   result = _mapFlexible(&start, entry.length, static_cast<uint8_t>(entry.protection), flags);
+   entry.start = start;
    break;
+  }
   }
   if (result != 0) break;
  }

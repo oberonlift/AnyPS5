@@ -245,7 +245,7 @@ int Append(AjmBatchInfo* info, const JobHeader& header, const AjmBuffer* inputs,
     const std::size_t parameterBytes = (header.parameterSize + 7u) & ~std::size_t{7};
     const std::size_t bytes = sizeof(PackedJob) + (header.inputCount + header.outputCount) * sizeof(AjmBuffer) + parameterBytes;
     if (info->offset > info->size || bytes > info->size - info->offset) return SCE_AJM_ERROR_OUT_OF_RESOURCES;
-    auto* cursor = static_cast<std::uint8_t*>(info->p_buffer) + info->offset;
+    auto* cursor = static_cast<std::uint8_t*>(static_cast<void*>(info->p_buffer)) + info->offset;
     const PackedJob record{static_cast<std::uint8_t>(header.kind), static_cast<std::uint8_t>(header.inputCount), static_cast<std::uint8_t>(header.outputCount), static_cast<std::uint8_t>(header.parameterSize), header.instance, header.flags, header.sideband, static_cast<std::uint32_t>(header.sidebandSize), static_cast<std::uint32_t>(bytes)};
     std::memcpy(cursor, &record, sizeof(record));
     cursor += sizeof(record);
@@ -543,11 +543,11 @@ class JobInput {
 public:
     JobInput(const JobHeader& job, const AjmBuffer* inputs) {
         if (job.inputCount == 1) {
-            bytes = {static_cast<const std::uint8_t*>(inputs[0].ptr), static_cast<std::size_t>(inputs[0].size)};
+            bytes = {static_cast<const std::uint8_t*>(static_cast<const void*>(inputs[0].ptr)), static_cast<std::size_t>(inputs[0].size)};
             return;
         }
         for (std::uint32_t index = 0; index < job.inputCount; ++index) {
-            const auto* data = static_cast<const std::uint8_t*>(inputs[index].ptr);
+            const auto* data = static_cast<const std::uint8_t*>(static_cast<const void*>(inputs[index].ptr));
             joined.insert(joined.end(), data, data + inputs[index].size);
         }
         bytes = joined;
@@ -579,7 +579,7 @@ struct PcmOutputs {
     void Emit(const std::uint8_t* source, std::size_t bytes) {
         while (bytes > 0 && index < count) {
             const std::size_t chunk = std::min(buffers[index].size - offset, bytes);
-            std::memcpy(static_cast<std::uint8_t*>(buffers[index].ptr) + offset, source, chunk);
+            std::memcpy(static_cast<std::uint8_t*>(static_cast<void*>(buffers[index].ptr)) + offset, source, chunk);
             source += chunk;
             bytes -= chunk;
             produced += chunk;
@@ -1633,7 +1633,7 @@ std::size_t ControlInitializeSize(std::uint32_t codec) {
 }
 
 void Control(Instance& instance, const JobHeader& job, const AjmBuffer* inputs) {
-    const auto* input = job.inputCount ? static_cast<const std::uint8_t*>(inputs[0].ptr) : nullptr;
+    const auto* input = job.inputCount ? static_cast<const std::uint8_t*>(static_cast<const void*>(inputs[0].ptr)) : nullptr;
     const std::size_t inputSize = job.inputCount ? inputs[0].size : 0;
     const std::size_t gaplessSize = (job.flags & SIDEBAND_GAPLESS_DECODE) ? sizeof(SidebandGaplessDecode) : 0;
     const std::size_t initializeSize = (job.flags & CONTROL_INITIALIZE) ? ControlInitializeSize(instance.codec) : 0;
@@ -2135,7 +2135,7 @@ int APS5_VABI sceAjmBatchStart(uint32_t context, const AjmBatchInfo* info, int p
     (void)priority;
     if (!info || !batch || !info->p_buffer || info->offset > info->size) return SCE_AJM_ERROR_INVALID_PARAMETER;
     AJM_TRACE("[ajm] batch start: context %u, priority %d, %llu of %llu buffer bytes used\n", context, priority, static_cast<unsigned long long>(info->offset), static_cast<unsigned long long>(info->size));
-    const auto* cursor = static_cast<const std::uint8_t*>(info->p_buffer);
+    const auto* cursor = static_cast<const std::uint8_t*>(static_cast<const void*>(info->p_buffer));
     auto remaining = info->offset;
     std::vector<AjmBuffer> buffers;
     while (remaining != 0) {

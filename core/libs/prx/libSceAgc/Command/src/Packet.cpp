@@ -40,10 +40,10 @@ std::uint32_t Header(std::uint32_t opcode, std::uint32_t count, std::uint32_t fl
 namespace {
 
 std::uint32_t available(const CommandBuffer& buffer, const char* function) {
-    const auto bottom = reinterpret_cast<std::uintptr_t>(buffer.bottom);
-    const auto top = reinterpret_cast<std::uintptr_t>(buffer.top);
-    const auto up = reinterpret_cast<std::uintptr_t>(buffer.cursor_up);
-    const auto down = buffer.cursor_down != nullptr ? reinterpret_cast<std::uintptr_t>(buffer.cursor_down) : top;
+    const auto bottom = GuestArena::HostToGuest(buffer.bottom);
+    const auto top = GuestArena::HostToGuest(buffer.top);
+    const auto up = GuestArena::HostToGuest(buffer.cursor_up);
+    const auto down = buffer.cursor_down != nullptr ? GuestArena::HostToGuest(buffer.cursor_down) : top;
     Require(((bottom | top | up | down) & 3u) == 0, function, "misaligned command buffer");
     Require(bottom <= up && up <= down && down <= top, function, "invalid command buffer cursors");
     Require(bottom != 0 || top == 0, function, "null command buffer storage");
@@ -60,15 +60,15 @@ void Reserve(CommandBuffer* buffer, std::uint32_t count, const char* function) {
     if (available(*buffer, function) < count) {
         Require(buffer->callback != nullptr, function, "command buffer exhausted");
         Require(count <= std::numeric_limits<std::uint32_t>::max() - buffer->reserved_dw, function, "command buffer allocation overflow");
-        Require(buffer->callback(buffer, count + buffer->reserved_dw, buffer->user_data), function, "command buffer allocation callback failed");
+        Require(buffer->callback(reinterpret_cast<CommandBuffer*>(GuestArena::HostToGuest(buffer)), count + buffer->reserved_dw, buffer->user_data), function, "command buffer allocation callback failed");
         Require(available(*buffer, function) >= count, function, "command buffer allocation callback returned insufficient space");
     }
 }
 
 std::uint32_t* Allocate(CommandBuffer* buffer, std::uint32_t count, const char* function) {
     Reserve(buffer, count, function);
-    auto* result = buffer->cursor_up;
-    AgcDriverPrepareCommandWrite_nid_no_patch(reinterpret_cast<std::uint64_t>(result), static_cast<std::size_t>(count) * sizeof(std::uint32_t));
+    std::uint32_t* result = buffer->cursor_up;
+    AgcDriverPrepareCommandWrite_nid_no_patch(GuestArena::HostToGuest(result), static_cast<std::size_t>(count) * sizeof(std::uint32_t));
     buffer->cursor_up += count;
     return result;
 }
@@ -151,7 +151,7 @@ std::uint32_t* WriteRegisters(CommandBuffer* buffer, std::uint32_t opcode, const
 }
 
 std::uint32_t* WriteIndirectRegisters(CommandBuffer* buffer, std::uint32_t opcode, const volatile ShaderRegister* registers, std::uint32_t count, const char* function) {
-    const auto address = reinterpret_cast<std::uintptr_t>(registers);
+    const auto address = GuestArena::HostToGuest(registers);
     if (address != 0 || count != 0) CheckAddress(address, 4, function);
     CheckBits(count, 0x3fffu, function);
     return Emit(buffer, opcode, {static_cast<std::uint32_t>(address), static_cast<std::uint32_t>(address >> 32u), 0x80000000u, count}, function);
@@ -160,7 +160,7 @@ std::uint32_t* WriteIndirectRegisters(CommandBuffer* buffer, std::uint32_t opcod
 void PatchIndirectAddress(std::uint32_t* packet, std::uint32_t opcode, const volatile ShaderRegister* registers, const char* function) {
     ValidatePacket(packet, opcode, 5, function);
     Require(packet[3] == 0x80000000u && (packet[4] & ~0x3fffu) == 0, function, "invalid indirect register packet");
-    const auto address = reinterpret_cast<std::uintptr_t>(registers);
+    const auto address = GuestArena::HostToGuest(registers);
     CheckAddress(address, 4, function);
     packet[1] = static_cast<std::uint32_t>(address);
     packet[2] = static_cast<std::uint32_t>(address >> 32u);

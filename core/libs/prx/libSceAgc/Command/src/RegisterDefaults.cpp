@@ -1,5 +1,6 @@
 #include "prx/libSceAgc/Command/include/RegisterDefaults.hpp"
 #include "prx/libSceAgc/Command/include/Packet.hpp"
+#include "prx/libc/include/GuestArena.hpp"
 
 #include <algorithm>
 #include <array>
@@ -20,9 +21,9 @@ struct TypeIndex {
 static_assert(sizeof(TypeIndex) == 8);
 
 struct RegisterDefaults {
-    ShaderRegister** tables[4];
+    GuestArena::GuestPointer<GuestArena::GuestPointer<ShaderRegister>> tables[4];
     std::uint32_t registerCounts[4];
-    void* types;
+    GuestArena::GuestPointer<void> types;
     std::uint32_t count;
 };
 
@@ -46,7 +47,7 @@ struct CompactRegisterDefaults {
 
 struct Storage {
     RegisterDefaults defaults{};
-    std::array<std::vector<ShaderRegister*>, 4> pointers;
+    std::array<std::vector<GuestArena::GuestPointer<ShaderRegister>>, 4> pointers;
     std::vector<TypeIndex> types;
     bool initialized = false;
 };
@@ -91,7 +92,7 @@ void* GetRegisterDefaults(std::uint32_t version, bool internal, const char* func
     const auto layoutIndex = typeLayout == RegisterDefaultsTypeLayout::KeyBankPairs ? 1 : 0;
     auto& destination = storage[internal ? 1 : 0][layoutIndex][version];
     if (!destination.initialized) {
-        std::array<std::vector<ShaderRegister*>, 4> pointers;
+        std::array<std::vector<GuestArena::GuestPointer<ShaderRegister>>, 4> pointers;
         RegisterDefaults defaults{};
         for (std::size_t bank = 0; bank < pointers.size(); ++bank) {
             const auto& input = source->banks[bank];

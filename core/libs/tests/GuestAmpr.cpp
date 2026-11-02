@@ -616,7 +616,7 @@ bool MatchesFile(const std::uint8_t* data, std::size_t offset, std::size_t bytes
 }
 
 void TestZeroFilledBuffer() {
-    const char* path = "ampr_zero_filled.bin";
+    const GuestArena::GuestPointer<const char> path = "ampr_zero_filled.bin";
     {
         std::ofstream file(path, std::ios::binary);
         for (std::size_t offset = 0; offset < 256; ++offset) file.put(static_cast<char>(FileByte(offset)));
@@ -664,7 +664,7 @@ void TestReadPastEndOfFileZeroFills() {
         for (std::size_t offset = 0; offset < 64; ++offset) stream.put(static_cast<char>(FileByte(offset)));
     }
     const std::string filePath = file.generic_string();
-    const char* path = filePath.c_str();
+    const GuestArena::GuestPointer<const char> path = filePath.c_str();
     std::uint32_t fileId = 0;
     std::uint64_t size = 0;
     std::uint32_t failed = 0;
@@ -698,7 +698,7 @@ void TestReadPastEndOfFileZeroFills() {
 }
 
 void TestReadAtUnseekableOffsetThrows() {
-    const char* path = "ampr_unseekable_offset.bin";
+    const GuestArena::GuestPointer<const char> path = "ampr_unseekable_offset.bin";
     { std::ofstream file(path, std::ios::binary); file << "data"; }
     std::uint32_t fileId = 0;
     std::uint32_t failed = 0;
@@ -720,7 +720,7 @@ void TestReadAtUnseekableOffsetThrows() {
 }
 
 void TestResolveFailures() {
-    const char* paths[]{"ampr_resolve_existing.bin", "ampr_resolve_missing.bin"};
+    const GuestArena::GuestPointer<const char> paths[]{"ampr_resolve_existing.bin", "ampr_resolve_missing.bin"};
     { std::ofstream file(paths[0], std::ios::binary); file << "data"; }
     std::uint32_t ids[]{123, 123};
     std::uint64_t sizes[]{123, 123};
@@ -733,7 +733,7 @@ void TestResolveFailures() {
     Require(sceKernelAprResolveFilepathsToIdsAndFileSizesForEach(paths, 2, ids, sizes, results) == 1);
     Require(results[0] == 0 && results[1] == static_cast<int>(0x80020002));
     Require(ids[1] == 0xffffffffu && sizes[0] == 4 && sizes[1] == 0);
-    for (const char* invalid : {"ampr_resolve_missing.bin/../ampr_resolve_existing.bin", "ampr_resolve_existing.bin/../ampr_resolve_existing.bin"}) {
+    for (const GuestArena::GuestPointer<const char> invalid : {"ampr_resolve_missing.bin/../ampr_resolve_existing.bin", "ampr_resolve_existing.bin/../ampr_resolve_existing.bin"}) {
         Require(sceKernelAprResolveFilepathsToIds(&invalid, 1, ids, &failed) == -1);
         Require(*__error_nid_postfix() == 2 && failed == 0 && ids[0] == 0xffffffffu);
     }
@@ -741,8 +741,8 @@ void TestResolveFailures() {
 }
 
 void TestResolveForEachVariants() {
-    const char* paths[]{"ampr_foreach_existing.bin", "ampr_foreach_missing.bin"};
-    const char* names[]{"foreach_existing.bin", "foreach_missing.bin"};
+    const GuestArena::GuestPointer<const char> paths[]{"ampr_foreach_existing.bin", "ampr_foreach_missing.bin"};
+    const GuestArena::GuestPointer<const char> names[]{"foreach_existing.bin", "foreach_missing.bin"};
     { std::ofstream file(paths[0], std::ios::binary); file << "data"; }
     std::uint32_t expected = 0;
     std::uint32_t failed = 99;
@@ -768,7 +768,7 @@ void TestPrefixedResolveWithoutSizes() {
     const std::string prefix = "ampr_ids_" + std::to_string(reinterpret_cast<std::uintptr_t>(&probe)) + "_";
     { std::ofstream file(prefix + "first.bin", std::ios::binary); file << "aaaa"; }
     { std::ofstream file(prefix + "second.bin", std::ios::binary); file << "bb"; }
-    const char* names[]{"first.bin", "second.bin"};
+    const GuestArena::GuestPointer<const char> names[]{"first.bin", "second.bin"};
     std::uint32_t ids[]{0x123456, 0x123456};
     std::uint32_t failed = 99;
     Require(sceKernelAprResolveFilepathsWithPrefixToIds(prefix.c_str(), names, 2, ids, &failed) == 0);
@@ -778,7 +778,7 @@ void TestPrefixedResolveWithoutSizes() {
     std::uint64_t sizes[]{0, 0};
     Require(sceKernelAprResolveFilepathsWithPrefixToIdsAndFileSizes(prefix.c_str(), names, 2, sizedIds, sizes, &failed) == 0);
     Require(sizedIds[0] == ids[0] && sizedIds[1] == ids[1] && sizes[0] == 4 && sizes[1] == 2);
-    const char* mixed[]{"first.bin", "missing.bin", "second.bin"};
+    const GuestArena::GuestPointer<const char> mixed[]{"first.bin", "missing.bin", "second.bin"};
     std::uint32_t mid[]{0x123456, 0x123456, 0x123456};
     failed = 99;
     *__error_nid_postfix() = 0;
@@ -786,7 +786,7 @@ void TestPrefixedResolveWithoutSizes() {
     Require(*__error_nid_postfix() == 2 && failed == 1 && mid[0] == ids[0] && mid[1] == 0xffffffffu && mid[2] == 0x123456);
     Require(sceKernelAprResolveFilepathsWithPrefixToIds(prefix.c_str(), mixed, 3, mid, nullptr) == -1);
     Require(*__error_nid_postfix() == 2);
-    const char* nulled[]{"first.bin", nullptr};
+    const GuestArena::GuestPointer<const char> nulled[]{"first.bin", nullptr};
     std::uint32_t dropped[]{0x123456, 0x123456};
     failed = 99;
     Require(sceKernelAprResolveFilepathsWithPrefixToIds(prefix.c_str(), nulled, 2, dropped, &failed) == -1);
@@ -865,7 +865,7 @@ void TestResolveSymbolicLink() {
     std::filesystem::create_symlink("target.bin", link);
 #endif
     const std::string linkPath = link.generic_string();
-    const char* path = linkPath.c_str();
+    const GuestArena::GuestPointer<const char> path = linkPath.c_str();
     std::uint32_t id = 0;
     std::uint64_t size = 0;
     std::uint32_t failed = 0;
@@ -874,7 +874,7 @@ void TestResolveSymbolicLink() {
 }
 
 void TestGatherScatter() {
-    const char* path = "ampr_gather_scatter.bin";
+    const GuestArena::GuestPointer<const char> path = "ampr_gather_scatter.bin";
     {
         std::ofstream file(path, std::ios::binary);
         for (std::size_t offset = 0; offset < 4096; ++offset) file.put(static_cast<char>(FileByte(offset)));

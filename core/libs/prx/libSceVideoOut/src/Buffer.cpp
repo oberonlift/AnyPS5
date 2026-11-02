@@ -60,7 +60,7 @@ int CommitBufferGroup(const std::string& function, VideoOutConfig& cfg, int setI
     }
     std::array<VideoOutBuffer, VIDEO_OUT_BUFFER_NUM_MAX> registered{};
     for (int i = 0; i < bufferNum; ++i) {
-        registered[i] = {setIndex, reinterpret_cast<uint64_t>(buffers[i].data), reinterpret_cast<uint64_t>(buffers[i].metadata)};
+        registered[i] = {setIndex, GuestArena::HostToGuest(buffers[i].data), GuestArena::HostToGuest(buffers[i].metadata)};
         const auto display = DescribeVideoOutBuffer(registered[i], group);
         AgcDriverCheckGuestMemory_nid_postfix(buffers[i].data, AgcDriverDisplayBufferSize_nid_postfix(display), display.alignment);
     }
@@ -97,7 +97,7 @@ int APS5_VABI sceVideoOutGetBufferLabelAddress(int handle, uintptr_t* address) t
     std::lock_guard lock(cfg->mutex);
     cfg->CheckAlive();
     if (cfg->Closed()) return VIDEO_OUT_ERROR_INVALID_HANDLE;
-    const auto labels = reinterpret_cast<uintptr_t>(cfg->bufferLabels.data());
+    const auto labels = GuestArena::HostToGuest(cfg->bufferLabels.data());
     std::memcpy(address, &labels, sizeof(labels));
     return VIDEO_OUT_BUFFER_NUM_MAX;
 } catch (const ProcessShutdown&) {
@@ -180,7 +180,7 @@ void APS5_VABI sceVideoOutSetBufferAttribute(VideoOutBufferAttribute* attribute,
     attribute->pitch_in_pixel = pitchInPixel;
 }
 
-int APS5_VABI sceVideoOutRegisterBuffers(int handle, int bufferIndexStart, void* const* addresses, int bufferNum, const VideoOutBufferAttribute* attribute) try {
+int APS5_VABI sceVideoOutRegisterBuffers(int handle, int bufferIndexStart, const GuestArena::GuestPointer<void>* addresses, int bufferNum, const VideoOutBufferAttribute* attribute) try {
     auto cfg = VideoOutDriver::Get().GetConfig(handle);
     if (cfg == nullptr) {
         throw std::runtime_error(std::string(__func__) + ": VIDEO_OUT_ERROR_INVALID_HANDLE");
@@ -210,7 +210,7 @@ int APS5_VABI sceVideoOutRegisterBuffers(int handle, int bufferIndexStart, void*
     group.occupied = true;
     group.ps4 = true;
     std::array<VideoOutBuffers, VIDEO_OUT_BUFFER_NUM_MAX> buffers{};
-    for (int i = 0; i < bufferNum; ++i) buffers[i].data = addresses[i];
+    for (int i = 0; i < bufferNum; ++i) buffers[i].data = static_cast<void*>(addresses[i]);
     return CommitBufferGroup(__func__, *cfg, -1, bufferIndexStart, buffers.data(), bufferNum, group);
 } catch (const ProcessShutdown&) {
     LibcAwaitExit_nid_postfix();
@@ -241,7 +241,7 @@ int APS5_VABI sceVideoOutSubmitChangeBufferAttribute2(int handle, int setIndex, 
     for (int i = 0; i < VIDEO_OUT_BUFFER_NUM_MAX; ++i) {
         if (cfg->buffers[i].groupIndex != setIndex) continue;
         const auto display = DescribeVideoOutBuffer(cfg->buffers[i], group);
-        AgcDriverCheckGuestMemory_nid_postfix(reinterpret_cast<const void*>(display.address), AgcDriverDisplayBufferSize_nid_postfix(display), display.alignment);
+        AgcDriverCheckGuestMemory_nid_postfix(GuestArena::GuestToHost(display.address), AgcDriverDisplayBufferSize_nid_postfix(display), display.alignment);
     }
     cfg->groups[setIndex] = group;
     return 0;

@@ -24,7 +24,7 @@ static constexpr std::int64_t NANOS_PER_SECOND = 1000000000;
 
 static void Require(bool value) { if (!value) std::abort(); }
 
-static const PthreadRwlock DestroyedRwlock = reinterpret_cast<PthreadRwlock>(std::uintptr_t{1});
+static const PthreadRwlock DestroyedRwlock = reinterpret_cast<PthreadRwlockPrivate*>(std::uintptr_t{1});
 
 static KernelTimespec After(std::int64_t millis) {
     KernelTimespec now{};

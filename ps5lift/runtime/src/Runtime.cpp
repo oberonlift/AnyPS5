@@ -24,6 +24,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <mutex>
 #include <vector>
 
 #if defined(__x86_64__)
@@ -40,19 +41,93 @@ bool HostFeature(const char* name) {
     return value != 0;
 }
 
-constexpr std::uint64_t GuestImagesStart = 0xFC00000000ull;
-constexpr std::uint64_t GuestImagesEnd = std::uint64_t{1} << 40;
+constexpr std::uint64_t GuestSpaceEnd = std::uint64_t{1} << 40;
+constexpr std::uint64_t GuestImagesStart = 0xFC00000000ull + PS5LIFT_GUEST_BASE;
+constexpr std::uint64_t GuestImagesEnd = GuestSpaceEnd + PS5LIFT_GUEST_BASE;
+constexpr std::uint64_t ThreadAreaStart = 0x800000000ull + PS5LIFT_GUEST_BASE;
+constexpr std::uint64_t ThreadAreaEnd = 0xFC0000000ull + PS5LIFT_GUEST_BASE;
+constexpr std::uint64_t ThreadSlotSize = 16ull << 20;
 
-struct GuestImagesReservation {
-    GuestImagesReservation() {
-        mach_vm_address_t address = GuestImagesStart;
-        if (const kern_return_t result = mach_vm_map(mach_task_self(), &address, GuestImagesEnd - GuestImagesStart, 0, VM_FLAGS_FIXED, MEMORY_OBJECT_NULL, 0, FALSE, VM_PROT_NONE, VM_PROT_ALL, VM_INHERIT_DEFAULT);
-            result != KERN_SUCCESS)
-            ps5lift_fail("cannot reserve the guest images' range at 0x%" PRIx64 "-0x%" PRIx64 ": %s", GuestImagesStart, GuestImagesEnd, mach_error_string(result));
+kern_return_t Reserve(const std::uint64_t begin, const std::uint64_t end) {
+    mach_vm_address_t address = begin;
+    return mach_vm_map(mach_task_self(), &address, end - begin, 0, VM_FLAGS_FIXED, MEMORY_OBJECT_NULL, 0, FALSE, VM_PROT_NONE, VM_PROT_ALL, VM_INHERIT_DEFAULT);
+}
+
+void ReserveExactly(const std::uint64_t begin, const std::uint64_t end, const char* what) {
+    if (const kern_return_t result = Reserve(begin, end); result != KERN_SUCCESS)
+        ps5lift_fail("cannot reserve %s at 0x%" PRIx64 "-0x%" PRIx64 ": %s", what, begin, end, mach_error_string(result));
+}
+
+void ReserveFreeBelow(const std::uint64_t limit) {
+    std::uint64_t cursor = 0;
+    while (cursor < limit) {
+        mach_vm_address_t region = cursor;
+        mach_vm_size_t size = 0;
+        vm_region_basic_info_data_64_t info{};
+        mach_msg_type_number_t count = VM_REGION_BASIC_INFO_COUNT_64;
+        mach_port_t object = MACH_PORT_NULL;
+        const kern_return_t result = mach_vm_region(mach_task_self(), &region, &size, VM_REGION_BASIC_INFO_64, reinterpret_cast<vm_region_info_t>(&info), &count, &object);
+        if (result != KERN_SUCCESS && result != KERN_INVALID_ADDRESS) ps5lift_fail("cannot list the host's mappings: %s", mach_error_string(result));
+        const std::uint64_t next = result == KERN_INVALID_ADDRESS ? limit : std::min<std::uint64_t>(region, limit);
+        if (next > cursor) {
+            const kern_return_t reserved = Reserve(cursor, next);
+            if (reserved != KERN_SUCCESS && reserved != KERN_NO_SPACE && reserved != KERN_INVALID_ADDRESS)
+                ps5lift_fail("cannot reserve 0x%" PRIx64 "-0x%" PRIx64 " below the guest window: %s", cursor, next, mach_error_string(reserved));
+        }
+        if (result == KERN_INVALID_ADDRESS) break;
+        cursor = region + size;
+    }
+}
+
+struct GuestWindowReservation {
+    GuestWindowReservation() {
+        ReserveExactly(GuestImagesStart, GuestImagesEnd, "the guest images' range");
+        ReserveExactly(ThreadAreaStart, ThreadAreaEnd, "the guest threads' memory");
+        ReserveFreeBelow(GuestSpaceEnd);
     }
 };
 
-const GuestImagesReservation ReservedGuestImages;
+const GuestWindowReservation ReservedGuestWindow;
+
+class ThreadArea {
+public:
+    static ThreadArea& Get() {
+        static ThreadArea area;
+        return area;
+    }
+
+    std::uint8_t* Take(const std::uint64_t guard, const std::uint64_t bytes) {
+        if (guard + bytes > ThreadSlotSize) ps5lift_fail("guest thread memory of 0x%" PRIx64 " bytes does not fit a slot", bytes);
+        std::uint64_t slot = 0;
+        {
+            std::lock_guard lock(_lock);
+            if (!_free.empty()) {
+                slot = _free.back();
+                _free.pop_back();
+            } else {
+                if (_next + ThreadSlotSize > ThreadAreaEnd) ps5lift_fail("the guest threads' memory is full");
+                slot = _next;
+                _next += ThreadSlotSize;
+            }
+        }
+        auto* memory = reinterpret_cast<std::uint8_t*>(slot + guard);
+        if (mprotect(memory, bytes, PROT_READ | PROT_WRITE) != 0) ps5lift_fail("cannot commit guest thread memory at %p: %s", static_cast<void*>(memory), std::strerror(errno));
+        return memory;
+    }
+
+    void Give(std::uint8_t* const memory, const std::uint64_t guard) {
+        const auto slot = reinterpret_cast<std::uint64_t>(memory) - guard;
+        if (mmap(reinterpret_cast<void*>(slot), ThreadSlotSize, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED, -1, 0) == MAP_FAILED)
+            ps5lift_fail("cannot release guest thread memory at 0x%" PRIx64 ": %s", slot, std::strerror(errno));
+        std::lock_guard lock(_lock);
+        _free.push_back(slot);
+    }
+
+private:
+    std::mutex _lock;
+    std::vector<std::uint64_t> _free;
+    std::uint64_t _next = ThreadAreaStart;
+};
 #endif
 
 constexpr std::uint32_t ArenaReadWrite = 0x04;
@@ -69,8 +144,8 @@ std::uint64_t PageSize() {
 void BindDataImports(const Ps5LiftImage& image) {
     for (std::uint64_t i = 0; i < image.DataImportCount; ++i) {
         const auto& import = image.DataImports[i];
-        const auto value = reinterpret_cast<std::uint64_t>(*import.Address) + static_cast<std::uint64_t>(import.Addend);
-        std::memcpy(reinterpret_cast<void*>(import.Slot), &value, sizeof(value));
+        const auto value = Ps5Lift::Bridge::GuestAddress(static_cast<const char*>(*import.Address) + import.Addend);
+        std::memcpy(Ps5Lift::Bridge::HostAddress(import.Slot), &value, sizeof(value));
     }
 }
 
@@ -83,25 +158,25 @@ void MapSegments(const Ps5LiftImage& image) {
         begin = std::min(begin, image.Segments[i].GuestAddress & ~(page - 1));
         end = std::max(end, (image.Segments[i].GuestAddress + image.Segments[i].MemorySize + page - 1) & ~(page - 1));
     }
-    auto* const start = reinterpret_cast<void*>(begin);
+    auto* const start = Ps5Lift::Bridge::HostAddress(begin);
     static auto* const arenaContains = Ps5Lift::AnyPs5Function<bool(const void*, std::size_t)>("GuestArenaContains_nid_postfix");
     static auto* const arenaCommit = Ps5Lift::AnyPs5Function<void(void*, std::size_t, std::uint32_t, std::size_t)>("GuestArenaCommit_nid_postfix");
     if (arenaContains != nullptr && arenaContains(start, end - begin)) {
         arenaCommit(start, end - begin, ArenaReadWrite, end - begin);
-        for (std::uint64_t i = 0; i < image.SegmentCount; ++i) std::memcpy(reinterpret_cast<void*>(image.Segments[i].GuestAddress), image.Segments[i].Data, image.Segments[i].FileSize);
+        for (std::uint64_t i = 0; i < image.SegmentCount; ++i) std::memcpy(Ps5Lift::Bridge::HostAddress(image.Segments[i].GuestAddress), image.Segments[i].Data, image.Segments[i].FileSize);
         BindDataImports(image);
         return;
     }
 #if defined(__APPLE__)
-    mach_vm_address_t address = begin;
-    const int reserved = begin >= GuestImagesStart && end <= GuestImagesEnd ? VM_FLAGS_OVERWRITE : 0;
+    mach_vm_address_t address = reinterpret_cast<std::uint64_t>(start);
+    const int reserved = address >= GuestImagesStart && address + (end - begin) <= GuestImagesEnd ? VM_FLAGS_OVERWRITE : 0;
     if (const kern_return_t result = mach_vm_allocate(mach_task_self(), &address, end - begin, VM_FLAGS_FIXED | reserved); result != KERN_SUCCESS)
         ps5lift_fail("cannot map the guest image at 0x%" PRIx64 "-0x%" PRIx64 ": %s", begin, end, mach_error_string(result));
 #else
     auto* mapped = mmap(start, end - begin, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED_NOREPLACE, -1, 0);
     if (mapped != start) ps5lift_fail("cannot map the guest image at 0x%" PRIx64 "-0x%" PRIx64 ": %s", begin, end, std::strerror(errno));
 #endif
-    for (std::uint64_t i = 0; i < image.SegmentCount; ++i) std::memcpy(reinterpret_cast<void*>(image.Segments[i].GuestAddress), image.Segments[i].Data, image.Segments[i].FileSize);
+    for (std::uint64_t i = 0; i < image.SegmentCount; ++i) std::memcpy(Ps5Lift::Bridge::HostAddress(image.Segments[i].GuestAddress), image.Segments[i].Data, image.Segments[i].FileSize);
     BindDataImports(image);
 }
 
@@ -161,6 +236,23 @@ bool GuestEnvironmentLive() {
     return Foreign == nullptr || Foreign->Entered != 0;
 }
 
+#if defined(__APPLE__)
+std::uint8_t* MapGuestStack() {
+    return ThreadArea::Get().Take(PageSize(), GuestStackSize);
+}
+
+void UnmapGuestStack(std::uint8_t* const stack) {
+    ThreadArea::Get().Give(stack, PageSize());
+}
+
+std::uint8_t* MapTls() {
+    return ThreadArea::Get().Take(0, TlsSize);
+}
+
+void UnmapTls(std::uint8_t* const tls) {
+    ThreadArea::Get().Give(tls, 0);
+}
+#else
 std::uint8_t* MapGuestStack() {
     const auto guard = PageSize();
     auto* mapping = static_cast<std::uint8_t*>(MapAnonymous(guard + GuestStackSize));
@@ -173,17 +265,26 @@ void UnmapGuestStack(std::uint8_t* const stack) {
     munmap(stack - guard, guard + GuestStackSize);
 }
 
+std::uint8_t* MapTls() {
+    return static_cast<std::uint8_t*>(MapAnonymous(TlsSize));
+}
+
+void UnmapTls(std::uint8_t* const tls) {
+    munmap(tls, TlsSize);
+}
+#endif
+
 std::uint64_t StackTop(const std::uint8_t* const stack) {
-    return reinterpret_cast<std::uint64_t>(stack + GuestStackSize);
+    return Ps5Lift::Bridge::GuestAddress(stack + GuestStackSize);
 }
 
 ThreadMemory MapThreadMemory(const bool ownStack) {
-    return {ownStack ? MapGuestStack() : nullptr, static_cast<std::uint8_t*>(MapAnonymous(TlsSize)), MapGuestStack()};
+    return {ownStack ? MapGuestStack() : nullptr, MapTls(), MapGuestStack()};
 }
 
 void UnmapThreadMemory(const ThreadMemory& memory) {
     if (memory.Stack != nullptr) UnmapGuestStack(memory.Stack);
-    munmap(memory.Tls, TlsSize);
+    UnmapTls(memory.Tls);
     UnmapGuestStack(memory.InterruptStack);
 }
 
@@ -199,13 +300,14 @@ void UnbindThread() {
 
 void PrepareState(Ps5LiftState& state, std::uint8_t* const tls, const std::uint32_t mxcsr) {
     const auto& program = Ps5Lift::Program();
-    const auto threadPointer = reinterpret_cast<std::uint64_t>(tls + TlsSize / 2);
-    std::memcpy(reinterpret_cast<void*>(threadPointer), &threadPointer, sizeof(threadPointer));
+    auto* const hostThreadPointer = tls + TlsSize / 2;
+    const auto threadPointer = Ps5Lift::Bridge::GuestAddress(hostThreadPointer);
+    std::memcpy(hostThreadPointer, &threadPointer, sizeof(threadPointer));
     for (std::uint64_t i = 0; i < program.ImageCount; ++i) {
         const auto& image = program.Images[i];
         if (image.TlsMemorySize == 0) continue;
         if (image.TlsOffset > TlsSize / 2) ps5lift_fail("the static TLS of image %llu does not fit", static_cast<unsigned long long>(i));
-        std::memcpy(reinterpret_cast<void*>(threadPointer - image.TlsOffset), reinterpret_cast<const void*>(image.TlsAddress), image.TlsFileSize);
+        std::memcpy(hostThreadPointer - image.TlsOffset, Ps5Lift::Bridge::HostAddress(image.TlsAddress), image.TlsFileSize);
     }
     state.FsBase = threadPointer;
     state.Mxcsr = mxcsr & ~0x3fu;
@@ -219,7 +321,7 @@ void Initialize(const std::uint64_t argc, const std::uint64_t argv, const std::u
         if (image.Init != 0) Ps5Lift::Bridge::CallGuest<void>(image.Init, argc, argv, environment);
         for (std::uint64_t index = 0; index < image.InitCount; ++index) {
             std::uint64_t initializer = 0;
-            std::memcpy(&initializer, reinterpret_cast<const void*>(image.InitArray + 8 * index), sizeof(initializer));
+            std::memcpy(&initializer, Ps5Lift::Bridge::HostAddress(image.InitArray + 8 * index), sizeof(initializer));
             if (initializer != 0 && initializer != ~std::uint64_t{0}) Ps5Lift::Bridge::CallGuest<void>(initializer, argc, argv, environment);
         }
     }
@@ -237,10 +339,10 @@ void* RunMain(void* argument) {
     if (function == nullptr) ps5lift_fail("the program entry 0x%" PRIx64 " was not lifted", entry);
     static constexpr char ProgramName[] = "eboot.bin";
     const auto name = top - sizeof(ProgramName);
-    std::memcpy(reinterpret_cast<void*>(name), ProgramName, sizeof(ProgramName));
+    std::memcpy(Ps5Lift::Bridge::HostAddress(name), ProgramName, sizeof(ProgramName));
     const std::uint64_t entryStack[] = {1, name, 0, 0, 0, 0};
     const auto rsp = (name - sizeof(entryStack)) & ~std::uint64_t{15};
-    std::memcpy(reinterpret_cast<void*>(rsp), entryStack, sizeof(entryStack));
+    std::memcpy(Ps5Lift::Bridge::HostAddress(rsp), entryStack, sizeof(entryStack));
     state.Gpr[PS5LIFT_RSP] = rsp;
     Initialize(entryStack[0], rsp + 8, rsp + 24);
     function(&state);
@@ -335,17 +437,17 @@ extern "C" std::uint64_t ps5lift_read_tsc(void) {
 
 extern "C" void ps5lift_flush_cache_line(const std::uint64_t address) {
 #if defined(__aarch64__)
-    asm volatile("dc civac, %0" : : "r"(address) : "memory");
+    asm volatile("dc civac, %0" : : "r"(Ps5Lift::Bridge::HostAddress(address)) : "memory");
 #else
-    _mm_clflush(reinterpret_cast<const void*>(address));
+    _mm_clflush(Ps5Lift::Bridge::HostAddress(address));
 #endif
 }
 
 extern "C" void ps5lift_write_back_cache_line(const std::uint64_t address) {
 #if defined(__aarch64__)
-    asm volatile("dc cvac, %0" : : "r"(address) : "memory");
+    asm volatile("dc cvac, %0" : : "r"(Ps5Lift::Bridge::HostAddress(address)) : "memory");
 #else
-    _mm_clflush(reinterpret_cast<const void*>(address));
+    _mm_clflush(Ps5Lift::Bridge::HostAddress(address));
 #endif
 }
 
@@ -430,7 +532,7 @@ extern "C" void ps5lift_fail(const char* format, ...) {
 extern "C" void ps5lift_import_____tls__get__addr(Ps5LiftState* state) {
     const auto& program = Ps5Lift::Program();
     std::uint64_t index[2];
-    std::memcpy(index, reinterpret_cast<const void*>(state->Gpr[PS5LIFT_RDI]), sizeof(index));
+    std::memcpy(index, Ps5Lift::Bridge::HostAddress(state->Gpr[PS5LIFT_RDI]), sizeof(index));
     if (index[0] == 0 || index[0] > program.ImageCount || program.Images[index[0] - 1].TlsMemorySize == 0)
         ps5lift_fail("__tls_get_addr of module %" PRIu64 ", which has no TLS", index[0]);
     state->Gpr[PS5LIFT_RAX] = state->FsBase - program.Images[index[0] - 1].TlsOffset + index[1];
@@ -446,7 +548,7 @@ extern "C" void ps5lift_unknown_resume(Ps5LiftState*, const std::uint64_t functi
 
 extern "C" void ps5lift_interrupt(Ps5LiftState* state, const std::uint64_t address, const std::uint32_t vector) {
     std::uint32_t code = 0;
-    std::memcpy(&code, reinterpret_cast<const void*>(state->FsBase + 0x28), sizeof(code));
+    std::memcpy(&code, Ps5Lift::Bridge::HostAddress(state->FsBase + 0x28), sizeof(code));
     ps5lift_fail("guest interrupt 0x%x at 0x%" PRIx64 ", with 0x%08x at %%fs:0x28", vector, address, code);
 }
 
@@ -470,10 +572,10 @@ extern "C" void ps5lift_string_op(Ps5LiftState* state, const std::uint32_t opera
     const std::int64_t step = forward ? static_cast<std::int64_t>(width) : -static_cast<std::int64_t>(width);
     const std::uint64_t count = repeat ? rcx : 1;
     const std::uint64_t bytes = count * width;
-    auto* destination = reinterpret_cast<std::uint8_t*>(rdi);
+    auto* destination = static_cast<std::uint8_t*>(Ps5Lift::Bridge::HostAddress(rdi));
     switch (operation) {
     case PS5LIFT_STRING_MOVS: {
-        const auto* source = reinterpret_cast<const std::uint8_t*>(rsi + sourceBase);
+        const auto* source = static_cast<const std::uint8_t*>(Ps5Lift::Bridge::HostAddress(rsi + sourceBase));
         if (forward && (destination <= source || destination >= source + bytes)) {
             std::memmove(destination, source, bytes);
         } else {
@@ -586,6 +688,15 @@ void RequireHostFeatures() {
 #endif
 }
 
+void RequireHighNativeHeap() {
+    constexpr std::uint64_t GuestSpaceBytes = std::uint64_t{1} << 40;
+    if (dlsym(RTLD_DEFAULT, "mi_version") == nullptr) ps5lift_fail("AnyPS5 runs without mimalloc, so native allocations can land in the guest's first terabyte");
+    void* const probe = std::malloc(64);
+    const auto address = reinterpret_cast<std::uintptr_t>(probe);
+    std::free(probe);
+    if (address < GuestSpaceBytes) ps5lift_fail("a native allocation landed at 0x%" PRIxPTR ", inside the guest's first terabyte", address);
+}
+
 }
 
 namespace {
@@ -634,6 +745,8 @@ FunctionIndex FunctionsByAddress;
 
 extern "C" void ps5lift_use_program(const Ps5LiftProgram* program) {
     if (UsedProgram == program) return;
+    if (program->GuestBase != PS5LIFT_GUEST_BASE)
+        ps5lift_fail("the program was lifted for guest base 0x%" PRIx64 ", and this runtime uses 0x%" PRIx64, program->GuestBase, static_cast<std::uint64_t>(PS5LIFT_GUEST_BASE));
     if (UsedProgram != nullptr) ps5lift_fail("the executable handed the runtime a second lifted program");
     UsedProgram = program;
     FunctionsByAddress.Build(program->Functions, program->FunctionCount);
@@ -652,6 +765,10 @@ Ps5LiftFunction Ps5Lift::LookupFunction(const std::uint64_t address) {
 extern "C" void ps5lift_run_main(void) {
     const auto& program = Ps5Lift::Program();
     RequireHostFeatures();
+    const auto translation = Ps5Lift::AnyPs5Function<std::uint64_t()>("GuestArenaTranslation_nid_no_patch");
+    if (translation != nullptr && translation() != PS5LIFT_GUEST_BASE)
+        ps5lift_fail("AnyPS5's libraries translate guest addresses by 0x%" PRIx64 ", and this runtime by 0x%" PRIx64, translation(), static_cast<std::uint64_t>(PS5LIFT_GUEST_BASE));
+    if (translation != nullptr && PS5LIFT_GUEST_BASE != 0) RequireHighNativeHeap();
     for (std::uint64_t i = 0; i < program.ImageCount; ++i) {
         MapSegments(program.Images[i]);
     }

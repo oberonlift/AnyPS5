@@ -1,4 +1,5 @@
 #include "prx/libkernel/include/Api.hpp"
+#include "prx/libc/include/GuestArena.hpp"
 #include <cstdint>
 #include <cstddef>
 #include <cstring>
@@ -316,7 +317,7 @@ void Fill(const dl_phdr_info& image, TInfo& info) {
                 info.eh_frame_addr = tables.frames;
                 info.eh_frame_size = ToU32(tables.framesSize + TerminatorSize, "eh_frame size");
             } else if (header.p_type == PT_DYNAMIC) {
-                for (const auto* entry = reinterpret_cast<const ElfW(Dyn)*>(address); entry->d_tag != DT_NULL; ++entry) {
+                for (const auto* entry = static_cast<const ElfW(Dyn)*>(GuestArena::GuestToHost(address)); entry->d_tag != DT_NULL; ++entry) {
                     if (entry->d_tag == DT_INIT) info.init_proc_addr = image.dlpi_addr + entry->d_un.d_ptr;
                     else if (entry->d_tag == DT_FINI) info.fini_proc_addr = image.dlpi_addr + entry->d_un.d_ptr;
                 }

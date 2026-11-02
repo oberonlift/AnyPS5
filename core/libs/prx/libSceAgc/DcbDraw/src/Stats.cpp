@@ -14,7 +14,7 @@ std::uint32_t* APS5_VABI sceAgcDcbGetLodStats(CommandBuffer* buf, std::uint8_t c
     Agc::Command::CheckBits(forceReset, 1, __func__);
     Agc::Command::CheckBits(reportAndReset, 1, __func__);
     Agc::Command::CheckBits(reportingIntervalIn100kClocks, 0xffu, __func__);
-    const auto address = reinterpret_cast<std::uintptr_t>(buffer);
+    const auto address = GuestArena::HostToGuest(buffer);
     if (address != 0) Agc::Command::CheckAddress(address, 64, __func__);
     const auto control = (static_cast<std::uint32_t>(cachePolicy) << 28u) | (static_cast<std::uint32_t>(reportAndReset) << 19u) | (static_cast<std::uint32_t>(forceReset) << 18u) | (resetCount << 10u) | (reportingIntervalIn100kClocks << 2u);
     // LOD statistics are not collected; a same-sized NOP keeps the packet layout without producing data.

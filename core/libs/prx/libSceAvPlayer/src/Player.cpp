@@ -366,7 +366,7 @@ bool Player::GetVideoData(AvPlayerFrameInfo& info) {
     AvPlayerFrameInfoEx extended{};
     if (!GetVideoData(extended)) return false;
     info = {};
-    info.p_data = static_cast<std::uint8_t*>(extended.p_data);
+    info.p_data = static_cast<std::uint8_t*>(static_cast<void*>(extended.p_data));
     info.timestamp = extended.timestamp;
     info.details.video.width = extended.details.video.width;
     info.details.video.height = extended.details.video.height;

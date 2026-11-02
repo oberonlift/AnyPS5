@@ -28,15 +28,15 @@ std::mutex& InitializationMutex() {
 }
 
 PthreadCond destroyedCond() {
-    return reinterpret_cast<PthreadCond>(std::uintptr_t{1});
+    return reinterpret_cast<PthreadCondPrivate*>(std::uintptr_t{1});
 }
 
 PthreadMutex destroyedMutex() {
-    return reinterpret_cast<PthreadMutex>(std::uintptr_t{2});
+    return reinterpret_cast<PthreadMutexPrivate*>(std::uintptr_t{2});
 }
 
 PthreadMutex adaptiveInitializer() {
-    return reinterpret_cast<PthreadMutex>(std::uintptr_t{1});
+    return reinterpret_cast<PthreadMutexPrivate*>(std::uintptr_t{1});
 }
 
 PthreadCond resolveLocked(PthreadCond* cond) {

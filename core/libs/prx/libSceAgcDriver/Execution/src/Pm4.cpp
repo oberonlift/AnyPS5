@@ -1,4 +1,5 @@
 #include "prx/libkernel/include/Api.hpp"
+#include "prx/libc/include/GuestArena.hpp"
 #include "prx/libSceAgcDriver/Execution/include/Pm4.hpp"
 #include "prx/libSceAgcDriver/Execution/include/GuestMemory.hpp"
 #include "prx/libc/include/General.hpp"
@@ -68,7 +69,7 @@ std::uint64_t GdsAddress() {
         }
         void* mapped = mmap_nid_postfix(nullptr, GdsBytes, ReadWrite, PrivateAnonymous, -1, 0);
         if (mapped == nullptr || mapped == reinterpret_cast<void*>(static_cast<std::uintptr_t>(-1))) throw std::runtime_error("cannot allocate the global data share");
-        return reinterpret_cast<std::uint64_t>(mapped);
+        return GuestArena::HostToGuest(mapped);
     }();
     return address;
 }
@@ -172,7 +173,7 @@ std::vector<std::byte> dmaSourceBytes(std::span<const std::uint32_t> packet) {
 
 void copyMemory(std::uint64_t source, std::uint64_t destination, std::size_t bytes, bool immediate) {
     if (bytes == 0) return;
-    GuestMemory::CheckRange(reinterpret_cast<void*>(destination), bytes, 1, true);
+    GuestMemory::CheckRange(GuestArena::GuestToHost(destination), bytes, 1, true);
     GuestMemory::Write(destination, copySource(source, bytes, immediate));
 }
 
@@ -624,7 +625,7 @@ bool WaitSatisfiedUnchecked(std::span<const std::uint32_t> packet) {
     const bool wide = ((packet[0] >> 8u) & 0xffu) == 0x93u;
     const auto awaitedBytes = WaitAwaitedBytes(packet);
     const auto source = address(packet[2] & (awaitedBytes == 8 ? ~7u : ~3u), packet[3]);
-    const std::uint64_t value = awaitedBytes == 8 ? *reinterpret_cast<const volatile std::uint64_t*>(source) : *reinterpret_cast<const volatile std::uint32_t*>(source);
+    const std::uint64_t value = awaitedBytes == 8 ? *static_cast<const volatile std::uint64_t*>(GuestArena::GuestToHost(source)) : *static_cast<const volatile std::uint32_t*>(GuestArena::GuestToHost(source));
     return waitCompares(packet, wide, value);
 }
 
@@ -965,7 +966,7 @@ DrawParameters ResolveDraw(std::span<const std::uint32_t> packet, const QueueSta
     const auto address = base + offset;
     const auto bytes = static_cast<std::uint64_t>(count) * indexSize;
     require(bytes <= std::numeric_limits<std::size_t>::max(), "index range size overflow");
-    GuestMemory::CheckRange(reinterpret_cast<const void*>(address), static_cast<std::size_t>(bytes), indexSize);
+    GuestMemory::CheckRange(GuestArena::GuestToHost(address), static_cast<std::size_t>(bytes), indexSize);
     APS5_LOG_OUT_DEBUG("ResolveDraw context targetMask=0x%x shaderMask=0x%x indexCount=%u indexType=%u instances=%u", queue.context.contains(0x8e) ? queue.context.at(0x8e) : 0u, queue.context.contains(0x8f) ? queue.context.at(0x8f) : 0u, count, queue.indexType, queue.instanceCount);
     const auto indexOffset = queue.userConfig.find(0x24a);
     require(indexOffset != queue.userConfig.end(), "missing GE_INDX_OFFSET register");
@@ -1129,7 +1130,7 @@ void Execute(std::span<const std::uint32_t> packet, QueueState& queue) {
         }
         case 0x39: {
             const auto semaphore = address(packet[1], packet[2]);
-            auto* word = reinterpret_cast<std::uint64_t*>(semaphore);
+            auto* word = static_cast<std::uint64_t*>(GuestArena::GuestToHost(semaphore));
             std::atomic_ref<std::uint64_t> shared(*word);
             const auto prepare = [&] {
                 GuestMemory::GuardRead(semaphore, sizeof(*word));
@@ -1228,7 +1229,7 @@ void Execute(std::span<const std::uint32_t> packet, QueueState& queue) {
             }
             const auto destination = address(packet[4], packet[5]);
             const auto data = copyDataSource(packet, queue, CopyDataBytes(packet));
-            GuestMemory::CheckRange(reinterpret_cast<void*>(destination), data.size(), 1, true);
+            GuestMemory::CheckRange(GuestArena::GuestToHost(destination), data.size(), 1, true);
             GuestMemory::Write(destination, data);
             return;
         }
@@ -1238,7 +1239,7 @@ void Execute(std::span<const std::uint32_t> packet, QueueState& queue) {
             if (bytes == 0 || dmaDestination(packet) == DmaDestinationNowhere) return;
             auto data = dmaSourceBytes(packet);
             const auto destination = dmaDestination(packet) == DmaSelectGds ? GdsAddress() + packet[4] : address(packet[4], packet[5]);
-            GuestMemory::CheckRange(reinterpret_cast<void*>(destination), bytes, 1, true);
+            GuestMemory::CheckRange(GuestArena::GuestToHost(destination), bytes, 1, true);
             GuestMemory::Write(destination, data);
             return;
         }

@@ -36,13 +36,13 @@ extern "C" {
 
 int APS5_VABI scePthreadAttrInit(PthreadAttr* value) {
     if (Fail()) return 12;
-    *value = reinterpret_cast<PthreadAttr>(new int);
+    *value = reinterpret_cast<PthreadAttrPrivate*>(new int);
     ++attributes;
     return 0;
 }
 
 int APS5_VABI scePthreadAttrDestroy(PthreadAttr* value) {
-    delete reinterpret_cast<int*>(*value);
+    delete reinterpret_cast<int*>(static_cast<PthreadAttrPrivate*>(*value));
     *value = nullptr;
     --attributes;
     return 0;
@@ -55,13 +55,13 @@ int APS5_VABI scePthreadAttrSetaffinity(PthreadAttr*, KernelCpumask) { return Fa
 
 int APS5_VABI scePthreadCreate(Pthread* value, const PthreadAttr*, PthreadEntry entry, void* argument, const char*) {
     if (Fail()) return 11;
-    *value = reinterpret_cast<Pthread>(new std::thread([=] { entry(argument); }));
+    *value = reinterpret_cast<PthreadPrivate*>(new std::thread([=] { entry(argument); }));
     ++threads;
     return 0;
 }
 
 int APS5_VABI scePthreadJoin(Pthread value, void**) {
-    auto* thread = reinterpret_cast<std::thread*>(value);
+    auto* thread = reinterpret_cast<std::thread*>(static_cast<PthreadPrivate*>(value));
     thread->join();
     delete thread;
     --threads;

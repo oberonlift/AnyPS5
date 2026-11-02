@@ -2,6 +2,7 @@
 #define CORE_LIBS_PRX_LIBC_INCLUDE_WINDOWSFORMATTING_HPP
 
 #include "SceTypes.hpp"
+#include "prx/libc/include/GuestArena.hpp"
 #include "prx/libc/include/GuestLongDouble.hpp"
 #include "prx/libc/include/GuestVaList.hpp"
 #include <algorithm>
@@ -79,7 +80,12 @@ public:
     }
 
     template<class T> T Next() {
-        return numbered.empty() ? Fetch<T>() : At<T>(position++);
+        const T value = numbered.empty() ? Fetch<T>() : At<T>(position++);
+        if constexpr (std::is_pointer_v<T>) {
+            return hosted ? value : static_cast<T>(GuestArena::GuestToHost(reinterpret_cast<std::uint64_t>(value)));
+        } else {
+            return value;
+        }
     }
 
 private:
@@ -124,11 +130,12 @@ private:
                 args.overflow_arg_area = static_cast<char*>(args.overflow_arg_area) + 8;
             }
         }
+        const void* const host = GuestArena::GuestToHost(reinterpret_cast<std::uint64_t>(address));
         if constexpr (std::is_same_v<T, LibcDetail::GuestLongDouble>) {
-            return LibcDetail::GuestLongDoubleLoad(address);
+            return LibcDetail::GuestLongDoubleLoad(host);
         } else {
             T value;
-            std::memcpy(&value, address, sizeof(value));
+            std::memcpy(&value, host, sizeof(value));
             return value;
         }
     }

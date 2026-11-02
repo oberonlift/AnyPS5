@@ -119,7 +119,7 @@ struct LoadedImage {
 extern "C" void GuestCpuUnwindStart_nid_no_patch(std::uint64_t* registers) {
     const auto* state = ps5lift_current_state();
     for (int i = 0; i < 16; ++i) registers[i] = state->Gpr[DwarfRegisters[i]];
-    std::memcpy(&registers[DwarfRip], reinterpret_cast<const void*>(registers[DwarfRsp]), sizeof(registers[DwarfRip]));
+    std::memcpy(&registers[DwarfRip], Ps5Lift::Bridge::HostAddress(registers[DwarfRsp]), sizeof(registers[DwarfRip]));
     registers[DwarfRsp] += 8;
 }
 
@@ -128,15 +128,16 @@ extern "C" int GuestCpuIterateImages_nid_no_patch(int (*callback)(LoadedImage*, 
     const auto* state = Ps5Lift::BoundState();
     for (std::uint64_t index = 0; index < program.ImageCount; ++index) {
         const auto& image = program.Images[index];
-        LoadedImage loaded{image.LoadBias, image.Name, reinterpret_cast<const void*>(image.ProgramHeaders), static_cast<std::uint16_t>(image.ProgramHeaderCount), program.ImageCount, 0, image.TlsModule,
-            image.TlsModule == 0 || state == nullptr ? nullptr : reinterpret_cast<void*>(state->FsBase - image.TlsOffset)};
+        LoadedImage loaded{image.LoadBias, image.Name, Ps5Lift::Bridge::HostAddress(image.ProgramHeaders), static_cast<std::uint16_t>(image.ProgramHeaderCount), program.ImageCount, 0, image.TlsModule,
+            image.TlsModule == 0 || state == nullptr ? nullptr : Ps5Lift::Bridge::HostAddress(state->FsBase - image.TlsOffset)};
         if (const int result = callback(&loaded, sizeof(loaded), data); result != 0) return result;
     }
     return 0;
 }
 
-extern "C" void GuestCpuMakingWritable_nid_no_patch(const std::uint64_t address, const std::uint64_t length) {
+extern "C" void GuestCpuMakingWritable_nid_no_patch(const std::uint64_t host, const std::uint64_t length) {
     constexpr std::uint32_t Write = 2;
+    const auto address = Ps5Lift::Bridge::GuestAddress(reinterpret_cast<const void*>(host));
     const auto& program = Ps5Lift::Program();
     for (std::uint64_t index = 0; index < program.ImageCount; ++index) {
         const auto& image = program.Images[index];
@@ -216,7 +217,7 @@ extern "C" std::uint64_t GuestCpuCall_nid_no_patch(const std::uint64_t target, c
 }
 
 extern "C" void GuestCpuUseStack_nid_no_patch(const std::uint64_t stackTop) {
-    ps5lift_use_guest_stack(stackTop);
+    ps5lift_use_guest_stack(Ps5Lift::Bridge::GuestAddress(reinterpret_cast<const void*>(stackTop)));
 }
 
 extern "C" std::uint64_t GuestCpuHostStackSize_nid_no_patch(void) {
@@ -268,6 +269,6 @@ extern "C" void GuestCpuRestoreFiber_nid_no_patch(const std::uint64_t* context) 
 
 extern "C" void GuestCpuStartFiber_nid_no_patch(const std::uint64_t stackTop) {
     auto* state = ps5lift_current_state();
-    if (stackTop != 0) state->Gpr[PS5LIFT_RSP] = stackTop & ~std::uint64_t{15};
+    if (stackTop != 0) state->Gpr[PS5LIFT_RSP] = Ps5Lift::Bridge::GuestAddress(reinterpret_cast<const void*>(stackTop)) & ~std::uint64_t{15};
     state->Unwinding = 0;
 }

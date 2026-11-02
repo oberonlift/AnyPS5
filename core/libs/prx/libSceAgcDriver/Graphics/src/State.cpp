@@ -1,4 +1,5 @@
 #include <cstdio>
+#include "prx/libc/include/GuestArena.hpp"
 #include "prx/libSceAgcDriver/Graphics/include/State.hpp"
 #include "prx/libSceAgcDriver/Graphics/include/ShaderInputState.hpp"
 #include "prx/libSceAgcDriver/Graphics/include/Shaders.hpp"
@@ -2174,7 +2175,7 @@ ColorTarget DecodeGcnColorBuffer(const Registers& cx, std::uint32_t slot) {
         color.cmaskBytes = (static_cast<std::size_t>(read(cx, 0x320 + stride) & 0x3fffu) + 1u) * 128u;
         color.cmaskFastClear = (info & 0x2000u) != 0;
     }
-    GuestMemory::CheckRange(reinterpret_cast<const void*>(color.address), color.bytes, layout.Alignment(), true);
+    GuestMemory::CheckRange(GuestArena::GuestToHost(color.address), color.bytes, layout.Alignment(), true);
     return color;
 }
 
@@ -2293,7 +2294,7 @@ ColorTarget DecodeColorBuffer(const Registers& cx, std::uint32_t slot, bool allo
     }
     color.address = color.surfaceAddress + mipOffset;
     color.bytes = colorLayout.Bytes();
-    GuestMemory::CheckRange(reinterpret_cast<const void*>(color.address), color.bytes, colorLayout.Alignment(), true);
+    GuestMemory::CheckRange(GuestArena::GuestToHost(color.address), color.bytes, colorLayout.Alignment(), true);
     color.format = decoded.format;
     color.componentMapping = decoded.componentMapping;
     color.packing = decoded.packing;
@@ -2335,7 +2336,7 @@ ColorTarget DecodeColorBuffer(const Registers& cx, std::uint32_t slot, bool allo
             const auto totalCmaskBytes = totalBlocks * CmaskLayout::Alignment;
             color.cmaskAddress = cmask + cmaskMip0Offset;
             color.cmaskBytes = CmaskBytes(color.extent.width, color.extent.height);
-            if (color.samples == 1) GuestMemory::CheckRange(reinterpret_cast<const void*>(cmask), totalCmaskBytes, CmaskLayout::Alignment, true);
+            if (color.samples == 1) GuestMemory::CheckRange(GuestArena::GuestToHost(cmask), totalCmaskBytes, CmaskLayout::Alignment, true);
         }
         color.cmaskFastClear = (info & 0x2000u) != 0;
         if (const auto fmask = find(cx, 0x321 + stride); color.samples > 1u && fmask != cx.end()) {
@@ -2379,7 +2380,7 @@ ColorTarget DecodeColorBuffer(const Registers& cx, std::uint32_t slot, bool allo
     }
     if (volume && color.tileMode != ColorTileMode::Linear) {
         color.bytes = DescribeSurface(SurfaceForTarget(color)).guestBytes;
-        GuestMemory::CheckRange(reinterpret_cast<const void*>(color.surfaceAddress), color.bytes, colorLayout.Alignment(), true);
+        GuestMemory::CheckRange(GuestArena::GuestToHost(color.surfaceAddress), color.bytes, colorLayout.Alignment(), true);
     }
     return color;
 }

@@ -10,10 +10,6 @@
 
 extern "C" {
 
-extern FileStream* __stdinp_nid_postfix;
-extern FileStream* __stdoutp_nid_postfix;
-extern FileStream* __stderrp_nid_postfix;
-
 }
 
 namespace {

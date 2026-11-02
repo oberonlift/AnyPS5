@@ -231,7 +231,7 @@ private:
 
         static void release(void* raw, std::size_t bytes) {
             GuestArena::GuestArenaReset_nid_postfix(raw, bytes);
-            GuestAllocations::GuestAllocationsInvalidate_nid_postfix(reinterpret_cast<std::uintptr_t>(raw), bytes);
+            GuestAllocations::GuestAllocationsInvalidate_nid_postfix(GuestArena::HostToGuest(raw), bytes);
             GuestArena::GuestArenaRelease_nid_postfix(raw, bytes);
             shrink(usage().system, bytes);
         }

@@ -1,4 +1,5 @@
 #include "prx/libkernel/include/Api.hpp"
+#include "prx/libc/include/GuestArena.hpp"
 #include <cstdint>
 #include <cstddef>
 #include "SceTypes.hpp"
@@ -242,7 +243,7 @@ void CallHandler(GuestExceptionHandler handler, int signum, GuestUcontext& ucont
     const std::uint32_t mxcsrMask = FpWord(m, MxcsrMaskOffset);
     LogGuestExceptionContext(signum, m);
 #ifdef ANYPS5_GUEST_LIFTED
-    GuestCpuCallInterrupted_nid_no_patch(reinterpret_cast<std::uint64_t>(handler), static_cast<std::uint64_t>(signum), reinterpret_cast<std::uint64_t>(&ucontext));
+    GuestCpuCallInterrupted_nid_no_patch(GuestArena::HostToGuest(reinterpret_cast<const void*>(handler)), static_cast<std::uint64_t>(signum), GuestArena::HostToGuest(&ucontext));
 #else
     handler(signum, &ucontext);
 #endif

@@ -1,4 +1,5 @@
 #include "prx/libSceAgc/Misc/include/ShaderFusion.hpp"
+#include "prx/libc/include/GuestArena.hpp"
 
 #include <algorithm>
 #include <array>
@@ -14,6 +15,7 @@
 #include <vector>
 #include "SceTypes.hpp"
 #include "prx/libc/include/General.hpp"
+#include "prx/libc/include/GuestHeap.hpp"
 #include "prx/libSceAgc/Shader/include/ShaderConstants.hpp"
 #include "prx/libSceAgc/Shader/include/ShaderUtils.hpp"
 #include "prx/libSceAgcDriver/Execution/include/Driver.hpp"
@@ -50,6 +52,10 @@ bool ValidHalves(const Shader* front, const Shader* back) {
 
 bool GeometryHalves(const Shader* front) {
     return static_cast<ShaderBinaryType>(front->type) == ShaderBinaryType::GsFront;
+}
+
+const void* Code(const Shader* shader) {
+    return const_cast<const void*>(static_cast<const volatile void*>(shader->code));
 }
 
 ShaderRegister& FindRegister(ShaderRegister* regs, std::uint32_t count, std::uint32_t offset, std::uint32_t occurrence = 0) {
@@ -107,7 +113,7 @@ struct FrontProgram {
 };
 
 FrontProgram FrontProgramBytes(const char* function, const Shader* front) {
-    const auto* bytes = static_cast<const std::uint8_t*>(const_cast<const void*>(front->code));
+    const auto* bytes = static_cast<const std::uint8_t*>(Code(front));
     const std::size_t size = front->shader_size;
     if (size < TrailerCodeBytesOffset + sizeof(std::uint32_t)) Fail(function, "front half has no program trailer");
     std::size_t trailer = size;
@@ -133,7 +139,7 @@ FrontProgram FrontProgramBytes(const char* function, const Shader* front) {
 }
 
 std::vector<std::pair<std::size_t, std::uint32_t>> ConstantLiterals(const char* function, const Shader* front, std::uint32_t programBytes, std::size_t constants, std::size_t constantsBytes, std::size_t moved) {
-    const auto* bytes = static_cast<const std::uint8_t*>(const_cast<const void*>(front->code));
+    const auto* bytes = static_cast<const std::uint8_t*>(Code(front));
     const auto word = [&](std::size_t index) {
         std::uint32_t value = 0;
         std::memcpy(&value, bytes + index * 4, sizeof(value));
@@ -207,12 +213,14 @@ GeometryLayout ComputeGeometryLayout(const char* function, const Shader* front, 
     const auto* backRsrc2 = FindHalfRegister(back, SPI_SHADER_PGM_RSRC2_GS);
     if (backRsrc1 == nullptr || backRsrc2 == nullptr) Fail(function, "back half has no GS resource registers");
     const auto resources = mergeGeometryResources(frontRsrc1->value, frontRsrc2->value, backRsrc1->value, backRsrc2->value);
-    layout.sh.assign(back->sh_registers, back->sh_registers + back->num_sh_registers);
+    const ShaderRegister* const shRegisters = back->sh_registers;
+    layout.sh.assign(shRegisters, shRegisters + back->num_sh_registers);
     for (auto& reg : layout.sh) {
         if (reg.offset == SPI_SHADER_PGM_RSRC1_GS) reg.value = resources[0];
         else if (reg.offset == SPI_SHADER_PGM_RSRC2_GS) reg.value = resources[1];
     }
-    layout.cx.assign(back->cx_registers, back->cx_registers + back->num_cx_registers);
+    const ShaderRegister* const cxRegisters = back->cx_registers;
+    layout.cx.assign(cxRegisters, cxRegisters + back->num_cx_registers);
     if (layout.sh.size() > 0xff || layout.cx.size() > 0xff) Fail(function, "fused register count exceeds the shader header");
     layout.headerOffset = AlignUp(layout.codeBytes, alignof(Shader));
     layout.shOffset = AlignUp(layout.headerOffset + sizeof(Shader), alignof(ShaderRegister));
@@ -261,9 +269,9 @@ std::vector<std::uint8_t> FusionKey(const Shader* front, const Shader* back, con
     constexpr auto headerBytes = offsetof(Shader, num_sh_registers) + sizeof(Shader::num_sh_registers);
     AppendBytes(key, front, headerBytes);
     AppendBytes(key, back, headerBytes);
-    AppendBytes(key, const_cast<const void*>(front->code), layout.frontBytes);
-    AppendBytes(key, const_cast<const void*>(back->code), back->shader_size);
-    if (layout.constantsBytes != 0) AppendBytes(key, static_cast<const std::uint8_t*>(const_cast<const void*>(front->code)) + layout.constantsSource, layout.constantsBytes);
+    AppendBytes(key, Code(front), layout.frontBytes);
+    AppendBytes(key, Code(back), back->shader_size);
+    if (layout.constantsBytes != 0) AppendBytes(key, static_cast<const std::uint8_t*>(Code(front)) + layout.constantsSource, layout.constantsBytes);
     AppendBytes(key, layout.sh.data(), layout.sh.size() * sizeof(ShaderRegister));
     AppendBytes(key, layout.cx.data(), layout.cx.size() * sizeof(ShaderRegister));
     AppendBytes(key, back->specials, back->special_sizes_bytes);
@@ -277,17 +285,24 @@ std::vector<std::uint8_t> FusionKey(const Shader* front, const Shader* back, con
 }
 
 FusedProgram BuildFusedProgram(const char* fn, const Shader* front, const Shader* back, GeometryLayout& layout) {
+#ifdef ANYPS5_TRANSLATED_GUEST
+    FusedProgram program{{}, nullptr};
+    auto* memory = static_cast<std::uint8_t*>(GuestHeap::GuestHeapAlign_nid_postfix(FusedCodeAlignment, layout.totalBytes));
+    if (memory == nullptr) Fail(fn, "the guest heap has no memory for a fused program");
+    const auto base = GuestArena::HostToGuest(memory);
+#else
     FusedProgram program{std::vector<std::uint8_t>(layout.totalBytes + FusedCodeAlignment - 1), nullptr};
     const auto storage = reinterpret_cast<std::uintptr_t>(program.storage.data());
     const auto base = AlignUp(storage, FusedCodeAlignment);
-    if ((base & SHADER_BASE_ALIGN_MASK) != 0) Fail(fn, "fused shader memory is not a valid program address");
     auto* memory = program.storage.data() + (base - storage);
-    std::memcpy(memory, const_cast<const void*>(front->code), layout.frontBytes);
+#endif
+    if ((base & SHADER_BASE_ALIGN_MASK) != 0) Fail(fn, "fused shader memory is not a valid program address");
+    std::memcpy(memory, Code(front), layout.frontBytes);
     for (std::size_t offset = layout.frontBytes; offset < layout.backOffset; offset += sizeof(SNop)) std::memcpy(memory + offset, &SNop, sizeof(SNop));
-    std::memcpy(memory + layout.backOffset, const_cast<const void*>(back->code), back->shader_size);
+    std::memcpy(memory + layout.backOffset, Code(back), back->shader_size);
     if (layout.constantsBytes != 0) {
         for (std::size_t offset = layout.backOffset + back->shader_size; offset < layout.constantsOffset; ++offset) memory[offset] = 0;
-        std::memcpy(memory + layout.constantsOffset, static_cast<const std::uint8_t*>(const_cast<const void*>(front->code)) + layout.constantsSource, layout.constantsBytes);
+        std::memcpy(memory + layout.constantsOffset, static_cast<const std::uint8_t*>(Code(front)) + layout.constantsSource, layout.constantsBytes);
         for (const auto& [offset, literal] : layout.literals) std::memcpy(memory + offset, &literal, sizeof(literal));
     }
     SetProgramAddress(layout.sh, SPI_SHADER_PGM_LO_GS, base + layout.backOffset);
@@ -392,7 +407,7 @@ int APS5_VABI sceAgcFuseShaderHalves_0200(Shader* fused_result, const Shader* fr
     fusedRsrc2.value = (fusedRsrc2.value & 0xf7ffffc1u) | (frontRsrc2.value & 0x0800003eu);
     auto& loRegister = FindRegister(fused, fusedCount, SPI_SHADER_PGM_LO_LS);
     auto& hiRegister = FindRegister(fused, fusedCount, SPI_SHADER_PGM_LO_LS + 1u);
-    const auto address = reinterpret_cast<std::uint64_t>(front->code);
+    const auto address = GuestArena::HostToGuest(front->code);
     loRegister.value = static_cast<std::uint32_t>(address >> 8u);
     hiRegister.value = (hiRegister.value & 0xffffff00u) | static_cast<std::uint32_t>((address >> 40u) & 0xffu);
     fused_result->user_data = nullptr;

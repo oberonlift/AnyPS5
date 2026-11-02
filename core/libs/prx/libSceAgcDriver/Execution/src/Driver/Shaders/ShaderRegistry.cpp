@@ -8,6 +8,8 @@
 #include "prx/libSceAgcDriver/Graphics/include/PipelineLibrary.hpp"
 #include "prx/libSceAgcDriver/Execution/include/Driver/Diagnostics.hpp"
 #include "prx/libSceAgcDriver/Execution/include/GuestMemory.hpp"
+#include "prx/libc/include/GuestArena.hpp"
+#include "prx/libSceAgcDriver/Execution/include/Driver/DriverMemory.hpp"
 #include "CacheKey.hpp"
 #include "prx/libSceAgcDriver/Execution/include/ShaderPreparation.hpp"
 #include "prx/libSceAgcDriver/Execution/include/ShaderPreparationScope.hpp"
@@ -613,11 +615,11 @@ void ShaderPreparationTransaction::Commit() {
 
 bool FusedHullHeader(const ShaderSnapshot& snapshot, Shader used, const Shader& registered) {
     if (used.type != 3u || registered.type != 7u) return false;
-    const auto* bound = used.sh_registers;
+    const ShaderRegister* bound = used.sh_registers;
     used.type = registered.type;
     used.sh_registers = registered.sh_registers;
     if (std::memcmp(&used, &registered, offsetof(Shader, num_sh_registers) + sizeof(Shader::num_sh_registers)) != 0) return false;
-    const auto address = reinterpret_cast<std::uintptr_t>(registered.sh_registers);
+    const auto address = GuestArena::HostToGuest(registered.sh_registers);
     const std::size_t bytes = registered.num_sh_registers * sizeof(ShaderRegister);
     if (bytes == 0 || bound == nullptr || address < snapshot.headerAddress || address - snapshot.headerAddress > snapshot.header.size() || snapshot.header.size() - (address - snapshot.headerAddress) < bytes) return false;
     GuestMemory::CheckRange(bound, bytes, alignof(ShaderRegister));
@@ -640,10 +642,10 @@ static Shader GuestShaderFields(const Shader* shader) {
 }
 
 static bool RelocatedRegisters(const ShaderSnapshot& snapshot, Shader used, const Shader& registered) {
-    const auto* bound = used.sh_registers;
+    const ShaderRegister* bound = used.sh_registers;
     used.sh_registers = registered.sh_registers;
     if (std::memcmp(&used, &registered, offsetof(Shader, num_sh_registers) + sizeof(Shader::num_sh_registers)) != 0) return false;
-    const auto address = reinterpret_cast<std::uintptr_t>(registered.sh_registers);
+    const auto address = GuestArena::HostToGuest(registered.sh_registers);
     const std::size_t bytes = registered.num_sh_registers * sizeof(ShaderRegister);
     if (bytes == 0 || bound == nullptr || address < snapshot.headerAddress || address - snapshot.headerAddress > snapshot.header.size() || snapshot.header.size() - (address - snapshot.headerAddress) < bytes) return false;
     GuestMemory::CheckRange(bound, bytes, alignof(ShaderRegister));
@@ -656,7 +658,7 @@ static bool RelocatedRegisters(const ShaderSnapshot& snapshot, Shader used, cons
 static bool ReferredBytesMatch(const ShaderSnapshot& snapshot, const void* pointer, const void* registeredPointer, std::size_t bytes) {
     if (bytes == 0 || pointer == registeredPointer) return true;
     if (pointer == nullptr || registeredPointer == nullptr) return false;
-    const auto address = reinterpret_cast<std::uintptr_t>(registeredPointer);
+    const auto address = GuestArena::HostToGuest(registeredPointer);
     if (address < snapshot.headerAddress) return false;
     const auto offset = address - snapshot.headerAddress;
     if (offset > snapshot.header.size() || snapshot.header.size() - offset < bytes) return false;
@@ -681,7 +683,7 @@ static bool RelocatedCopy(const ShaderSnapshot& snapshot, Shader used, const Sha
 }
 
 bool SameHeader(const ShaderSnapshot& snapshot, const Shader* shader) {
-    if (snapshot.headerAddress == reinterpret_cast<std::uintptr_t>(shader)) return true;
+    if (snapshot.headerAddress == GuestArena::HostToGuest(shader)) return true;
     if (snapshot.header.size() < sizeof(Shader)) return false;
     GuestMemory::CheckRange(shader, sizeof(Shader), 1);
     Shader used;
@@ -759,10 +761,10 @@ std::size_t ShaderRegistry::erase(std::uint64_t address) {
 }
 
 std::shared_ptr<const ShaderSnapshot> RegisteredHeader(const ShaderRegistry& registry, const Shader* shader) {
-    const auto found = registry.find(reinterpret_cast<std::uintptr_t>(const_cast<const void*>(GuestShaderFields(shader).code)));
+    const auto found = registry.find(GuestArena::HostToGuest(GuestShaderFields(shader).code));
     if (found == registry.end()) return {};
     for (const auto& snapshot : found->second) {
-        if (snapshot->headerAddress == reinterpret_cast<std::uintptr_t>(shader)) return snapshot;
+        if (snapshot->headerAddress == GuestArena::HostToGuest(shader)) return snapshot;
     }
     for (const auto& snapshot : found->second) {
         if (SameHeader(*snapshot, shader)) return snapshot;
@@ -991,7 +993,7 @@ std::vector<std::uint32_t> ReadUserDataCallee(std::uint64_t address, std::uint32
     while (words.size() < limitWords) {
         const auto next = address + words.size() * 4u;
         const auto bytes = static_cast<std::size_t>(page - next % page);
-        if (!GuestMemory::Accessible(reinterpret_cast<const void*>(static_cast<std::uintptr_t>(next)), bytes)) {
+        if (!GuestMemory::Accessible(GuestArena::GuestToHost(next), bytes)) {
             if (finish()) return words;
             throw std::runtime_error("its callee at " + hexText(address) + " is not readable at " + hexText(next));
         }
@@ -1006,7 +1008,7 @@ std::vector<std::uint32_t> ReadUserDataCallee(std::uint64_t address, std::uint32
 }
 
 std::vector<std::uint8_t> ReadGuestBytes(std::uint64_t address, std::uint64_t bytes, const char* what) {
-    if (address > UINTPTR_MAX - bytes || !GuestMemory::Accessible(reinterpret_cast<const void*>(static_cast<std::uintptr_t>(address)), static_cast<std::size_t>(bytes))) {
+    if (address > UINTPTR_MAX - bytes || !GuestMemory::Accessible(GuestArena::GuestToHost(address), static_cast<std::size_t>(bytes))) {
         throw std::runtime_error(std::string("its ") + what + " at " + hexText(address) + " + " + hexText(bytes) + " is not readable");
     }
     std::vector<std::uint8_t> data(static_cast<std::size_t>(bytes));
@@ -1226,7 +1228,7 @@ namespace {
 template<typename TValue>
 std::vector<TValue> ReadHeaderArray(const ShaderSnapshot& snapshot, const TValue* pointer, std::size_t count) {
     if (count == 0) return {};
-    const auto address = reinterpret_cast<std::uintptr_t>(pointer);
+    const auto address = GuestArena::HostToGuest(pointer);
     if (address < snapshot.headerAddress || address - snapshot.headerAddress > snapshot.header.size()) throw std::runtime_error("AGC driver: shader metadata is outside the registered header");
     const auto offset = static_cast<std::size_t>(address - snapshot.headerAddress);
     if (count > (snapshot.header.size() - offset) / sizeof(TValue)) throw std::runtime_error("AGC driver: truncated shader metadata");
@@ -1243,14 +1245,14 @@ Shader ReadHeader(const ShaderSnapshot& snapshot) {
 
 DecodedShaderState DecodeRegisteredState(const ShaderSnapshot& snapshot, DecodedShaderState state = {{}, InitialContextRegisters(), {{0x24a, 0}, {0x24b, 0}}}) {
     const auto header = ReadHeader(snapshot);
-    for (const auto reg : ReadHeaderArray(snapshot, header.sh_registers, header.num_sh_registers)) {
+    for (const auto reg : ReadHeaderArray(snapshot, static_cast<const ShaderRegister*>(header.sh_registers), header.num_sh_registers)) {
         state.shader.insert_or_assign(reg.offset, reg.value);
     }
-    for (const auto reg : ReadHeaderArray(snapshot, header.cx_registers, header.num_cx_registers)) {
+    for (const auto reg : ReadHeaderArray(snapshot, static_cast<const ShaderRegister*>(header.cx_registers), header.num_cx_registers)) {
         state.context.insert_or_assign(reg.offset, reg.value);
     }
     if (header.specials != nullptr) {
-        const auto special = ReadHeaderArray(snapshot, header.specials, 1).front();
+        const auto special = ReadHeaderArray(snapshot, static_cast<const ShaderSpecialRegs*>(header.specials), 1).front();
         state.context[special.vgt_shader_stages_en.offset] = special.vgt_shader_stages_en.value;
         if (special.vgt_gs_out_prim_type.offset != 0) state.context[special.vgt_gs_out_prim_type.offset] = special.vgt_gs_out_prim_type.value;
         state.userConfig[special.ge_cntl.offset] = special.ge_cntl.value;
@@ -1355,7 +1357,7 @@ std::unique_ptr<RegisteredPreparation> PlanRegistered(const ShaderSnapshot& snap
             if (deferred != nullptr) return defer("its header has no specials to give its wave size");
             return {};
         }
-        const auto special = ReadHeaderArray(snapshot, header.specials, 1).front();
+        const auto special = ReadHeaderArray(snapshot, static_cast<const ShaderSpecialRegs*>(header.specials), 1).front();
         wave = (special.dispatch_modifier & 0x8000u) != 0 ? 32u : 64u;
     } else if (stage == Stage::Fragment) {
         const auto count = RegisterValue(state.context, 0x1b6) & 0x3fu;
@@ -2040,7 +2042,7 @@ void Driver::ResolveGraphicsStagesAbi(std::span<const Shader* const> stages, std
         registry = shaders;
         for (const auto* shader : stages) {
             const auto fields = GuestShaderFields(shader);
-            const auto address = reinterpret_cast<std::uintptr_t>(const_cast<const void*>(fields.code));
+            const auto address = GuestArena::HostToGuest(fields.code);
             require(registry != nullptr && registry->contains(address), "graphics ABI refers to an unregistered shader");
             const auto selected = RegisteredHeader(*registry, shader);
             require(selected != nullptr, "graphics ABI refers to a replaced shader header");
@@ -2190,7 +2192,7 @@ void Driver::ResolveShaderAbi(const Shader* shader, std::span<const ShaderRegist
     std::shared_ptr<const ShaderSnapshot> snapshot;
     {
         std::lock_guard lock(mutex);
-        const auto address = reinterpret_cast<std::uintptr_t>(const_cast<const void*>(fields.code));
+        const auto address = GuestArena::HostToGuest(fields.code);
         require(shaders != nullptr && shaders->contains(address), "static ABI refers to an unregistered shader");
         snapshot = RegisteredHeader(*shaders, shader);
         require(snapshot != nullptr, "static ABI refers to a replaced shader header");
@@ -2283,7 +2285,12 @@ static const Shader NullPixelShader = [] {
 }();
 
 std::uint64_t NullPixelProgramAddress() {
+#ifdef ANYPS5_TRANSLATED_GUEST
+    static const std::uint64_t address = PlaceDriverProgram(0, NullPixelCode);
+    return address;
+#else
     return reinterpret_cast<std::uintptr_t>(NullPixelCode);
+#endif
 }
 
 alignas(256) static const std::uint32_t DepthCopyMultisamplePixelCode[64] = {0x360604ffu, 0x0000ffffu, 0x2c080490u, 0x7e0a0208u, 0xf0000130u, 0x00000603u, 0xbf8c3f70u, 0xf8001801u, 0x00000006u, 0xbf810000u};
@@ -2310,7 +2317,13 @@ static const Shader DepthCopySinglePixelShader = [] {
 }();
 
 std::uint64_t DepthCopyPixelProgramAddress(bool multisampled) {
+#ifdef ANYPS5_TRANSLATED_GUEST
+    static const std::uint64_t single = PlaceDriverProgram(1, DepthCopySinglePixelCode);
+    static const std::uint64_t multisample = PlaceDriverProgram(2, DepthCopyMultisamplePixelCode);
+    return multisampled ? multisample : single;
+#else
     return reinterpret_cast<std::uintptr_t>(multisampled ? DepthCopyMultisamplePixelCode : DepthCopySinglePixelCode);
+#endif
 }
 
 std::uint32_t DepthCopyPixelUserWords(bool multisampled) {
@@ -2334,7 +2347,7 @@ void Driver::ResolveGraphicsAbi(const Shader* vertex, const Shader* pixel, std::
     {
         std::lock_guard lock(mutex);
         const auto lookup = [&](const Shader* shader) {
-            const auto address = reinterpret_cast<std::uintptr_t>(const_cast<const void*>(GuestShaderFields(shader).code));
+            const auto address = GuestArena::HostToGuest(GuestShaderFields(shader).code);
             require(shaders != nullptr && shaders->contains(address), "rectangle ABI refers to an unregistered shader");
             const auto snapshot = RegisteredHeader(*shaders, shader);
             require(snapshot != nullptr, "rectangle ABI refers to a replaced shader header");
@@ -2442,7 +2455,7 @@ void ResolvePreparedGraphics(const ShaderSnapshot& front, const std::shared_ptr<
 }
 
 ShaderSnapshot PrepareNullPixelProgram(const VulkanDevice& device) {
-    ShaderSnapshot null{NullPixelProgramAddress(), reinterpret_cast<std::uintptr_t>(&NullPixelShader), NullPixelShader.type, {}, {}};
+    ShaderSnapshot null{NullPixelProgramAddress(), GuestArena::HostToGuest(&NullPixelShader), NullPixelShader.type, {}, {}};
     null.code.assign(std::begin(NullPixelCode), std::end(NullPixelCode));
     null.header.resize(sizeof(Shader));
     std::memcpy(null.header.data(), &NullPixelShader, sizeof(Shader));
@@ -2464,7 +2477,7 @@ ShaderSnapshot PrepareNullPixelProgram(const VulkanDevice& device) {
 ShaderSnapshot PrepareDepthCopyPixelProgram(bool multisampled) {
     const auto& shader = multisampled ? DepthCopyMultisamplePixelShader : DepthCopySinglePixelShader;
     const auto* code = multisampled ? DepthCopyMultisamplePixelCode : DepthCopySinglePixelCode;
-    ShaderSnapshot copy{DepthCopyPixelProgramAddress(multisampled), reinterpret_cast<std::uintptr_t>(&shader), shader.type, {}, {}};
+    ShaderSnapshot copy{DepthCopyPixelProgramAddress(multisampled), GuestArena::HostToGuest(&shader), shader.type, {}, {}};
     copy.code.assign(code, code + 64);
     copy.header.resize(sizeof(Shader));
     std::memcpy(copy.header.data(), &shader, sizeof(Shader));
@@ -2498,10 +2511,10 @@ void Driver::RegisterShader(const Shader* shader) {
     require(fields.header_size >= sizeof(Shader), "shader header is smaller than its fixed fields");
     require(fields.shader_size != 0 && (fields.shader_size & 3u) == 0, "invalid shader size");
     GuestMemory::CheckRange(shader, fields.header_size, 1);
-    const auto* code = const_cast<const void*>(fields.code);
+    const auto* code = const_cast<const void*>(static_cast<const volatile void*>(fields.code));
     GuestMemory::CheckRange(code, fields.shader_size, 256);
-    require(!RawGraphicsDrawnIn(reinterpret_cast<std::uintptr_t>(code), reinterpret_cast<std::uintptr_t>(code) + fields.shader_size), "a shader was registered over a graphics program that was drawn without registration");
-    ShaderSnapshot snapshot{reinterpret_cast<std::uintptr_t>(code), reinterpret_cast<std::uintptr_t>(shader), fields.type, {}, {}};
+    require(!RawGraphicsDrawnIn(GuestArena::HostToGuest(code), GuestArena::HostToGuest(code) + fields.shader_size), "a shader was registered over a graphics program that was drawn without registration");
+    ShaderSnapshot snapshot{GuestArena::HostToGuest(code), GuestArena::HostToGuest(shader), fields.type, {}, {}};
     snapshot.code.resize(fields.shader_size / sizeof(std::uint32_t));
     std::memcpy(snapshot.code.Mutable().data(), code, fields.shader_size);
     snapshot.header.resize(fields.header_size);

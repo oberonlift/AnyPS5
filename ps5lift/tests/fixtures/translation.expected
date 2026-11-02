@@ -1,0 +1,14 @@
+fixed map at 64 GiB 1
+strlen 5
+printf through %s: hello
+strchr finds 'l' at offset 2
+strchr finds nothing: null 1
+strtol 42, end at offset 2
+strtol with a null end 42
+qsort compares inside the map 1, sorted 1 2 3 4
+writev gathers
+writev wrote 15
+zeroed mutex: pthread lock 0 unlock 0, sce lock 0 unlock 0
+mutexattr: pthread init 0, sce settype 0, pthread gettype 0 type 2, kind 2, destroy 0
+pthread_equal on its own handle 1
+munmap 0

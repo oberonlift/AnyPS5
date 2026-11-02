@@ -1,6 +1,7 @@
 #ifndef CORE_LIBS_PRX_LIBKERNEL_MODULE_EHFRAME_HPP
 #define CORE_LIBS_PRX_LIBKERNEL_MODULE_EHFRAME_HPP
 
+#include "prx/libc/include/GuestArena.hpp"
 #include <cstdint>
 #include <cstring>
 #include <limits>
@@ -42,7 +43,7 @@ std::uintptr_t EncodedValue(const TContains& contains, std::uintptr_t field, std
     if (application != 0x00 && application != 0x10) Fail(caller, "eh_frame_hdr encoding other than absptr or pcrel");
     const auto size = EncodedSize(encoding, caller);
     if (!contains(field, size)) Fail(caller, "eh_frame_hdr outside the image");
-    const auto* bytes = reinterpret_cast<const void*>(field);
+    const auto* bytes = GuestArena::GuestToHost(field);
     std::int64_t value = 0;
     switch (encoding & 0x0fu) {
     case 0x02: { std::uint16_t data; std::memcpy(&data, bytes, sizeof(data)); value = data; break; }
@@ -56,7 +57,7 @@ std::uintptr_t EncodedValue(const TContains& contains, std::uintptr_t field, std
 
 template<typename TContains>
 std::uint64_t HeaderSize(const TContains& contains, std::uintptr_t header, const char* caller) {
-    const auto* bytes = reinterpret_cast<const std::uint8_t*>(header);
+    const auto* bytes = static_cast<const std::uint8_t*>(GuestArena::GuestToHost(header));
     std::uint64_t size = 4 + EncodedSize(bytes[1], caller);
     if (bytes[2] == 0xff) return size;
     const auto count = static_cast<std::uint64_t>(EncodedValue(contains, header + size, bytes[2] & 0x0fu, caller));
@@ -74,7 +75,7 @@ std::uint64_t FramesSize(const TContains& contains, std::uintptr_t frames, const
     for (;;) {
         if (!contains(position, 4)) Fail(caller, "eh_frame has no terminator inside the image");
         std::uint32_t length;
-        std::memcpy(&length, reinterpret_cast<const void*>(position), sizeof(length));
+        std::memcpy(&length, GuestArena::GuestToHost(position), sizeof(length));
         if (length == 0) return position - frames;
         if (length == 0xffffffffu) Fail(caller, "unsupported eh_frame record with a 64-bit length");
         if (!contains(position + 4, length)) Fail(caller, "eh_frame record outside the image");
@@ -85,10 +86,10 @@ std::uint64_t FramesSize(const TContains& contains, std::uintptr_t frames, const
 template<typename TContains>
 Tables ReadTables(const TContains& contains, std::uintptr_t header, const char* caller) {
     if (!contains(header, 4)) Fail(caller, "eh_frame_hdr outside the image");
-    if (reinterpret_cast<const std::uint8_t*>(header)[0] != 1) Fail(caller, "unsupported eh_frame_hdr version");
+    if (static_cast<const std::uint8_t*>(GuestArena::GuestToHost(header))[0] != 1) Fail(caller, "unsupported eh_frame_hdr version");
     Tables tables;
     tables.header = header;
-    tables.frames = EncodedValue(contains, header + 4, reinterpret_cast<const std::uint8_t*>(header)[1], caller);
+    tables.frames = EncodedValue(contains, header + 4, static_cast<const std::uint8_t*>(GuestArena::GuestToHost(header))[1], caller);
     tables.headerSize = HeaderSize(contains, header, caller);
     tables.framesSize = FramesSize(contains, tables.frames, caller);
     return tables;

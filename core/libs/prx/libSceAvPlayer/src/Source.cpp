@@ -514,7 +514,7 @@ public:
         condition.notify_all();
         if (!taken) return false;
         info = {};
-        info.p_data = static_cast<std::uint8_t*>(extended.p_data);
+        info.p_data = static_cast<std::uint8_t*>(static_cast<void*>(extended.p_data));
         info.timestamp = extended.timestamp;
         info.details.audio.channel_count = extended.details.audio.channel_count;
         info.details.audio.sample_rate = extended.details.audio.sample_rate;

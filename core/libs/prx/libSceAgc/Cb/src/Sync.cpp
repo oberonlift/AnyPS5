@@ -30,7 +30,7 @@ std::uint32_t* APS5_VABI sceAgcCbReleaseMem(CommandBuffer* buf, std::uint8_t act
     Agc::Command::Require(dataSelect <= 3 || dataSelect == 5, __func__, "invalid release data selector");
     Agc::Command::Require(interrupt <= 4, __func__, "invalid release interrupt selector");
     Agc::Command::CheckBits(interruptContextId, 0x7ffffffu, __func__);
-    auto guestAddress = reinterpret_cast<std::uintptr_t>(address);
+    auto guestAddress = GuestArena::HostToGuest(address);
     auto value = data;
     if (interrupt == 4) {
         Agc::Command::Require(guestAddress == 0 && value == 0, __func__, "interrupt-only release cannot write data");
@@ -62,7 +62,7 @@ std::uint32_t* APS5_VABI sceAgcCbMemSemaphore(CommandBuffer* buf, const volatile
     (void)operation;
     (void)modifier;
     (void)value;
-    const auto guestAddress = static_cast<std::uint64_t>(reinterpret_cast<std::uintptr_t>(address));
+    const auto guestAddress = static_cast<std::uint64_t>(GuestArena::HostToGuest(address));
     const auto maskedAddress = guestAddress & ~0xfULL;
     return Agc::Command::Emit(buf, 0x39u, {static_cast<std::uint32_t>(maskedAddress), static_cast<std::uint32_t>(maskedAddress >> 32u), 0x80100000u}, __func__);
 }

@@ -1,4 +1,5 @@
 #include "prx/libSceAgcDriver/Execution/include/ProfileOutput.hpp"
+#include "prx/libc/include/GuestArena.hpp"
 #include "prx/libSceAgcDriver/Execution/include/PerformanceTimer.hpp"
 #include "prx/libSceAgcDriver/Execution/include/Driver/Driver.hpp"
 #include "prx/libSceAgcDriver/Execution/include/Driver/Queues/Submission.hpp"
@@ -170,7 +171,7 @@ bool Driver::copySegment(Submission& submission, const std::uint32_t* guest, std
             require(mode == 1u || mode == 2u, "invalid COND_INDIRECT_BUFFER mode");
             require(((guest[cursor + 1] >> 8u) & 7u) == 0u, "a COND_INDIRECT_BUFFER with a comparison is not implemented");
             require(!Pm4::Predicated(header), "a predicated COND_INDIRECT_BUFFER is not implemented");
-            const auto* target = reinterpret_cast<const std::uint32_t*>(static_cast<std::uintptr_t>(guest[cursor + 8] & ~3u) | (static_cast<std::uintptr_t>(guest[cursor + 9] & 0xffffu) << 32u));
+            const auto* target = static_cast<const std::uint32_t*>(GuestArena::GuestToHost(static_cast<std::uintptr_t>(guest[cursor + 8] & ~3u) | (static_cast<std::uintptr_t>(guest[cursor + 9] & 0xffffu) << 32u)));
             const std::size_t targetWords = guest[cursor + 10] & 0xfffffu;
             if (targetWords != 0) {
                 GuestMemory::CheckRange(target, targetWords * sizeof(std::uint32_t), alignof(std::uint32_t));
@@ -184,7 +185,7 @@ bool Driver::copySegment(Submission& submission, const std::uint32_t* guest, std
         }
         if (opcode == 0x3fu) {
             require(count == 4, "invalid INDIRECT_BUFFER size");
-            const auto* target = reinterpret_cast<const std::uint32_t*>(static_cast<std::uintptr_t>(guest[cursor + 1] & ~3u) | (static_cast<std::uintptr_t>(guest[cursor + 2] & 0xffffu) << 32u));
+            const auto* target = static_cast<const std::uint32_t*>(GuestArena::GuestToHost(static_cast<std::uintptr_t>(guest[cursor + 1] & ~3u) | (static_cast<std::uintptr_t>(guest[cursor + 2] & 0xffffu) << 32u)));
             const std::size_t targetWords = guest[cursor + 3] & 0xfffffu;
             const bool chain = (guest[cursor + 3] & (1u << 20u)) != 0;
             require(!chain || guarded.empty(), "a chained INDIRECT_BUFFER inside a conditional execution range is not implemented");
@@ -416,7 +417,7 @@ void Driver::executeRewindTail(const Submission& stalled) {
     if (ring) PrepareSubmissionRing(stalled.queue);
     std::atomic_ref<std::uint32_t> control(*const_cast<std::uint32_t*>(stalled.rewindTail - 1));
     if ((control.load(std::memory_order_acquire) & Pm4::RewindValid) == 0) {
-        noteWaitBlocked(stalled.queue, reinterpret_cast<std::uint64_t>(stalled.rewindTail - 1), true);
+        noteWaitBlocked(stalled.queue, GuestArena::HostToGuest(stalled.rewindTail - 1), true);
         struct BlockedWait {
             Driver& driver;
             std::uint32_t queue;
@@ -426,8 +427,8 @@ void Driver::executeRewindTail(const Submission& stalled) {
         while ((control.load(std::memory_order_acquire) & Pm4::RewindValid) == 0) {
             CheckFailure();
             checkStopping();
-            noteAwaitingTitle(stalled.queue, reinterpret_cast<std::uint64_t>(stalled.rewindTail - 1));
-            stall.Check("REWIND at", reinterpret_cast<std::uint64_t>(stalled.rewindTail - 1));
+            noteAwaitingTitle(stalled.queue, GuestArena::HostToGuest(stalled.rewindTail - 1));
+            stall.Check("REWIND at", GuestArena::HostToGuest(stalled.rewindTail - 1));
             if (stalled.queue == 0 && completionsPending()) reapCompletionLabels();
             PollSleep();
         }
@@ -718,15 +719,15 @@ void Driver::noteHeldAtSubmit(Submission& submission, std::size_t cursor) {
     const auto wait = Pm4::DecodeWait(packet);
     const auto address = wait.address;
     const std::size_t bytes = wait.bytes;
-    if (address % 4 != 0 || !GuestMemory::Accessible(reinterpret_cast<const void*>(address), bytes)) return;
+    if (address % 4 != 0 || !GuestMemory::Accessible(GuestArena::GuestToHost(address), bytes)) return;
     const auto worker = workers.find(submission.queue);
     for (std::size_t offset = 0; offset < bytes; offset += 4) {
         const auto dword = address + offset;
         if (std::find(submission.labelWrites.begin(), submission.labelWrites.end(), dword) != submission.labelWrites.end()) return;
         if (worker != workers.end() && worker->second.unfinishedWrites.contains(dword)) return;
     }
-    std::uint64_t value = *reinterpret_cast<const volatile std::uint32_t*>(address);
-    if (bytes == 8) value |= static_cast<std::uint64_t>(*reinterpret_cast<const volatile std::uint32_t*>(address + 4)) << 32u;
+    std::uint64_t value = *static_cast<const volatile std::uint32_t*>(GuestArena::GuestToHost(address));
+    if (bytes == 8) value |= static_cast<std::uint64_t>(*static_cast<const volatile std::uint32_t*>(GuestArena::GuestToHost(address + 4))) << 32u;
     if (Pm4::WaitComparesValue(packet, value)) submission.heldAtSubmit.insert(cursor);
 }
 

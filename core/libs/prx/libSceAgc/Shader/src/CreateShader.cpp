@@ -1,4 +1,5 @@
 #include "prx/libSceAgc/Shader/include/CreateShader.hpp"
+#include "prx/libc/include/GuestArena.hpp"
 
 #include <cstdio>
 #include <stdexcept>
@@ -11,7 +12,7 @@
 
 extern "C" {
 
-int APS5_VABI sceAgcCreateShader(Shader** dst, void* header, const volatile void* code) {
+int APS5_VABI sceAgcCreateShader(GuestArena::GuestPointer<Shader>* dst, void* header, const volatile void* code) {
     constexpr auto fn = __func__;
     if (dst == nullptr) {
         throw std::runtime_error(std::string(fn) + ": dst is null");
@@ -28,7 +29,7 @@ int APS5_VABI sceAgcCreateShader(Shader** dst, void* header, const volatile void
     if (h->file_header != ShaderRegs::SHADER_FILE_HEADER_MAGIC || h->version != ShaderRegs::SHADER_VERSION) {
         throw std::runtime_error(std::string(fn) + ": invalid shader header or version");
     }
-    const auto base = reinterpret_cast<std::uint64_t>(code);
+    const auto base = GuestArena::HostToGuest(code);
     if ((base & ShaderRegs::SHADER_BASE_ALIGN_MASK) != 0 || h->shader_size == 0 || (h->shader_size & 3u) != 0) {
         throw std::runtime_error(std::string(fn) + ": invalid shader code address or size");
     }

@@ -61,6 +61,7 @@
 #include "prx/libSceAgcDriver/Graphics/include/Texture.hpp"
 #include "prx/libSceAgcDriver/Graphics/include/TextureFormat.hpp"
 #include "prx/libSceAgcDriver/Execution/include/GuestMemory.hpp"
+#include "prx/libc/include/GuestArena.hpp"
 #include "prx/libc/include/General.hpp"
 #ifdef _WIN32
 #include <windows.h>
@@ -3249,8 +3250,10 @@ VulkanDevice::CopyOutcome VulkanDevice::CopyBuffer(std::uint64_t destination, st
         // A plain CPU store, stamped for the write watch, with no pending write to note (nothing is
         // outstanding on the range) and nothing recorded.
         std::vector<std::byte> expected;
-        if (verify) expected.assign(reinterpret_cast<const std::byte*>(source), reinterpret_cast<const std::byte*>(source) + bytes);
-        GuestMemory::StoreOwnBytes(destination, bytes, [&] { std::memcpy(reinterpret_cast<void*>(destination), reinterpret_cast<const void*>(source), bytes); });
+        const auto* hostSource = static_cast<const std::byte*>(GuestArena::GuestToHost(source));
+        auto* hostDestination = GuestArena::GuestToHost(destination);
+        if (verify) expected.assign(hostSource, hostSource + bytes);
+        GuestMemory::StoreOwnBytes(destination, bytes, [&] { std::memcpy(hostDestination, hostSource, bytes); });
         outcome.path = 0;
         outcome.sourceSettledBySignal = settledBySignal;
         if (verify) {
@@ -3260,8 +3263,8 @@ VulkanDevice::CopyOutcome VulkanDevice::CopyBuffer(std::uint64_t destination, st
             Graphics::Recorder::CountSync(4);
             recorder.Sync();
             copiesVerified.fetch_add(1, std::memory_order_relaxed);
-            if (GuestMemory::Accessible(reinterpret_cast<const void*>(source), bytes) && std::memcmp(expected.data(), reinterpret_cast<const void*>(source), bytes) != 0) copySourceChanged.fetch_add(1, std::memory_order_relaxed);
-            if (GuestMemory::Accessible(reinterpret_cast<const void*>(destination), bytes) && std::memcmp(expected.data(), reinterpret_cast<const void*>(destination), bytes) != 0) copyDestinationChanged.fetch_add(1, std::memory_order_relaxed);
+            if (GuestMemory::Accessible(hostSource, bytes) && std::memcmp(expected.data(), hostSource, bytes) != 0) copySourceChanged.fetch_add(1, std::memory_order_relaxed);
+            if (GuestMemory::Accessible(hostDestination, bytes) && std::memcmp(expected.data(), hostDestination, bytes) != 0) copyDestinationChanged.fetch_add(1, std::memory_order_relaxed);
         }
         return outcome;
     }
@@ -3359,7 +3362,7 @@ VulkanDevice::CopyOutcome VulkanDevice::CopyBuffer(std::uint64_t destination, st
     const auto generation = GuestMemory::MarkWritten(destination, bytes);
     const std::array<std::pair<std::uint64_t, std::uint64_t>, 1> sourceRange{{{source, source + bytes}}};
     const bool sourceCurrent = bytes <= knownMax && generation != 0 && !recorder.PendingWriteOverlaps(source, bytes) && !recorder.PendingLabelIn(source, bytes) && !completionStoreOverlaps(source) && !Graphics::StorageTexture::AnyPendingOverlaps(sourceRange) && !Graphics::AnyShadowedOverlaps(sourceRange);
-    noteWriter(sourceCurrent ? std::span(reinterpret_cast<const std::byte*>(source), bytes) : std::span<const std::byte>{}, sourceCurrent ? generation : 0);
+    noteWriter(sourceCurrent ? std::span(static_cast<const std::byte*>(GuestArena::GuestToHost(source)), bytes) : std::span<const std::byte>{}, sourceCurrent ? generation : 0);
     recorder.NotePendingWrite(destination, bytes);
     outcome.path = 1;
     return outcome;
@@ -3698,8 +3701,8 @@ PlaneSource OverlayPlaneSource(const Graphics::Context& context, const DisplayBu
     GuestMemory::FlushGpuWrites(buffer.address, bytes);
     const auto keys = buffer.dccAddress != 0 ? DisplayBufferKeys(buffer) : Graphics::DccKeys::Uncompressed;
     if (keys == Graphics::DccKeys::Uncompressed) {
-        GuestMemory::CheckRange(reinterpret_cast<const void*>(buffer.address), bytes, buffer.alignment);
-        source.texels = DisplayBufferTexels(buffer, {reinterpret_cast<const std::byte*>(buffer.address), bytes});
+        GuestMemory::CheckRange(GuestArena::GuestToHost(buffer.address), bytes, buffer.alignment);
+        source.texels = DisplayBufferTexels(buffer, {static_cast<const std::byte*>(GuestArena::GuestToHost(buffer.address)), bytes});
         return source;
     }
     const auto texel = DisplayBufferClearTexel(buffer, keys);
@@ -4799,7 +4802,7 @@ void WatchMemory(std::uint64_t programAddress) {
             std::uint64_t address = 0;
             for (std::uint64_t high = 0; high < 16 && address == 0; ++high) {
                 const auto candidate = (range.address & 0xfffffffffull) | (high << 36u);
-                if (GuestMemory::Accessible(reinterpret_cast<const void*>(candidate), static_cast<std::size_t>(range.bytes))) address = candidate;
+                if (GuestMemory::Accessible(GuestArena::GuestToHost(candidate), static_cast<std::size_t>(range.bytes))) address = candidate;
             }
             if (address == 0) return;
             found.push_back(address);
@@ -4809,7 +4812,7 @@ void WatchMemory(std::uint64_t programAddress) {
     }
     std::vector<std::uint8_t> contents;
     for (std::size_t i = 0; i < ranges.size(); ++i) {
-        const auto* bytes = reinterpret_cast<const std::uint8_t*>(addresses[i]);
+        const auto* bytes = static_cast<const std::uint8_t*>(GuestArena::GuestToHost(addresses[i]));
         if (!GuestMemory::Accessible(bytes, static_cast<std::size_t>(ranges[i].bytes))) return;
         contents.insert(contents.end(), bytes, bytes + ranges[i].bytes);
     }

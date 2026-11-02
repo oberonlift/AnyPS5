@@ -20,7 +20,7 @@
 #include <thread>
 
 extern "C" void ps5lift_import_host__write(Ps5LiftState* state) {
-    const auto* text = reinterpret_cast<const char*>(state->Gpr[PS5LIFT_RDI]);
+    const auto* text = Ps5Lift::Bridge::Integer<const char*>(state, 0);
     const auto length = static_cast<std::size_t>(state->Gpr[PS5LIFT_RSI]);
     state->Gpr[PS5LIFT_RAX] = static_cast<std::uint64_t>(write(1, text, length));
 }
@@ -178,7 +178,7 @@ bool GuardedBelow(const std::uint64_t address) {
 }
 
 extern "C" void ps5lift_import_host__stack__guarded(Ps5LiftState* state) {
-    Return(state, static_cast<long>(GuardedBelow(state->Gpr[PS5LIFT_RSP])));
+    Return(state, static_cast<long>(GuardedBelow(reinterpret_cast<std::uint64_t>(HostAddress(state->Gpr[PS5LIFT_RSP])))));
 }
 
 extern "C" void ps5lift_import_host__thread__keeps__environment(Ps5LiftState* state) {
@@ -217,8 +217,24 @@ extern "C" void ps5lift_import_host__call__at__thread__exit(Ps5LiftState* state)
 
 extern "C" int GuestCpuIterateImages_nid_no_patch(int (*callback)(void*, std::size_t, void*), void* data);
 
+struct GuestImageWalk {
+    std::uint64_t Callback;
+    void* Data;
+};
+
 extern "C" void ps5lift_import_dl__iterate__phdr(Ps5LiftState* state) {
-    Return(state, GuestCpuIterateImages_nid_no_patch(Callback<int(void*, std::size_t, void*)>(Integer<std::uint64_t>(state, 0)), Integer<void*>(state, 1)));
+    GuestImageWalk walk{Integer<std::uint64_t>(state, 0), Integer<void*>(state, 1)};
+    Return(state, GuestCpuIterateImages_nid_no_patch([](void* info, const std::size_t size, void* data) {
+        constexpr int Name = 1;
+        constexpr int ProgramHeaders = 2;
+        constexpr int TlsData = 7;
+        std::uint64_t record[8];
+        if (size != sizeof(record)) std::abort();
+        std::memcpy(record, info, sizeof(record));
+        for (const int field : {Name, ProgramHeaders, TlsData}) record[field] = GuestAddress(reinterpret_cast<const void*>(record[field]));
+        const auto* walk = static_cast<const GuestImageWalk*>(data);
+        return Callback<int(void*, std::size_t, void*)>(walk->Callback)(record, size, walk->Data);
+    }, &walk));
 }
 
 extern "C" void ps5lift_import_host__walk__then__take__stack(Ps5LiftState* state) {
