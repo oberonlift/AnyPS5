@@ -13,10 +13,11 @@ floating-point mode and the `Run` the case belongs to, and lists every `Mismatch
 - **Tolerances** (`tolerance`): `rcp*` and `rsqrt*` lanes within the documented relative error; the results an x87
   transcendental approximates within one ulp of the 64-bit format of the true result, whatever the precision control,
   where the operands lie in the documented range, with C1, the rounding indicator, not compared there.
-- **Properties:** `rdrand` and `rdseed` set CF and clear the other status flags, and keep the destination's untouched
-  bits as recorded; the counters of `rdtsc` and `rdtscp` do not decrease from case to case in a run and leave the high
-  halves 0; `rdpid` and `rdtscp`'s ecx are below the host's processor count; `cpuid` and `xgetbv` give the console's
-  values, which the lifted driver appends to its results.
+- **Properties:** `rdrand` and `rdseed` set CF, leave the other flags and the destination's untouched bits as
+  recorded, and write: in a run, at most one case of a form may leave the destination's written bits as they were
+  (`form_mismatches`); the counters of `rdtsc` and `rdtscp` do not decrease from case to case in a run and leave the
+  high halves 0; `rdpid` and `rdtscp`'s ecx are below the host's processor count; `cpuid` and `xgetbv` give the
+  console's values, which the lifted driver appends to its results.
 - **Fast mode** allows, in the destination lanes an instruction computes (those of instructions whose exception class
   is SDM type 2 or 3, compares excepted, as their destination is a mask; lane 0 of a scalar form), a NaN to be any NaN;
   and under FTZ or DAZ, which fast mode treats as one switch, a `min*` or `max*` lane that x86 makes a signed zero to
@@ -27,6 +28,7 @@ floating-point mode and the `Run` the case belongs to, and lists every `Mismatch
   and at the instance for one that loads such an MXCSR, where the recording shows the load completing.
 
 `format_mismatch` gives the instance as Zydis formats it, the case's inputs, and each differing field's values."""
+import collections
 import enum
 import functools
 import struct
@@ -86,7 +88,8 @@ _MXCSR_STORES = {
 }
 _X87_PUSHES = frozenset({"fsincos", "fptan"})
 _STATUS_FLAGS = ("CF", "PF", "AF", "ZF", "SF", "OF")
-_RANDOM_FLAGS = {"CF": 1, "PF": 0, "AF": 0, "ZF": 0, "SF": 0, "OF": 0}
+_RANDOM_CARRY = 1
+_UNWRITTEN_ALLOWED = 1
 _DROPPING_SHAPES = frozenset({Shape.CALL, Shape.RETURN, Shape.INDIRECT_JUMP})
 _CONDITION_BITS = {"C0": 8, "C1": 9, "C2": 10, "C3": 14}
 _AH_FLAG_BITS = {"CF": 0, "PF": 2, "AF": 4, "ZF": 6, "SF": 7}
@@ -184,6 +187,7 @@ class Run:
     def __init__(self, cpu_count):
         self.cpu_count = cpu_count
         self.counter = None
+        self.unwritten = collections.Counter()
 
 
 def _register_name(name):
@@ -563,11 +567,12 @@ class _Judgement:
         expected, actual = self.register(name, self.expected), self.register(name, self.actual)
         if (expected ^ actual) & untouched:
             self.mismatch(name, f"0x{expected & untouched:016x} in the bits above the low {bits}", f"0x{actual:016x}")
+        if (actual ^ self.register(name, self.case.input.slot)) & ~untouched == 0:
+            self.run.unwritten[self.case.instance.form.key] += 1
         flags, _, _ = _flags(self.actual)
-        for flag, value in _RANDOM_FLAGS.items():
-            if flags[flag] != value:
-                self.mismatch(flag, str(value), str(flags[flag]))
-        self.settled.update({name, *_RANDOM_FLAGS})
+        if flags["CF"] != _RANDOM_CARRY:
+            self.mismatch("CF", str(_RANDOM_CARRY), str(flags["CF"]))
+        self.settled.update({name, "CF"})
 
     def below_processor_count(self, name):
         value = self.register(name, self.actual)
@@ -713,6 +718,14 @@ def compare(case, rules, expected, actual, float_mode, run):
     judgement.slot(x87)
     judgement.memory()
     return judgement.mismatches
+
+
+def form_mismatches(run):
+    return {
+        form: [Mismatch("destination written", f"at most {_UNWRITTEN_ALLOWED} case whose destination's written bits "
+                        "keep their input, as each case writes a new value", f"{count} cases")]
+        for form, count in run.unwritten.items() if count > _UNWRITTEN_ALLOWED
+    }
 
 
 def verdict(actual, mismatches):

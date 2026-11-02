@@ -5,7 +5,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from instructions import compare, program, records, suite
+from instructions import compare, lifted, program, records, suite
 from instructions.cases import CONSOLE_MXCSR, BlockOffset
 from instructions.encoding import Mem
 from instructions.model import LOCATIONS, Shape
@@ -423,6 +423,37 @@ class PropertyTest(unittest.TestCase):
                 failed = _completed(case, {**_gpr(case, full, written), **_flags()})
                 actual = _completed(case, {**_gpr(case, full, other), **_flags(CF=1)})
                 self.assertEqual(_judge(case, failed, actual), [])
+
+    def test_rdrand_flags_as_recorded(self):
+        case = _case("rdrand", _primary("rdrand", operand_size=64))
+        full = records.GPR_NAMES[LOCATIONS[case.instance.operands[0].name][1]]
+        recorded = _completed(case, {**_gpr(case, full, 0x1234), **_flags(CF=1, ZF=1)})
+        self.assertEqual(_judge(case, recorded, _completed(case, {**_gpr(case, full, 0x5678), **_flags(CF=1, ZF=1)})),
+                         [])
+        self.assertEqual(_fields(_judge(case, recorded, _completed(case, {**_gpr(case, full, 0x5678),
+                                                                            **_flags(CF=1)}))), {"ZF"})
+
+    def test_rdrand_writes_checked(self):
+        case = _case("rdrand", _primary("rdrand", operand_size=16))
+        full = records.GPR_NAMES[LOCATIONS[case.instance.operands[0].name][1]]
+        initial = _register_value(case, full)
+        recorded = _completed(case, {**_gpr(case, full, initial ^ 0x1234), **_flags(CF=1)})
+        unwritten = _completed(case, {**_gpr(case, full, initial), **_flags(CF=1)})
+        run = compare.Run(4)
+        self.assertEqual(_judge(case, recorded, unwritten, run=run), [])
+        self.assertEqual(compare.form_mismatches(run), {})
+        self.assertEqual(_judge(case, recorded, _completed(case, {**_gpr(case, full, initial ^ 1), **_flags(CF=1)}),
+                                run=run), [])
+        self.assertEqual(compare.form_mismatches(run), {})
+        self.assertEqual(_judge(case, recorded, unwritten, run=run), [])
+        mismatches = compare.form_mismatches(run)
+        self.assertEqual(list(mismatches), [case.instance.form.key])
+        (mismatch,) = mismatches[case.instance.form.key]
+        self.assertEqual(mismatch.field, "destination written")
+        self.assertIn("2 cases", mismatch.actual)
+        line = lifted.form_line("rdrand", EXACT, case.instance.form.key, [], mismatches[case.instance.form.key])
+        self.assertTrue(line.startswith(f"FAIL rdrand exact {case.instance.form.key}: 0 cases"))
+        self.assertIn("destination written", line)
 
     def test_rdtsc_properties(self):
         case = _case("base", lambda instance: instance.form.definition.mnemonic == "rdtsc")

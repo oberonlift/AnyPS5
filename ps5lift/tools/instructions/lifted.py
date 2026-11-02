@@ -3,12 +3,13 @@
 For each group it links the guest program as the recording host ran it, checks the group's recording against that
 program and its inputs (`suite.read_recording`), and for each `--float` mode lifts the program (`-O0` with
 `--unoptimized-lift`), links it with `LiftedDriver.cpp` and the runtime, and runs every case through the runner, the
-cases without a recording included. `compare` judges each case against its expectation (`expectations`).
+cases without a recording included. `compare` judges each case against its expectation (`expectations`), and each
+form by the checks that span its cases (`compare.form_mismatches`).
 
 The report has one line per form, `PASS` or `FAIL`, then the group, the mode and the form, with the counts of cases that
 mismatched, are missing (no recording and no written expectation), stopped at a missing translation, crashed and timed
-out; then the failing cases of each form, at most `SHOWN_PER_FORM`; then the group's outcomes. The command exits 0
-only when every case passes."""
+out, and any check of the form that failed; then the failing cases of each form, at most `SHOWN_PER_FORM`; then the
+group's outcomes. The command exits 0 only when every case and every form passes."""
 import collections
 import os
 import shutil
@@ -154,19 +155,24 @@ def _judge(guest, results, recorded, float_mode):
         expected_state = compare.State.of(expected, reference.input.slot)
         mismatches = compare.compare(case, rules[case.instance.index], expected_state, actual, float_mode, run)
         judged.append(Judged(case, compare.verdict(actual, mismatches), mismatches, actual))
-    return judged
+    return judged, compare.form_mismatches(run)
 
 
 def _mode(float_mode, unoptimized):
     return f"{float_mode},unoptimized" if unoptimized else float_mode
 
 
-def _form_line(group, mode, form, members):
+def _mismatch_text(mismatch):
+    return f"{mismatch.field}: expected {mismatch.expected}, actual {mismatch.actual}"
+
+
+def form_line(group, mode, form, members, form_mismatches):
     counts = collections.Counter(item.verdict for item in members)
-    if counts[Verdict.PASS] == len(members):
+    if counts[Verdict.PASS] == len(members) and not form_mismatches:
         return f"PASS {group} {mode} {form}: {len(members)} cases"
     counted = ", ".join(f"{counts[verdict]} {verdict.value}" for verdict in _COUNTED)
-    return f"FAIL {group} {mode} {form}: {len(members)} cases, {counted}"
+    checks = "".join(f"; {_mismatch_text(mismatch)}" for mismatch in form_mismatches)
+    return f"FAIL {group} {mode} {form}: {len(members)} cases, {counted}{checks}"
 
 
 def _details(item, stops):
@@ -180,12 +186,12 @@ def _details(item, stops):
     return text
 
 
-def _report(group, mode, judged, stops, lift_report, elapsed):
+def _report(group, mode, judged, by_form, stops, lift_report, elapsed):
     forms = collections.defaultdict(list)
     for item in judged:
         forms[item.case.instance.form.key].append(item)
     for form, members in forms.items():
-        print(_form_line(group, mode, form, members))
+        print(form_line(group, mode, form, members, by_form.get(form, [])))
     failing = {form: [item for item in members if item.verdict is not Verdict.PASS] for form, members in forms.items()}
     failing = {form: members for form, members in failing.items() if members}
     if failing:
@@ -195,14 +201,15 @@ def _report(group, mode, judged, stops, lift_report, elapsed):
                 print(_details(item, stops))
     verdicts = collections.Counter(item.verdict for item in judged)
     outcomes = collections.Counter(item.actual.outcome for item in judged)
-    passed_forms = sum(1 for members in forms.values() if all(item.verdict is Verdict.PASS for item in members))
+    passed_forms = sum(1 for form, members in forms.items()
+                       if all(item.verdict is Verdict.PASS for item in members) and form not in by_form)
     print(f"=== {group} {mode}: {len(forms)} forms, {passed_forms} pass, {len(forms) - passed_forms} fail; "
           f"{len(judged)} cases, " + ", ".join(f"{verdicts[verdict]} {verdict.value}" for verdict in Verdict))
     print(f"=== {group} {mode} outcomes: " + ", ".join(f"{outcome.name} {count}"
                                                     for outcome, count in sorted(outcomes.items())))
     print(f"=== {group} {mode}: lifted, ran and judged in {elapsed:.1f} s; the lift report:")
     print("\n".join(f"    {line}" for line in lift_report.splitlines()), flush=True)
-    return verdicts[Verdict.PASS] == len(judged)
+    return verdicts[Verdict.PASS] == len(judged) and not by_form
 
 
 def _selected(groups, instances):
@@ -225,8 +232,8 @@ def run_groups(toolchain, groups, float_modes, unoptimized, work):
             start = time.monotonic()
             executable, lift_report = _lifted_program(toolchain, guest, float_mode, unoptimized)
             results, stops = _results(toolchain, guest, executable, float_mode)
-            judged = _judge(guest, results, recorded, float_mode)
-            passed &= _report(group, _mode(float_mode, unoptimized), judged, stops, lift_report,
+            judged, by_form = _judge(guest, results, recorded, float_mode)
+            passed &= _report(group, _mode(float_mode, unoptimized), judged, by_form, stops, lift_report,
                               time.monotonic() - start)
     return passed
 
