@@ -665,6 +665,20 @@ def callback_signature(function):
     return f"{result}({', '.join(arguments)})"
 
 
+def unclassified_pointer_slot(type_):
+    canonical = type_.get_canonical()
+    if canonical.kind in POINTER_KINDS:
+        inner = type_.get_pointee()
+    elif canonical.kind in (K.INCOMPLETEARRAY, K.CONSTANTARRAY):
+        inner = type_.element_type
+    else:
+        return False
+    inner_canonical = inner.get_canonical()
+    if inner_canonical.kind not in POINTER_KINDS or inner_canonical.get_pointee().get_canonical().kind in FUNCTION_KINDS:
+        return False
+    return "GuestPointer<" not in inner.spelling
+
+
 def describe(cursor, symbol):
     variadic = cursor.type.kind == K.FUNCTIONPROTO and cursor.type.is_function_variadic()
     return_class = classify(cursor.result_type, "return")
@@ -674,10 +688,13 @@ def describe(cursor, symbol):
     floats = 0
     stack = 0
     slots = GUEST_POINTER_SLOTS.get(export_base(symbol), ())
+    untranslated = []
     for index, argument in enumerate(cursor.get_arguments()):
         parameter_class, spelling = classify(argument.type, "parameter")
         if index in slots and parameter_class != "pointer":
             raise ValueError(f"{symbol}: GUEST_POINTER_SLOTS names parameter {index}, which is not a pointer")
+        if index not in slots and unclassified_pointer_slot(argument.type):
+            untranslated.append(index)
         if parameter_class == "record":
             argument_record = spelling
             spelling = argument_record.name
@@ -735,7 +752,8 @@ def describe(cursor, symbol):
         parameters.append((spelling, access))
     if return_class[0] == "record":
         return_class = ("record", (return_class[1].name, return_class[1].eightbytes))
-    return {"symbol": symbol, "return": return_class, "parameters": parameters, "records": records, "variadic": (integers, floats, stack) if variadic else None}
+    return {"symbol": symbol, "return": return_class, "parameters": parameters, "records": records, "variadic": (integers, floats, stack) if variadic else None,
+            "untranslated": untranslated}
 
 
 def export_base(name):
@@ -1548,9 +1566,10 @@ def survey_command(args):
         for library in libraries:
             try:
                 exports, data, unsupported = generate_bridges([library], args.anyps5_build, Path(work) / "bridges.cpp", args.libclang)
-                entry = {"bridges": len(exports), "data": len(data), "unbridged": len(unsupported),
+                untranslated = sorted(export_base(export["symbol"]) for export in exports.values() if export["untranslated"])
+                entry = {"bridges": len(exports), "data": len(data), "unbridged": len(unsupported), "untranslated": untranslated,
                          "reasons": [f"{count:5} {reason}" for reason, count in collections.Counter(re.sub(r"\d+-byte", "N-byte", reason) for _, reason in unsupported.values()).most_common()]}
-                print(f"{library}: {entry['bridges']} bridges, {entry['data']} data, {entry['unbridged']} unbridged", flush=True)
+                print(f"{library}: {entry['bridges']} bridges, {entry['data']} data, {entry['unbridged']} unbridged, {len(untranslated)} untranslated", flush=True)
             except SystemExit as error:
                 entry = {"error": str(error)}
                 print(f"{library}: {entry['error']}", flush=True)
