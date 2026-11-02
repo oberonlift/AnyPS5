@@ -528,7 +528,8 @@ enum class DescriptorRole {
     ImageTable,
     SamplerTable,
     ImageTableMap,
-    ImageStorageTable
+    ImageStorageTable,
+    AtomicLocks
 };
 
 struct DescriptorBinding {

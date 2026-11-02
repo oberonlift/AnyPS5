@@ -3,6 +3,7 @@
 
 #include "IntermediateRepresentation/IrProgram.hpp"
 #include <cstdint>
+#include <span>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -30,6 +31,7 @@ struct SpirvRequirements {
     bool coherentBufferPairs = false;
     bool bufferU64View = false;
     bool imageInt64Atomics = false;
+    bool imageInt64AtomicsLocked = false;
     bool sharedInt64Atomics = false;
     bool float64 = false;
     bool float64NeedsDevice = false;
@@ -43,6 +45,7 @@ struct SpirvRequirements {
 
 [[nodiscard]] bool IsSplittableBufferAtomic64(const IrValue* inst);
 [[nodiscard]] SpirvRequirements AnalyzeProgramRequirements(const IrProgram& program);
+[[nodiscard]] bool NeedsAtomicLocks(const IrProgram& program, std::span<const std::uint32_t> supportedCapabilities);
 [[nodiscard]] bool IsIntegerFloat64Opcode(IrOpcode opcode);
 inline constexpr std::uint32_t FunctionLdsDwordLimit = 8192u;
 inline constexpr std::uint32_t PixelFunctionStorageDwords = 4096u;

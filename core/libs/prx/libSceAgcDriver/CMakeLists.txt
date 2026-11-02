@@ -682,7 +682,7 @@ foreach(agcExecutionTestSource IN LISTS agcExecutionTestSources)
             ${ANYPS5_VULKAN_HEADERS_INCLUDE_DIR}
             ${ANYPS5_SPIRV_HEADERS_INCLUDE_DIR}
     )
-    target_link_libraries(${agcExecutionTest} PRIVATE libSceAgcDriver SDL2-static libc)
+    target_link_libraries(${agcExecutionTest} PRIVATE libSceAgcDriver SDL2-static libkernel libc)
     set_target_properties(${agcExecutionTest} PROPERTIES CXX_EXTENSIONS OFF)
     configure_windows_unwind(${agcExecutionTest})
     if(agcExecutionTests)

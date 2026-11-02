@@ -2,6 +2,8 @@
 #define CORE_LIBS_PRX_LIBSCEAGCDRIVER_TESTS_VULKANTESTDEVICE_HPP
 
 #include "prx/libSceAgcDriver/Execution/include/VulkanDevice.hpp"
+#include "prx/libc/include/GuestArena.hpp"
+#include "prx/libkernel/include/Api.hpp"
 #include <spirv/unified1/spirv.hpp>
 #include <algorithm>
 #include <cstdint>
@@ -9,6 +11,8 @@
 #include <cstdlib>
 #include <exception>
 #include <memory>
+#include <span>
+#include <stdexcept>
 
 constexpr int VulkanTestSkipped = 77;
 
@@ -25,6 +29,17 @@ inline std::unique_ptr<AgcDriver::VulkanDevice> OpenVulkanTestDevice() {
         std::printf("skipped, no usable Vulkan device: %s\n", error.what());
         return nullptr;
     }
+}
+
+template <typename T>
+std::span<T> GuestTestArray(std::size_t count) {
+    void* mapped = mmap_nid_postfix(nullptr, count * sizeof(T), 3, 0x1002, -1, 0);
+    if (mapped == reinterpret_cast<void*>(~std::uintptr_t{0})) throw std::runtime_error("guest mmap of a test array failed");
+    return {static_cast<T*>(mapped), count};
+}
+
+inline std::uint64_t GuestTestAddress(const void* pointer) {
+    return GuestArena::HostToGuest(pointer);
 }
 
 inline std::uint32_t PixelPushOffset(std::uint32_t vertexPush, const ShaderRecompiler::SpirvTarget& target) {

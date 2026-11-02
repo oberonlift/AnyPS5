@@ -96,6 +96,9 @@ DescriptorRole RoleFor(DescriptorBindingKind kind) {
     if (kind == DescriptorBindingKind::Gds) {
         return DescriptorRole::Gds;
     }
+    if (kind == DescriptorBindingKind::AtomicLocks) {
+        return DescriptorRole::AtomicLocks;
+    }
     if (kind == DescriptorBindingKind::BdaPagetable) {
         return DescriptorRole::BdaPagetable;
     }
@@ -757,6 +760,7 @@ void DescriptorBindingBuilder::Populate(BindingAllocationResult& allocation, con
             physical.guestDescriptor = std::move(shaderData);
             break;
         case DescriptorRole::Gds:
+        case DescriptorRole::AtomicLocks:
         case DescriptorRole::BdaPagetable:
         case DescriptorRole::FaultBuffer:
             break;

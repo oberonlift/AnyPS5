@@ -301,6 +301,11 @@ std::vector<std::uint32_t> SpirvEmitter::Emit(const IrProgram& program, const Sh
         state.requirements.bufferInt64AtomicsSplit = true;
     }
     state.requirements.bufferU64View = state.requirements.bufferInt64Atomics || (state.requirements.coherentBufferPairs && int64Atomics);
+    if (NeedsAtomicLocks(program, state.supportedCapabilities)) {
+        state.requirements.imageInt64Atomics = false;
+        state.requirements.imageInt64AtomicsLocked = true;
+        state.requirements.subgroupBallot = true;
+    }
     if (HostSubgroupSingleLane(state)) {
         state.requirements.subgroupBallot = false;
         state.requirements.subgroupShuffle = false;

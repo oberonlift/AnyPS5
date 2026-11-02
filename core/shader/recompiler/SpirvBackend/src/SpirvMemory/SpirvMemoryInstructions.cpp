@@ -1,6 +1,7 @@
 #include "SpirvBackend/SpirvBda.hpp"
 #include "SpirvBackend/SpirvRuntimeBuffer.hpp"
 #include "SpirvBackend/SpirvEmitterInstructions.hpp"
+#include "SpirvBackend/SpirvMemory/SpirvAtomicEmulation.hpp"
 #include "SpirvBackend/SpirvMemory/SpirvSubgroup.hpp"
 #include "SpirvBackend/SpirvBufferFormat.hpp"
 #include "RdnaDecoder/RdnaInstructionDecoder.hpp"
@@ -764,39 +765,6 @@ std::uint32_t EmitAtomicOperation(SpirvValueEmitContext& ctx, const IrValue& ins
     return old;
 }
 
-std::uint32_t AtomicNext32(SpirvEmitterState& state, std::uint32_t opcode, std::uint32_t old, std::uint32_t value, std::uint32_t comparator) {
-    const auto u32 = TypeU32(state);
-    const auto winner = [&](spv::Op compare) {
-        return Select(state, u32, Binary(state, compare, TypeBool(state), old, value), old, value);
-    };
-    switch (opcode) {
-    case spv::OpAtomicExchange:
-        return value;
-    case spv::OpAtomicCompareExchange:
-        return Select(state, u32, Binary(state, spv::OpIEqual, TypeBool(state), old, comparator), value, old);
-    case spv::OpAtomicIAdd:
-        return Binary(state, spv::OpIAdd, u32, old, value);
-    case spv::OpAtomicISub:
-        return Binary(state, spv::OpISub, u32, old, value);
-    case spv::OpAtomicSMin:
-        return winner(spv::OpSLessThan);
-    case spv::OpAtomicUMin:
-        return winner(spv::OpULessThan);
-    case spv::OpAtomicSMax:
-        return winner(spv::OpSGreaterThan);
-    case spv::OpAtomicUMax:
-        return winner(spv::OpUGreaterThan);
-    case spv::OpAtomicAnd:
-        return Binary(state, spv::OpBitwiseAnd, u32, old, value);
-    case spv::OpAtomicOr:
-        return Binary(state, spv::OpBitwiseOr, u32, old, value);
-    case spv::OpAtomicXor:
-        return Binary(state, spv::OpBitwiseXor, u32, old, value);
-    default:
-        throw std::runtime_error("AtomicNext32: opcode has no 32-bit replacement");
-    }
-}
-
 template<typename TReplacement>
 std::uint32_t UpdateFunctionElement(SpirvEmitterState& state, std::uint32_t pointer, TReplacement&& replacement) {
     const auto old = state.module.AllocateId();
@@ -806,7 +774,15 @@ std::uint32_t UpdateFunctionElement(SpirvEmitterState& state, std::uint32_t poin
 }
 
 template<typename TUpdate>
-std::uint32_t LockedLdsUpdate(SpirvEmitterState& state, std::uint32_t type, std::uint32_t zero, TUpdate&& update);
+std::uint32_t LockedLdsUpdate(SpirvEmitterState& state, std::uint32_t type, std::uint32_t zero, TUpdate&& update) {
+    const SpirvLock lock{EmitLdsLockPointer(state), spv::ScopeWorkgroup, LdsMemorySemantics(state), state.ldsLockFences};
+    return EmitLockedUpdate(state, lock, type, zero, [&]() {
+        state.insideLdsLock = true;
+        const auto old = update();
+        state.insideLdsLock = false;
+        return old;
+    });
+}
 
 template<typename TNext>
 std::uint32_t LdsBufferAtomic64(SpirvEmitterState& state, std::uint32_t low, TNext&& next) {
@@ -910,7 +886,7 @@ std::uint32_t Atomic32(SpirvValueEmitContext& ctx, const IrValue& inst, const Me
     const auto apply = [&](std::uint32_t pointer) {
         if (InFunctionStorage(state, mem.kind)) {
             const auto value = ctx.Arg(inst, inst.ArgumentCount() - 2u);
-            return UpdateFunctionElement(state, pointer, [&](std::uint32_t old) { return AtomicNext32(state, SpirvAtomicOpcode(inst.Opcode()), old, value, 0u); });
+            return UpdateFunctionElement(state, pointer, [&](std::uint32_t old) { return AtomicNext(state, TypeU32(state), SpirvAtomicOpcode(inst.Opcode()), old, value, 0u); });
         }
         const auto operation = [&]() {
             const auto old = EmitAtomicOperation(ctx, inst, pointer, scope);
@@ -1114,7 +1090,7 @@ std::uint32_t FlatAtomicNext32(SpirvEmitterState& state, IrOpcode opcode, std::u
     case IrOpcode::AddressAtomicAnd32:
     case IrOpcode::AddressAtomicOr32:
     case IrOpcode::AddressAtomicXor32:
-        return AtomicNext32(state, AddressAtomicOpcode(opcode), old, value, comparator);
+        return AtomicNext(state, TypeU32(state), AddressAtomicOpcode(opcode), old, value, comparator);
     case IrOpcode::AddressAtomicInc32:
         return AtomicIncrement(state, old, value);
     case IrOpcode::AddressAtomicDec32:
@@ -1365,84 +1341,6 @@ std::uint32_t AppendConsume(SpirvValueEmitContext& ctx, const IrValue& inst, boo
     const auto result = state.module.AllocateId();
     EmitSubgroupShuffle(state, TypeU32(state), result, atomic, EmitHostSubgroupLane(state, sourceLane));
     return result;
-}
-
-template<typename TUpdate>
-std::uint32_t LockedLdsUpdate(SpirvEmitterState& state, std::uint32_t type, std::uint32_t zero, TUpdate&& update) {
-    const auto lock = EmitLdsLockPointer(state);
-    const auto entry = state.currentLabel;
-    const auto header = state.module.AllocateId();
-    const auto body = state.module.AllocateId();
-    const auto pending = state.module.AllocateId();
-    const auto attempt = state.module.AllocateId();
-    const auto attemptMerge = state.module.AllocateId();
-    const auto critical = state.module.AllocateId();
-    const auto servedMerge = state.module.AllocateId();
-    const auto pendingMerge = state.module.AllocateId();
-    const auto cont = state.module.AllocateId();
-    const auto merge = state.module.AllocateId();
-    const auto done = state.module.AllocateId();
-    const auto result = state.module.AllocateId();
-    const auto doneNext = state.module.AllocateId();
-    const auto resultNext = state.module.AllocateId();
-    state.module.AddFunction(spv::OpBranch, header);
-    EmitLabel(state, header);
-    state.module.AddFunction(spv::OpPhi, TypeBool(state), done, ConstantBool(state, false), entry, doneNext, cont);
-    state.module.AddFunction(spv::OpPhi, type, result, zero, entry, resultNext, cont);
-    state.module.AddFunction(spv::OpLoopMerge, merge, cont, spv::LoopControlMaskNone);
-    state.module.AddFunction(spv::OpBranch, body);
-    EmitLabel(state, body);
-    state.module.AddFunction(spv::OpSelectionMerge, pendingMerge, spv::SelectionControlMaskNone);
-    state.module.AddFunction(spv::OpBranchConditional, done, pendingMerge, pending);
-    EmitLabel(state, pending);
-    const auto elected = state.module.AllocateId();
-    EmitSubgroupElect(state, elected);
-    state.module.AddFunction(spv::OpSelectionMerge, servedMerge, spv::SelectionControlMaskNone);
-    state.module.AddFunction(spv::OpBranchConditional, elected, attempt, servedMerge);
-    EmitLabel(state, attempt);
-    const auto previous = state.module.AllocateId();
-    state.module.AddFunction(spv::OpAtomicCompareExchange, TypeU32(state), previous, lock, ConstantU32(state, spv::ScopeWorkgroup), ConstantU32(state, spv::MemorySemanticsAcquireMask | LdsMemorySemantics(state)), ConstantU32(state, spv::MemorySemanticsMaskNone), ConstantU32(state, 1u), ConstantU32(state, 0u));
-    const auto acquired = Binary(state, spv::OpIEqual, TypeBool(state), previous, ConstantU32(state, 0u));
-    state.module.AddFunction(spv::OpSelectionMerge, attemptMerge, spv::SelectionControlMaskNone);
-    state.module.AddFunction(spv::OpBranchConditional, acquired, critical, attemptMerge);
-    EmitLabel(state, critical);
-    if (state.ldsLockFences) state.module.AddFunction(spv::OpMemoryBarrier, ConstantU32(state, spv::ScopeWorkgroup), ConstantU32(state, spv::MemorySemanticsAcquireMask | LdsMemorySemantics(state)));
-    state.insideLdsLock = true;
-    const auto old = update();
-    state.insideLdsLock = false;
-    if (state.ldsLockFences) state.module.AddFunction(spv::OpMemoryBarrier, ConstantU32(state, spv::ScopeWorkgroup), ConstantU32(state, spv::MemorySemanticsReleaseMask | LdsMemorySemantics(state)));
-    const auto released = state.module.AllocateId();
-    state.module.AddFunction(spv::OpAtomicExchange, TypeU32(state), released, lock, ConstantU32(state, spv::ScopeWorkgroup), ConstantU32(state, spv::MemorySemanticsReleaseMask | LdsMemorySemantics(state)), ConstantU32(state, 0u));
-    const auto criticalExit = state.currentLabel;
-    state.module.AddFunction(spv::OpBranch, attemptMerge);
-    EmitLabel(state, attemptMerge);
-    const auto attempted = state.module.AllocateId();
-    const auto attemptedResult = state.module.AllocateId();
-    state.module.AddFunction(spv::OpPhi, TypeBool(state), attempted, ConstantBool(state, true), criticalExit, ConstantBool(state, false), attempt);
-    state.module.AddFunction(spv::OpPhi, type, attemptedResult, old, criticalExit, result, attempt);
-    state.module.AddFunction(spv::OpBranch, servedMerge);
-    EmitLabel(state, servedMerge);
-    const auto served = state.module.AllocateId();
-    const auto servedResult = state.module.AllocateId();
-    state.module.AddFunction(spv::OpPhi, TypeBool(state), served, attempted, attemptMerge, ConstantBool(state, false), pending);
-    state.module.AddFunction(spv::OpPhi, type, servedResult, attemptedResult, attemptMerge, result, pending);
-    state.module.AddFunction(spv::OpBranch, pendingMerge);
-    EmitLabel(state, pendingMerge);
-    state.module.AddFunction(spv::OpPhi, TypeBool(state), doneNext, served, servedMerge, done, body);
-    state.module.AddFunction(spv::OpPhi, type, resultNext, servedResult, servedMerge, result, body);
-    const auto ballot = state.module.AllocateId();
-    EmitHostSubgroupBallot(state, ballot, Unary(state, spv::OpLogicalNot, TypeBool(state), doneNext));
-    std::uint32_t remaining = ConstantU32(state, 0u);
-    for (std::uint32_t component = 0; component < 4u; ++component) {
-        const auto word = state.module.AllocateId();
-        state.module.AddFunction(spv::OpCompositeExtract, TypeU32(state), word, ballot, component);
-        remaining = Binary(state, spv::OpBitwiseOr, TypeU32(state), remaining, word);
-    }
-    state.module.AddFunction(spv::OpBranchConditional, Binary(state, spv::OpINotEqual, TypeBool(state), remaining, ConstantU32(state, 0u)), cont, merge);
-    EmitLabel(state, cont);
-    state.module.AddFunction(spv::OpBranch, header);
-    EmitLabel(state, merge);
-    return resultNext;
 }
 
 template<typename TReplacement>

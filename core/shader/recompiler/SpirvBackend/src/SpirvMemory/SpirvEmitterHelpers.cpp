@@ -529,6 +529,10 @@ void DefineDescriptors(SpirvEmitterState& state) {
             state.gdsVariable = Define(StorageBufferBlockType(state), "gds");
             state.module.AddAnnotation(spv::OpDecorate, state.gdsVariable, spv::DecorationCoherent);
             break;
+        case DescriptorBindingKind::AtomicLocks:
+            state.atomicLocksVariable = Define(StorageBufferBlockType(state), "atomic_locks");
+            state.module.AddAnnotation(spv::OpDecorate, state.atomicLocksVariable, spv::DecorationCoherent);
+            break;
         case DescriptorBindingKind::ImageTable:
         case DescriptorBindingKind::ImageStorageTable:
             RequireTableIndexing(state);
@@ -565,7 +569,7 @@ void DefineDescriptors(SpirvEmitterState& state) {
             const auto& image = *selected;
             const auto name = "image_" + std::to_string(static_cast<std::uint32_t>(binding.kind));
             state.imageVariables.at(ImageBindingIndex(binding.kind)) = Define(ArrayType(ImageType(state, image)), name.c_str(), spv::StorageClassUniformConstant);
-            if (std::ranges::any_of(binding.resources, [&](std::uint32_t resource) { return state.program.Info().images.at(resource).targetMerge; })) state.module.AddAnnotation(spv::OpDecorate, state.imageVariables.at(ImageBindingIndex(binding.kind)), spv::DecorationCoherent);
+            if (std::ranges::any_of(binding.resources, [&](std::uint32_t resource) { return state.program.Info().images.at(resource).targetMerge || (state.requirements.imageInt64AtomicsLocked && state.program.Info().images.at(resource).atomic64); })) state.module.AddAnnotation(spv::OpDecorate, state.imageVariables.at(ImageBindingIndex(binding.kind)), spv::DecorationCoherent);
             if (image.dimension == RdnaImageDimension::Dim1D || image.dimension == RdnaImageDimension::Dim1DArray) {
                 state.module.EmitCapability(image.resourceClass == ImageResourceClass::Sampled ? spv::CapabilitySampled1D : spv::CapabilityImage1D);
             }

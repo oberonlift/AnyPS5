@@ -1,4 +1,5 @@
 #include "prx/libSceAgcDriver/Execution/include/ProfileOutput.hpp"
+#include "prx/libkernel/include/Api.hpp"
 #include "prx/libc/include/GuestArena.hpp"
 #include "prx/libSceAgcDriver/Execution/include/PerformanceTimer.hpp"
 #include "prx/libSceAgcDriver/Execution/include/CaptureTrace.hpp"
@@ -1730,12 +1731,26 @@ std::shared_ptr<StorageTexture> RepeatStorageSurface(const Context& context, con
 
 namespace {
 
+constexpr std::size_t AtomicLockTableBytes = ShaderRecompiler::RuntimeAbi::AtomicLockCount * sizeof(std::uint32_t);
+
+std::uint64_t AtomicLockTableAddress() {
+    static const std::uint64_t address = [] {
+        constexpr int ReadWrite = 0x3;
+        constexpr int PrivateAnonymous = 0x1002;
+        void* mapped = mmap_nid_postfix(nullptr, AtomicLockTableBytes, ReadWrite, PrivateAnonymous, -1, 0);
+        if (mapped == nullptr || mapped == reinterpret_cast<void*>(static_cast<std::uintptr_t>(-1))) throw std::runtime_error("cannot allocate the atomic lock table");
+        return GuestArena::HostToGuest(mapped);
+    }();
+    return address;
+}
+
 const char* roleName(ShaderRecompiler::DescriptorRole role) {
     switch (role) {
         case ShaderRecompiler::DescriptorRole::GuestBuffers: return "GuestBuffers";
         case ShaderRecompiler::DescriptorRole::GuestImages: return "GuestImages";
         case ShaderRecompiler::DescriptorRole::GuestSamplers: return "GuestSamplers";
         case ShaderRecompiler::DescriptorRole::Gds: return "Gds";
+        case ShaderRecompiler::DescriptorRole::AtomicLocks: return "AtomicLocks";
         case ShaderRecompiler::DescriptorRole::BdaPagetable: return "BdaPagetable";
         case ShaderRecompiler::DescriptorRole::FaultBuffer: return "FaultBuffer";
         case ShaderRecompiler::DescriptorRole::FlattenedSrt: return "FlattenedSrt";
@@ -2253,7 +2268,7 @@ void ShaderResources::buildPrepare(std::span<const CompiledShader> shaders, cons
                     continue;
                 }
                 const bool addressRole = binding.role == ShaderRecompiler::DescriptorRole::BdaPagetable || binding.role == ShaderRecompiler::DescriptorRole::FaultBuffer;
-                const bool bufferRole = addressRole || binding.role == ShaderRecompiler::DescriptorRole::GuestBuffers || binding.role == ShaderRecompiler::DescriptorRole::ShaderData || binding.role == ShaderRecompiler::DescriptorRole::FlattenedSrt || binding.role == ShaderRecompiler::DescriptorRole::Gds;
+                const bool bufferRole = addressRole || binding.role == ShaderRecompiler::DescriptorRole::GuestBuffers || binding.role == ShaderRecompiler::DescriptorRole::ShaderData || binding.role == ShaderRecompiler::DescriptorRole::FlattenedSrt || binding.role == ShaderRecompiler::DescriptorRole::Gds || binding.role == ShaderRecompiler::DescriptorRole::AtomicLocks;
                 const bool imageRole = binding.role == ShaderRecompiler::DescriptorRole::GuestImages || binding.role == ShaderRecompiler::DescriptorRole::GuestSamplers;
                 if (imageRole) {
                     if (binding.kind == ShaderRecompiler::DescriptorKind::SampledImage || binding.kind == ShaderRecompiler::DescriptorKind::StorageImage) stageResources += binding.count;
@@ -2303,6 +2318,12 @@ void ShaderResources::buildPrepare(std::span<const CompiledShader> shaders, cons
                     guestMemory.AddWritable(gds, Pm4::GdsBytes, true);
                     item.allocations.push_back(allocations.size());
                     allocations.push_back({gds, Pm4::GdsBytes, true, nullptr, ShaderRecompiler::DescriptorRole::ShaderData, true});
+                } else if (binding.role == ShaderRecompiler::DescriptorRole::AtomicLocks) {
+                    Require(binding.count == 1 && binding.guestDescriptor.empty(), "invalid atomic lock table descriptor contract");
+                    const auto locks = AtomicLockTableAddress();
+                    guestMemory.AddWritable(locks, AtomicLockTableBytes, true);
+                    item.allocations.push_back(allocations.size());
+                    allocations.push_back({locks, AtomicLockTableBytes, true, nullptr, ShaderRecompiler::DescriptorRole::ShaderData, true});
                 } else {
                     Require(binding.count == 1, "shader data and flattened SRT descriptors must not be arrays");
                     Require(!binding.guestDescriptor.empty(), "empty shader data descriptor");

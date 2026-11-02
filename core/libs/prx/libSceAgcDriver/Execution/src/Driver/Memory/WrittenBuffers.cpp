@@ -57,7 +57,7 @@ std::vector<std::pair<std::uint64_t, std::uint64_t>> DispatchWriteRanges(const S
     std::vector<std::pair<std::uint64_t, std::uint64_t>> ranges;
     constexpr std::uint64_t UnknownImageBytes = 64ull * 1024 * 1024;
     for (const auto& binding : compiled.bindings) {
-        if (binding.role == ShaderRecompiler::DescriptorRole::Gds || binding.role == ShaderRecompiler::DescriptorRole::BdaPagetable) bounded = false;
+        if (binding.role == ShaderRecompiler::DescriptorRole::Gds || binding.role == ShaderRecompiler::DescriptorRole::AtomicLocks || binding.role == ShaderRecompiler::DescriptorRole::BdaPagetable) bounded = false;
         if (binding.role != ShaderRecompiler::DescriptorRole::GuestImages || binding.kind != ShaderRecompiler::DescriptorKind::StorageImage) continue;
         for (std::uint32_t element = 0; element < binding.count; ++element) {
             const bool written = element >= binding.imageWritten.size() || binding.imageWritten[element];

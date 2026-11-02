@@ -393,6 +393,13 @@ void DefineModule(SpirvEmitterState& state) {
         state.module.EmitCapability(spv::CapabilityInt64);
         state.module.EmitCapability(spv::CapabilityInt64Atomics);
     }
+    if (state.requirements.imageInt64AtomicsLocked) {
+        for (const auto capability : {spv::CapabilityStorageImageReadWithoutFormat, spv::CapabilityStorageImageWriteWithoutFormat}) {
+            if (std::ranges::find(state.supportedCapabilities, static_cast<std::uint32_t>(capability)) == state.supportedCapabilities.end()) FailEmit("emulated 64-bit image atomics need storage image reads and writes without a format");
+            state.module.EmitCapability(capability);
+        }
+        state.module.EmitCapability(spv::CapabilityInt64);
+    }
     if (state.requirements.imageInt64Atomics) {
         if (std::find(state.supportedCapabilities.begin(), state.supportedCapabilities.end(), static_cast<std::uint32_t>(spv::CapabilityInt64ImageEXT)) == state.supportedCapabilities.end()) {
             FailEmit("64-bit image atomics need VK_EXT_shader_image_atomic_int64");

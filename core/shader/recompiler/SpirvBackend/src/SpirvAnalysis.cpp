@@ -1,5 +1,6 @@
 #include "SpirvBackend/SpirvAnalysis.hpp"
 #include "RdnaDecoder/RdnaInstruction.hpp"
+#include <spirv/unified1/spirv.hpp>
 #include <algorithm>
 #include <optional>
 #include <stdexcept>
@@ -343,6 +344,16 @@ bool IsSplittableBufferAtomic64(const IrValue* inst) {
     default:
         return false;
     }
+}
+
+bool NeedsAtomicLocks(const IrProgram& program, std::span<const std::uint32_t> supportedCapabilities) {
+    if (std::ranges::find(supportedCapabilities, static_cast<std::uint32_t>(spv::CapabilityInt64ImageEXT)) != supportedCapabilities.end()) return false;
+    for (const IrBlock* block : program.BlockOrder()) {
+        for (const IrValue* inst : block->Instructions()) {
+            if (IsImageAtomic64Opcode(inst->Opcode())) return true;
+        }
+    }
+    return false;
 }
 
 SpirvRequirements AnalyzeProgramRequirements(const IrProgram& program) {

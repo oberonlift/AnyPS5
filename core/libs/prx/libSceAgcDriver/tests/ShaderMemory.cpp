@@ -9261,8 +9261,9 @@ void verifyInt64AtomicCapabilities() {
     const std::vector<std::uint32_t> bufferXor{0xe16c5000u, 0x80010003u, 0xbf810000u};
     const std::vector<std::uint32_t> bufferOrTwice{0xe1685000u, 0x80010003u, 0xe1685000u, 0x80010203u, 0xbf810000u};
     const std::vector<std::uint32_t> bufferOrAnd{0xe1685000u, 0x80010003u, 0xe1645000u, 0x80010203u, 0xbf810000u};
-    const auto compile = [&](std::span<const std::uint32_t> code, spv::Capability added) {
-        const std::array<std::uint32_t, 4> capabilities{spv::CapabilityInt64, spv::CapabilityPhysicalStorageBufferAddresses, spv::CapabilityStorageBuffer8BitAccess, static_cast<std::uint32_t>(added)};
+    const auto compileWith = [&](std::span<const std::uint32_t> code, std::span<const spv::Capability> added) {
+        std::vector<std::uint32_t> capabilities{spv::CapabilityInt64, spv::CapabilityPhysicalStorageBufferAddresses, spv::CapabilityStorageBuffer8BitAccess};
+        for (const auto capability : added) capabilities.push_back(static_cast<std::uint32_t>(capability));
         RecompileRequest request{};
         request.shader = {ShaderStage::Compute, 0x58000u, code, 0, {}};
         request.context.waveSize = 32;
@@ -9279,6 +9280,9 @@ void verifyInt64AtomicCapabilities() {
         request.layout.pushConstantSizeBytes = 128;
         request.useCache = false;
         return Recompile(request).spirv;
+    };
+    const auto compile = [&](std::span<const std::uint32_t> code, spv::Capability added) {
+        return compileWith(code, std::span(&added, 1));
     };
     const auto declares = [](std::span<const std::uint32_t> words, spv::Capability capability) {
         for (std::size_t cursor = 5; cursor < words.size();) {
@@ -9337,7 +9341,10 @@ void verifyInt64AtomicCapabilities() {
     require(!declares(compile(bufferOrTwice, spv::CapabilityShader), spv::CapabilityInt64Atomics), "64-bit atomics: two buffer_atomic_or_x2 of one program declare Int64Atomics on a device without it");
     expectFailure([&] { static_cast<void>(compile(bufferOrAnd, spv::CapabilityShader)); }, "64-bit buffer atomics need shaderBufferInt64Atomics", "64-bit atomics: a buffer_atomic_or_x2 and a buffer_atomic_and_x2 of one program compiled without shaderBufferInt64Atomics");
     require(declares(compile(bufferOrAnd, spv::CapabilityInt64Atomics), spv::CapabilityInt64Atomics), "64-bit atomics: a buffer_atomic_or_x2 and a buffer_atomic_and_x2 of one program do not use the 64-bit atomics where the device has them");
-    expectFailure([&] { static_cast<void>(compile(imageAtomic, spv::CapabilityShader)); }, "64-bit image atomics need VK_EXT_shader_image_atomic_int64", "64-bit atomics: an image_atomic_swap on a 32_32 image compiled without shaderImageInt64Atomics");
+    expectFailure([&] { static_cast<void>(compile(imageAtomic, spv::CapabilityShader)); }, "emulated 64-bit image atomics need storage image reads and writes without a format", "64-bit atomics: an image_atomic_swap on a 32_32 image compiled without shaderImageInt64Atomics or formatless storage image access");
+    const std::array<spv::Capability, 2> formatless{spv::CapabilityStorageImageReadWithoutFormat, spv::CapabilityStorageImageWriteWithoutFormat};
+    const auto locked = compileWith(imageAtomic, formatless);
+    require(!declares(locked, spv::CapabilityInt64ImageEXT) && declares(locked, spv::CapabilityStorageImageReadWithoutFormat) && declares(locked, spv::CapabilityStorageImageWriteWithoutFormat), "64-bit atomics: an image_atomic_swap on a 32_32 image is not emulated under a lock on a device without shaderImageInt64Atomics");
     require(declares(compile(imageAtomic, spv::CapabilityInt64ImageEXT), spv::CapabilityInt64ImageEXT), "64-bit atomics: an image_atomic_swap on a 32_32 image does not declare Int64ImageEXT");
 }
 
