@@ -169,6 +169,28 @@ class DatabaseTest(unittest.TestCase):
         self.assertEqual(self.find("movsb", mandatory_prefix="ignore").tested_flags, frozenset({"df"}))
         self.assertEqual(self.find("add", opcode=0x00, modrm_mod="3").tested_flags, frozenset())
 
+    def test_xed_attributes(self):
+        aligned = [
+            self.find("movaps", opcode=0x28, modrm_mod="!3"),
+            self.find("paddb", mandatory_prefix="66", modrm_mod="!3"),
+            self.find("vmovaps", encoding="vex", opcode=0x28, vector_length="256", modrm_mod="!3"),
+            self.find("fxsave", modrm_mod="!3"),
+            self.find("xsave", modrm_mod="!3"),
+            self.find("cmpxchg16b"),
+        ]
+        unaligned = [
+            self.find("movups", opcode=0x10, modrm_mod="!3"),
+            self.find("paddb", mandatory_prefix="none", modrm_mod="!3"),
+            self.find("vaddps", encoding="vex", vector_length="128", modrm_mod="!3"),
+            self.find("cmpxchg8b"),
+        ]
+        for definition in aligned:
+            self.assertIn("REQUIRES_ALIGNMENT", definition.xed_attributes, definition.mnemonic)
+        for definition in unaligned:
+            self.assertNotIn("REQUIRES_ALIGNMENT", definition.xed_attributes, definition.mnemonic)
+        in_set = [definition for definition in self.definitions if database.classify(definition) is Group.SET]
+        self.assertEqual([definition.mnemonic for definition in in_set if definition.xed_attributes is None], [])
+
     def test_form_sizes(self):
         self.assertEqual(self.sizes("add", opcode=0x01, modrm_mod="3"), {16, 32, 64})
         self.assertEqual(self.sizes("push", opcode=0x50), {16, 64})

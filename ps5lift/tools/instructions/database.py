@@ -3,7 +3,11 @@
 It keeps every row valid in 64-bit mode that the lifter's Zydis decoder modes select, whatever its extension or encoding
 (KNC rows and MVEX rows included), and gives each definition the forms that its own row decodes: an operand size that
 no prefix and W reach, or whose bytes Zydis gives to another row, is not a form of this one. It is the one source of
-the operand-size and address-size rules, which Zydis's tables for 64-bit mode define."""
+the operand-size and address-size rules, which Zydis's tables for 64-bit mode define.
+
+A row's `comment` holds, base64-encoded, the XED record it was generated from; `xed_attributes` is the set of XED
+attributes that record names (REQUIRES_ALIGNMENT among them), or None for a row without a record."""
+import base64
 import dataclasses
 import enum
 import json
@@ -46,6 +50,7 @@ FAR_INDIRECT = {"call": "3", "jmp": "5"}
 FAR_RET_OPCODES = frozenset({0xCA, 0xCB})
 SEGMENT_REGISTERS_PUSHED = frozenset({"fs", "gs"})
 TESTED_FLAG_EFFECTS = frozenset({"t", "t_m"})
+XED_ATTRIBUTES_FIELD = "ATTRIBUTES"
 
 OPERAND_TYPE_SIZES = {
     "gpr16_32_64": {16, 32, 64},
@@ -92,6 +97,7 @@ class Definition:
     adsize_map: Optional[str]
     undefined_flags: frozenset
     tested_flags: frozenset
+    xed_attributes: Optional[frozenset]
     prefix_flags: frozenset
     flags: frozenset
     mask_mode: Optional[str]
@@ -120,6 +126,17 @@ class OperandSizeEncoding:
     w: int
 
 
+def _xed_attributes(row):
+    if "comment" not in row:
+        return None
+    attributes = set()
+    for line in base64.b64decode(row["comment"]).decode().splitlines():
+        field, _, value = line.partition(":")
+        if field == XED_ATTRIBUTES_FIELD:
+            attributes.update(value.split())
+    return frozenset(attributes)
+
+
 def _definition(index, row):
     meta = row["meta_info"]
     flags = row.get("affected_flags", {})
@@ -139,6 +156,7 @@ def _definition(index, row):
         adsize_map=row.get("adsize_map"),
         undefined_flags=frozenset(flag for flag, effect in flags.items() if effect == "u"),
         tested_flags=frozenset(flag for flag, effect in flags.items() if effect in TESTED_FLAG_EFFECTS),
+        xed_attributes=_xed_attributes(row),
         prefix_flags=frozenset(row.get("prefix_flags", ())),
         flags=frozenset(row.get("flags", ())),
         mask_mode=(row.get("evex") or row.get("mvex") or {}).get("mask_mode"),
