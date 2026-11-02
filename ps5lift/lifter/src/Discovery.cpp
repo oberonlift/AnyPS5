@@ -1,6 +1,8 @@
 #include <lifter/Discovery.hpp>
 #include <lifter/Hex.hpp>
 
+#include <lifter/Decoder.hpp>
+
 #include <llvm/Support/Base64.h>
 #include <llvm/Support/SHA1.h>
 
@@ -703,8 +705,7 @@ std::uint64_t InstructionSpan::Next() const {
 }
 
 Decoder::Decoder() {
-    if (ZYAN_FAILED(ZydisDecoderInit(&_decoder, ZYDIS_MACHINE_MODE_LONG_64, ZYDIS_STACK_WIDTH_64))) throw std::runtime_error("Zydis decoder initialization failed");
-    if (ZYAN_FAILED(ZydisDecoderEnableMode(&_decoder, ZYDIS_DECODER_MODE_AMD_BRANCHES, ZYAN_TRUE))) throw std::runtime_error("Zydis decoder initialization failed");
+    InitializeDecoder(_decoder);
 }
 
 Instruction Decoder::Decode(const GuestImage& image, const std::uint64_t address) const {

@@ -4,6 +4,12 @@ option(PS5LIFT_QEMU_TESTS "On an x86-64 host, also lift the fixtures for aarch64
 
 set(PS5LIFT_FIXTURES basic vector float threads callbacks x87 setjmp cpu mmx modules strings sse41 avx)
 
+add_executable(ps5lift_decode instructions/Decode.cpp)
+target_link_libraries(ps5lift_decode PRIVATE ps5lift_decoder)
+add_test(NAME instructions_unit
+        COMMAND ${Python3_EXECUTABLE} -m unittest discover -s ${CMAKE_SOURCE_DIR}/tools/instructions/tests -t ${CMAKE_SOURCE_DIR}/tools)
+set_tests_properties(instructions_unit PROPERTIES ENVIRONMENT "PS5LIFT_DECODE=$<TARGET_FILE:ps5lift_decode>;PS5LIFT_CLANG=${CMAKE_C_COMPILER}")
+
 if(NOT CMAKE_SYSTEM_NAME STREQUAL "Linux")
     set(PS5LIFT_X86_64_SYSROOT "" CACHE PATH "x86-64 Linux sysroot that the fixture guests build against")
     if(NOT IS_DIRECTORY "${PS5LIFT_X86_64_SYSROOT}/usr/x86_64-linux-gnu" OR NOT IS_DIRECTORY "${PS5LIFT_X86_64_SYSROOT}/usr/lib/gcc-cross/x86_64-linux-gnu")
