@@ -17,12 +17,14 @@ floating-point mode and the `Run` the case belongs to, and lists every `Mismatch
   bits as recorded; the counters of `rdtsc` and `rdtscp` do not decrease from case to case in a run and leave the high
   halves 0; `rdpid` and `rdtscp`'s ecx are below the host's processor count; `cpuid` and `xgetbv` give the console's
   values, which the lifted driver appends to its results.
-- **Fast mode** allows a NaN lane to be any NaN; under FTZ or DAZ, which fast mode treats as one switch, a `min*` or
-  `max*` lane that x86 makes a signed zero to be a denormal of that sign, and a lane that x86 rounds to the smallest
-  normal to be a zero of that sign; it does not compare MXCSR's exception flags, wherever MXCSR is stored; it compares
+- **Fast mode** allows, in the destination lanes an instruction computes (those of instructions whose exception class
+  is SDM type 2 or 3, compares excepted, as their destination is a mask; lane 0 of a scalar form), a NaN to be any NaN;
+  and under FTZ or DAZ, which fast mode treats as one switch, a `min*` or `max*` lane that x86 makes a signed zero to
+  be a denormal of that sign that equals the lane of one of its operands, and a lane that x86 rounds to the smallest
+  normal to be a zero of that sign. It does not compare MXCSR's exception flags, wherever MXCSR is stored. It compares
   an FTZ-only or DAZ-only case with its twin's expectation (`reference_case`), with MXCSR's control bits as the case
-  set them; and it expects NEEDS_EXACT_FLOAT at the loader's fxrstor for a case whose initial MXCSR unmasks an
-  exception, and at the instance for one that loads such an MXCSR, where the recording shows the load completing.
+  set them. It expects NEEDS_EXACT_FLOAT at the loader's fxrstor for a case whose initial MXCSR unmasks an exception,
+  and at the instance for one that loads such an MXCSR, where the recording shows the load completing.
 
 `format_mismatch` gives the instance as Zydis formats it, the case's inputs, and each differing field's values."""
 import enum
@@ -34,7 +36,7 @@ from typing import Optional
 from . import records, tolerance
 from .cases import CaseSpec, Instance, expression_offset, form_model
 from .encoding import Mem, Reg
-from .model import FLOAT_BITS, IMPLICIT_BASES, LOCATIONS, Shape
+from .model import COMPARISON_PREDICATES, FLOAT_BITS, IMPLICIT_BASES, LOCATIONS, Shape
 from .program import Layout
 from .records import CaseInput, Outcome
 
@@ -70,6 +72,7 @@ _TOLERANCES = {
     "rdtscp": Tolerance.COUNTER,
     "rdpid": Tolerance.PROCESSOR_ID,
 }
+_COMPUTING_EXCEPTION_CLASSES = frozenset({"sse2", "sse3", "avx2", "avx3"})
 _COUNTER_HALVES = ("rax", "rdx")
 _PROCESSOR_REGISTER = "rcx"
 _CONSOLE_REGISTERS = {"cpuid": ("rax", "rbx", "rcx", "rdx"), "xgetbv": ("rax", "rdx")}
@@ -119,6 +122,7 @@ class Rules:
     status_flags_dropped: bool
     float_lanes: tuple
     float_sources: tuple
+    computes: bool
     tolerance: Tolerance
     square_root: bool
     min_max: bool
@@ -228,10 +232,17 @@ def _float_operands(model, instance, writes):
     return found
 
 
+def _computes(model):
+    compares = any(operand.spec.get("element_type") in COMPARISON_PREDICATES for operand in model.operands)
+    return model.definition.exception_class in _COMPUTING_EXCEPTION_CLASSES and not compares
+
+
 def _written_float_lanes(model, instance, kind):
+    if not _computes(model) and kind is not Tolerance.RCP:
+        return ()
     lanes = []
     for operand, location, bits in _float_operands(model, instance, writes=True):
-        count = 1 if kind is Tolerance.RCP and _scalar(model.mnemonic) else max(model.operand_bits(operand) // bits, 1)
+        count = 1 if _scalar(model.mnemonic) else max(model.operand_bits(operand) // bits, 1)
         lanes.append(Lanes(location, bits, count))
     return tuple(lanes)
 
@@ -284,6 +295,7 @@ def rules_for(instance):
         status_flags_dropped=model.shape in _DROPPING_SHAPES,
         float_lanes=_written_float_lanes(model, instance, kind),
         float_sources=_float_sources(model, instance),
+        computes=_computes(model),
         tolerance=kind,
         square_root=base.startswith("rsqrt"),
         min_max=model.floating and base.startswith(("min", "max")),
@@ -492,13 +504,14 @@ class _Judgement:
     def lane_matches(self, expected, actual, index, bits):
         if expected == actual:
             return True
-        if self.float_mode == FAST:
+        if self.float_mode == FAST and self.rules.computes:
             if _is_nan(expected, bits) and _is_nan(actual, bits):
                 return True
             expected_sign, expected_exponent, expected_fraction = _float_parts(expected, bits)
             actual_sign, actual_exponent, actual_fraction = _float_parts(actual, bits)
             if self.own_mxcsr & (_FTZ | _DAZ) and expected_sign == actual_sign:
-                if self.rules.min_max and expected_exponent == expected_fraction == 0 and actual_exponent == 0:
+                if (self.rules.min_max and expected_exponent == expected_fraction == 0 and actual_exponent == 0
+                        and self.is_source_lane(actual, index, bits)):
                     return True
                 if expected_exponent == 1 and expected_fraction == 0 and actual_exponent == actual_fraction == 0:
                     return True
@@ -506,6 +519,10 @@ class _Judgement:
             source = self.source_lane(self.rules.float_sources[-1][0], index, bits)
             return tolerance.within_rcp(expected, actual, source, bits, self.rules.square_root)
         return False
+
+    def is_source_lane(self, value, index, bits):
+        return any(source_bits == bits and self.source_lane(location, index, bits) == value
+                   for location, source_bits in self.rules.float_sources)
 
     def lanes_match(self, expected, actual, lanes):
         size = lanes.element_bits // 8

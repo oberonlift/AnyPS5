@@ -118,6 +118,13 @@ def _lane_values(case, operand, values, bits=32):
             for lane, value in enumerate(values)}
 
 
+def _with_input_lanes(case, operand, *values):
+    slot = bytearray(case.input.slot)
+    for offset, data in _lane_values(case, operand, values).items():
+        slot[offset:offset + len(data)] = data
+    return dataclasses.replace(case, input=dataclasses.replace(case.input, slot=bytes(slot)))
+
+
 def _vector_field(case, operand):
     return f"ymm{LOCATIONS[case.instance.operands[operand].name][1]}"
 
@@ -187,12 +194,19 @@ class FastModeTest(unittest.TestCase):
     def test_fast_min_max_daz(self):
         case = _case("sse", _primary("minps"), lambda spec: spec.mxcsr == CONSOLE_MXCSR)
         self.assertTrue(_mxcsr(case) & _DAZ)
+        case = _with_input_lanes(_with_input_lanes(case, 1, 0x00000001), 0, 0x3F800000)
         expected = _completed(case, _lane(case, 0, 0x00000000))
         denormal = _completed(case, _lane(case, 0, 0x00000001))
         self.assertEqual(_judge(case, expected, denormal, FAST), [])
         self.assertEqual(_fields(_judge(case, expected, denormal, EXACT)), {_vector_field(case, 0)})
         other_sign = _completed(case, _lane(case, 0, 0x80000001))
         self.assertEqual(_fields(_judge(case, expected, other_sign, FAST)), {_vector_field(case, 0)})
+        no_operand = _completed(case, _lane(case, 0, 0x00000003))
+        self.assertEqual(_fields(_judge(case, expected, no_operand, FAST)), {_vector_field(case, 0)})
+        first_operand = _with_input_lanes(case, 0, 0x00000003)
+        expected = _completed(first_operand, _lane(first_operand, 0, 0x00000000))
+        self.assertEqual(_judge(first_operand, expected, _completed(first_operand, _lane(first_operand, 0, 3)), FAST),
+                         [])
         without_daz = _case("sse", _primary("minps"), lambda spec: spec.mxcsr == 0x1F80)
         expected = _completed(without_daz, _lane(without_daz, 0, 0x00000000))
         denormal = _completed(without_daz, _lane(without_daz, 0, 0x00000001))
@@ -201,6 +215,26 @@ class FastModeTest(unittest.TestCase):
         expected = _completed(addps, _lane(addps, 0, 0x00000000))
         denormal = _completed(addps, _lane(addps, 0, 0x00000001))
         self.assertEqual(_fields(_judge(addps, expected, denormal, FAST)), {_vector_field(addps, 0)})
+
+    def test_fast_allowances_only_where_lanes_compute(self):
+        mask = _case("sse", _primary("cmpps"), lambda spec: spec.mxcsr == CONSOLE_MXCSR)
+        recorded = _completed(mask, _lane(mask, 0, 0xFFFFFFFF))
+        self.assertEqual(_fields(_judge(mask, recorded, _completed(mask, _lane(mask, 0, 0x7FC00000)), FAST)),
+                         {_vector_field(mask, 0)})
+        logic = _case("sse", _primary("xorps"), lambda spec: spec.mxcsr == CONSOLE_MXCSR)
+        recorded = _completed(logic, _lane(logic, 0, 0x7FC00001))
+        self.assertEqual(_fields(_judge(logic, recorded, _completed(logic, _lane(logic, 0, 0x7FC00002)), FAST)),
+                         {_vector_field(logic, 0)})
+        move = _case("sse", _primary("movaps"), lambda spec: spec.mxcsr == CONSOLE_MXCSR)
+        recorded = _completed(move, _lane(move, 0, 0x00800000))
+        self.assertEqual(_fields(_judge(move, recorded, _completed(move, _lane(move, 0, 0x00000000)), FAST)),
+                         {_vector_field(move, 0)})
+        scalar = _case("avx", _primary("vaddss"), lambda spec: spec.mxcsr == CONSOLE_MXCSR)
+        recorded = _completed(scalar, {**_lane(scalar, 0, 0x7FC00001), **_lane(scalar, 0, 0x7FC00001, lane=1)})
+        computed = _completed(scalar, {**_lane(scalar, 0, 0x7FC00002), **_lane(scalar, 0, 0x7FC00001, lane=1)})
+        self.assertEqual(_judge(scalar, recorded, computed, FAST), [])
+        copied = _completed(scalar, {**_lane(scalar, 0, 0x7FC00001), **_lane(scalar, 0, 0x7FC00002, lane=1)})
+        self.assertEqual(_fields(_judge(scalar, recorded, copied, FAST)), {_vector_field(scalar, 0)})
 
     def test_fast_exception_flags_ignored(self):
         case = self._addps()
@@ -325,15 +359,9 @@ class StateTest(unittest.TestCase):
         one_off_by_one = _completed(case, {st0: (ONE_80 + 1).to_bytes(10, "little"), st1: TAN_1.to_bytes(10, "little")})
         self.assertEqual(_fields(_judge(case, recorded, one_off_by_one)), {"st0"})
 
-    def _with_lanes(self, case, operand, *values):
-        slot = bytearray(case.input.slot)
-        for offset, data in _lane_values(case, operand, values).items():
-            slot[offset:offset + len(data)] = data
-        return dataclasses.replace(case, input=dataclasses.replace(case.input, slot=bytes(slot)))
-
     def test_rcp_lanes_within_tolerance(self):
         case = _case("sse", _primary("rcpps"), lambda spec: spec.mxcsr == CONSOLE_MXCSR)
-        case = self._with_lanes(case, 1, 0x3F800000)
+        case = _with_input_lanes(case, 1, 0x3F800000)
         recorded = _completed(case, _lane(case, 0, 0x3F7FF000))
         self.assertEqual(_judge(case, recorded, _completed(case, _lane(case, 0, 0x3F800C00))), [])
         self.assertEqual(_fields(_judge(case, recorded, _completed(case, _lane(case, 0, 0x3F800C01)))),
@@ -341,8 +369,8 @@ class StateTest(unittest.TestCase):
 
     def test_scalar_rcp_copies_compared_exactly(self):
         case = _case("avx", _primary("vrcpss"), lambda spec: spec.mxcsr == CONSOLE_MXCSR)
-        case = self._with_lanes(case, 2, 0x3F800000)
-        case = self._with_lanes(case, 1, 0x40000000, 0x3F800000, 0x3F800000, 0x3F800000)
+        case = _with_input_lanes(case, 2, 0x3F800000)
+        case = _with_input_lanes(case, 1, 0x40000000, 0x3F800000, 0x3F800000, 0x3F800000)
         copies = {**_lane(case, 0, 0x3F800000), **_lane(case, 0, 0x3F800000, lane=1),
                   **_lane(case, 0, 0x3F800000, lane=2), **_lane(case, 0, 0x3F800000, lane=3)}
         recorded = _completed(case, copies)

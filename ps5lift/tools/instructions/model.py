@@ -92,7 +92,7 @@ _IMMEDIATE_EDGES = {
     "enter": ((0, 1, 8, 0x100, 0x7FFF, 0xFFFF), (0, 1, 2, 31, 32, 255)),
     "ret": ((0, 1, 8, 0x100, 0x7FFE, 0xFFFF),),
 }
-_COMPARISON_PREDICATES = {"cc3": tuple(range(8)), "cc5": tuple(range(32))}
+COMPARISON_PREDICATES = {"cc3": tuple(range(8)), "cc5": tuple(range(32))}
 _SSE_SHIFTS = frozenset(
     f"{prefix}{kind}" for prefix in ("ps", "vps") for kind in "llw lld llq rlw rld rlq raw rad".split()
 )
@@ -399,8 +399,8 @@ def _immediate_values(model, operand, number):
     mnemonic = model.mnemonic
     table = _IMMEDIATE_EDGES.get(mnemonic, _IMMEDIATE_EDGES.get(mnemonic[1:]) if mnemonic.startswith("v") else None)
     count = _count_width(model, operand)
-    if operand.spec.get("element_type") in _COMPARISON_PREDICATES:
-        edges = _COMPARISON_PREDICATES[operand.spec["element_type"]]
+    if operand.spec.get("element_type") in COMPARISON_PREDICATES:
+        edges = COMPARISON_PREDICATES[operand.spec["element_type"]]
     elif table is not None:
         edges = table[number]
     elif count is not None:

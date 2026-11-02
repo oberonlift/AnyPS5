@@ -92,6 +92,7 @@ class Definition:
     extension: str
     isa_set: str
     category: str
+    exception_class: Optional[str]
     cpl: Optional[int]
     opsize_map: Optional[str]
     adsize_map: Optional[str]
@@ -151,6 +152,7 @@ def _definition(index, row):
         extension=meta["extension"],
         isa_set=meta["isa_set"],
         category=meta["category"],
+        exception_class=row.get("exception_class"),
         cpl=row.get("cpl"),
         opsize_map=row.get("opsize_map"),
         adsize_map=row.get("adsize_map"),
