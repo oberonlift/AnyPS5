@@ -10,9 +10,8 @@ from pathlib import Path
 
 from instructions import cases, database, decoder, records, values
 from instructions.cases import BlockOffset
-from instructions.database import Group
 from instructions.encoding import Mem
-from instructions.tests.support import find_form
+from instructions.tests.support import find_form, generate, generated
 
 CPUID_SOURCE = Path(__file__).resolve().parents[3] / "runtime" / "src" / "Cpuid.cpp"
 RUNTIME_INCLUDE = Path(__file__).resolve().parents[3] / "runtime" / "include"
@@ -28,25 +27,6 @@ X87_CONTROL_PAIRS = frozenset((precision, rounding) for precision in (0, 2, 3) f
 STACK_MARGIN = 512
 IMPLICIT_BASES = {"si": 6, "di": 7, "bx": 3, "bp": 5, "sp": 4}
 MASK64 = 2**64 - 1
-
-
-def _generate():
-    forms = [form for form in database.forms(database.load()) if database.classify(form.definition) is Group.SET]
-    instances = cases.instances(forms, decoder.from_environment())
-    by_group = defaultdict(list)
-    for instance in instances:
-        by_group[database.test_group(instance.form)].append(instance)
-    specs = {group: cases.case_specs(members) for group, members in by_group.items()}
-    return forms, dict(by_group), specs
-
-
-_GENERATED = []
-
-
-def generated():
-    if not _GENERATED:
-        _GENERATED.append(_generate())
-    return _GENERATED[0]
 
 
 def _ieee_edges(bits, exponent_bits):
@@ -165,7 +145,7 @@ class CasesTest(unittest.TestCase):
 
     def test_deterministic(self):
         forms, first_instances, first_specs = generated()
-        _, second_instances, second_specs = _generate()
+        _, second_instances, second_specs = generate()
         self.assertEqual(first_instances, second_instances)
         self.assertEqual(first_specs, second_specs)
 
@@ -287,6 +267,24 @@ class CasesTest(unittest.TestCase):
                     within = STACK_MARGIN <= start and end <= records.BLOCK_SIZE - STACK_MARGIN and start % 8 == 0
                     self.assertTrue(within, f"case {spec.index} of {instance.form.key} reads [{start}, {end})")
         self.assertGreater(checked, 0)
+
+    def test_indirect_jump_operands_clear_the_return_slot(self):
+        _, instances, specs = generated()
+        checked = set()
+        for group, group_specs in specs.items():
+            for spec in group_specs:
+                instance = instances[group][spec.instance]
+                if instance.shape is not cases.Shape.INDIRECT_JUMP:
+                    continue
+                return_slot = _resolve(spec.gprs[records.GPR_NAMES.index("rsp")])
+                for start, end, _ in _access_ranges(instance, spec):
+                    self.assertFalse(
+                        start < return_slot + 8 and return_slot < end,
+                        f"case {spec.index} of {instance.text} reads [{start}, {end}), "
+                        f"over the return address at {return_slot}",
+                    )
+                    checked.add(instance.operands[0].base)
+        self.assertIn("rsp", checked)
 
     def test_x87_base_cases_cover_the_cycle(self):
         forms, instances, specs = generated()

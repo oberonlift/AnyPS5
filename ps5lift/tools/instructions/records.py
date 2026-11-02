@@ -1,7 +1,8 @@
 """The binary formats the instruction tests share, and the C header generated from them.
 
 The slot is the guest memory image that generated code loads its initial state from and stores its final state into. The
-input file lists the cases, and the result file records what each one did. Everything is little-endian. `header_text`
+table is the guest program's index of its slots, memory block and instances, which the drivers read. The input file
+lists the cases, and the result file records what each one did. Everything is little-endian. `header_text`
 emits `records.h` for the drivers, so the C and Python sides cannot drift apart."""
 import struct
 from dataclasses import dataclass
@@ -21,6 +22,8 @@ FX_FTW = 4
 FX_MXCSR = 24
 FX_ST = 32
 FX_ST_STRIDE = 16
+FX_XMM = 160
+FX_XMM_STRIDE = 16
 YMM_OFFSET = 512
 YMM_STRIDE = 32
 YMM_COUNT = 16
@@ -41,6 +44,7 @@ BLOCK_SIZE = 4096
 BLOCK_END_ALIGNMENT = 64 * 1024
 GUARD_SIZE = 64 * 1024
 
+TABLE_MAGIC = b"PS5LTAB1"
 INPUT_MAGIC = b"PS5LIN01"
 RESULT_MAGIC = b"PS5LRES1"
 FINGERPRINT_SIZE = 32
@@ -93,6 +97,20 @@ class Record:
         return "\n".join(lines)
 
 
+TABLE_HEADER = Record("Ps5LiftInstructionTableHeader", (
+    Field("Magic", "char", "s", 8),
+    Field("Count", "uint32_t", "I"),
+    Field("Pad", "uint8_t", "x", 4),
+    Field("Input", "uint64_t", "Q"),
+    Field("Output", "uint64_t", "Q"),
+    Field("Block", "uint64_t", "Q"),
+    Field("Guard", "uint64_t", "Q"),
+))
+TABLE_ENTRY = Record("Ps5LiftInstructionTableEntry", (
+    Field("Function", "uint64_t", "Q"),
+    Field("Instance", "uint64_t", "Q"),
+    Field("Length", "uint64_t", "Q"),
+))
 FILE_HEADER = Record("Ps5LiftInstructionFileHeader", (
     Field("Magic", "char", "s", 8),
     Field("Program", "uint8_t", "s", FINGERPRINT_SIZE),
@@ -130,7 +148,9 @@ WORD = Record("Ps5LiftInstructionWord", (
 EXPECTED_COUNT = Record("Ps5LiftInstructionExpectedCount", (
     Field("Count", "uint8_t", "B"),
 ))
-RECORDS = (FILE_HEADER, INPUT_HEAD, PATCH_COUNT, PATCH_HEAD, RESULT_HEAD, WORD, EXPECTED_COUNT)
+RECORDS = (
+    TABLE_HEADER, TABLE_ENTRY, FILE_HEADER, INPUT_HEAD, PATCH_COUNT, PATCH_HEAD, RESULT_HEAD, WORD, EXPECTED_COUNT,
+)
 
 _FILE_HEADER = FILE_HEADER.struct()
 _INPUT_HEAD = INPUT_HEAD.struct()
@@ -194,6 +214,10 @@ class Result:
 
 def fx_st_offset(index):
     return FX_OFFSET + FX_ST + FX_ST_STRIDE * index
+
+
+def fx_xmm_offset(index):
+    return FX_OFFSET + FX_XMM + FX_XMM_STRIDE * index
 
 
 def ymm_offset(index):
@@ -391,6 +415,8 @@ def _defines():
         "FX_MXCSR": FX_MXCSR,
         "FX_ST": FX_ST,
         "FX_ST_STRIDE": FX_ST_STRIDE,
+        "FX_XMM": FX_XMM,
+        "FX_XMM_STRIDE": FX_XMM_STRIDE,
         "YMM": YMM_OFFSET,
         "YMM_STRIDE": YMM_STRIDE,
         "YMM_COUNT": YMM_COUNT,
@@ -413,6 +439,7 @@ def _defines():
         "FINGERPRINT_SIZE": FINGERPRINT_SIZE,
     }
     lines = [f"#define PS5LIFT_INSTRUCTION_{name} {value}" for name, value in values.items()]
+    lines.append(f'#define PS5LIFT_INSTRUCTION_TABLE_MAGIC "{TABLE_MAGIC.decode()}"')
     lines.append(f'#define PS5LIFT_INSTRUCTION_INPUT_MAGIC "{INPUT_MAGIC.decode()}"')
     lines.append(f'#define PS5LIFT_INSTRUCTION_RESULT_MAGIC "{RESULT_MAGIC.decode()}"')
     lines += [f"#define PS5LIFT_INSTRUCTION_OUTCOME_{outcome.name} {outcome.value}" for outcome in Outcome]

@@ -4,10 +4,11 @@ Instances. A form's primary instance alternates low and high registers through i
 xmm15 or ymm15). Its variants put in its operands each special register they allow (rsp, rbp, r12, r13, the high byte
 registers, the REX byte registers, the same register as source and destination, and xmm8 to xmm15 or ymm8 to ymm15),
 each addressing form of a memory operand (base only, base and index at each scale, an 8-bit and a 32-bit displacement,
-RIP-relative, and rsp, rbp, r12 and r13 as base), and the bnd and lock prefixes the form takes. Immediates are part of
-the bytes, so a form has one primary instance for each set of immediates its base cases take; an absolute address is
-too, so a moffs form's memory cases are instances of their own. `instances` verifies every instance with one batched
-decode, and numbers the instances of each test group from 0.
+RIP-relative, and rsp, rbp, r12 and r13 as base; an indirect jump's rsp base takes a displacement of 8, past the return
+address that the code calling the jump leaves at rsp), and the bnd and lock prefixes the form takes. Immediates are
+part of the bytes, so a form has one primary instance for each set of immediates its base cases take; an absolute
+address is too, so a moffs form's memory cases are instances of their own. `instances` verifies every instance with one
+batched decode, and numbers the instances of each test group from 0.
 
 Cases. The primary's base cases number E, the longest edge list among its inputs (`model`). In case i, input k
 takes edge (i + k) mod n_k, and lane j of a vector input takes edge (i + k + j) mod n. Four seeded random cases follow.
@@ -23,8 +24,9 @@ random case. `_RULES` is the table of what particular mnemonics need of their in
 given base cases.
 
 Values are symbolic where they are addresses: a `BlockOffset` is an offset in the memory block, displacements name the
-block as `BLOCK`, and a fixup stores the address of `TARGET`, the instance's branch target, in a register (which holds 0
-until then) or in the block. `x87` is the FXSAVE image up to the XMM registers, with MXCSR in `mxcsr` instead. A case's
+block as `BLOCK`, and a fixup names where the address of `TARGET`, the instance's branch target, goes: a register, which
+holds 0 until the guest program's code loads the address (`fixup_register` names it), or a place in the block, which
+the case's inputs patch. `x87` is the FXSAVE image up to the XMM registers, with MXCSR in `mxcsr` instead. A case's
 `changeable_words` counts the 8-byte words of the result slot and of the block that it can change, which
 `projected_recording_bytes` turns into the size of its result in a recording. Every random value derives from `SEED`,
 the form's key, the instance's place among its form's instances and the case's place in its schedule."""
@@ -82,6 +84,7 @@ from .verification import verify_all
 SEED = 0x5053354C49465436
 BLOCK = "ps5lift_instruction_block"
 TARGET = "target"
+RETURN_ADDRESS_SIZE = 8
 
 CONSOLE_MXCSR = 0x9FC0
 _FTZ = 1 << 15
@@ -123,7 +126,7 @@ _XSAVE_AVX_COMPONENT = 4
 _XSAVE_MXCSR_COMPONENTS = 6
 _COMPACTED = 1 << 63
 
-_X87_IMAGE_SIZE = records.fx_st_offset(8)
+_X87_IMAGE_SIZE = records.FX_XMM
 _X87_DEFAULT_CONTROL = 0x037F
 _X87_RESERVED_CONTROL = 0x40
 _X87_CONTROLS = tuple((precision, rounding) for precision in (0, 2, 3) for rounding in range(4))
@@ -451,7 +454,12 @@ def _addressing_variants(model, immediates):
         ("disp32", _Address(displacement=_DISPLACEMENT32, displacement_size=32, **fixed)),
         ("rip", _Address(base="rip")),
     ]
-    addresses += [(f"base={role}", _Address(base=number)) for role, number in _SPECIAL_GPRS]
+    for role, number in _SPECIAL_GPRS:
+        if number == 4 and model.shape is Shape.INDIRECT_JUMP:
+            address = _Address(base=number, displacement=RETURN_ADDRESS_SIZE, displacement_size=8)
+        else:
+            address = _Address(base=number)
+        addresses.append((f"base={role}", address))
     for role, address in addresses:
         yield role, _assign(model, {}, immediates, _Options(address=address))
 
@@ -825,16 +833,24 @@ def _default_x87_image():
 _DEFAULT_X87_IMAGE = _default_x87_image()
 
 
+def _target_choice(instance):
+    if instance.shape in (Shape.CALL, Shape.INDIRECT_JUMP) and instance.operands:
+        return instance.operands[0]
+    return None
+
+
+def fixup_register(instance):
+    choice = _target_choice(instance)
+    return choice.name if isinstance(choice, Reg) else None
+
+
 def _fixups(case):
-    model = case.model
-    if model.shape not in (Shape.CALL, Shape.INDIRECT_JUMP) or not model.explicit:
-        return
-    choice = case.instance.operands[0]
+    choice = _target_choice(case.instance)
     if isinstance(choice, Reg):
         case.gprs[LOCATIONS[choice.name][1]] = 0
         case.fixups.append((choice.name, TARGET))
     elif isinstance(choice, Mem):
-        offset = case.targets[model.explicit[0].position]
+        offset = case.targets[case.model.explicit[0].position]
         if 0 <= offset and offset + 8 <= records.BLOCK_SIZE:
             case.fixups.append((BlockOffset(offset), TARGET))
 
