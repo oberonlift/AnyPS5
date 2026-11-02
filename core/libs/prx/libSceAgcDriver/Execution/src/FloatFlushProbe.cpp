@@ -181,8 +181,25 @@ constexpr std::uint32_t TranscendentalRows[Threads][Inputs] = {
     {0x3e800000u, 0x3f8ccccdu, 0x00000000u, 0x00000000u}
 };
 
+#ifdef ANYPS5_TRANSLATED_GUEST
+constexpr std::size_t ProbePageBytes = 16384;
+constexpr std::size_t ProbeInputOffset = 256;
+constexpr std::size_t ProbeOutputOffset = 1024;
+static_assert(ProbeOutputOffset + Threads * Results * sizeof(std::uint32_t) <= ProbePageBytes);
+
+std::uint8_t* ProbePage() {
+    static auto* const page = [] {
+        auto* bytes = static_cast<std::uint8_t*>(GuestArena::GuestArenaAllocate_nid_postfix(ProbePageBytes, ProbePageBytes));
+        if (bytes == nullptr) throw std::runtime_error("AGC driver: the guest arena has no page for the f32 denormal flush probe");
+        GuestArena::GuestArenaCommit_nid_postfix(bytes, ProbePageBytes, 0x04, ProbePageBytes);
+        return bytes;
+    }();
+    return page;
+}
+#endif
+
 std::array<std::uint32_t, 4> BufferDescriptor(const void* data, std::uint32_t bytes) {
-    const auto address = reinterpret_cast<std::uintptr_t>(data);
+    const auto address = GuestArena::HostToGuest(data);
     return {static_cast<std::uint32_t>(address), static_cast<std::uint32_t>((address >> 32u) & 0xffffu), bytes, 0x31016facu};
 }
 
@@ -191,17 +208,29 @@ bool IsNan(std::uint32_t value) {
 }
 
 std::vector<std::uint32_t> Run(VulkanDevice& device, const ShaderRecompiler::SpirvTarget& target, const std::optional<ShaderRecompiler::ShaderFloatMode>& floatMode, std::span<const std::uint32_t> code, const std::uint32_t (*rows)[Inputs]) {
-    for (std::uint32_t tid = 0; tid < Threads; ++tid) std::copy(std::begin(rows[tid]), std::end(rows[tid]), &Input[tid * Inputs]);
-    Output.fill(0xdeadbeefu);
+#ifdef ANYPS5_TRANSLATED_GUEST
+    auto* const page = ProbePage();
+    auto* const program = reinterpret_cast<std::uint32_t*>(page);
+    std::copy(code.begin(), code.end(), program);
+    code = {program, code.size()};
+    const std::span<std::uint32_t, Threads * Inputs> inputs{reinterpret_cast<std::uint32_t*>(page + ProbeInputOffset), Threads * Inputs};
+    const std::span<std::uint32_t, Threads * Results> outputs{reinterpret_cast<std::uint32_t*>(page + ProbeOutputOffset), Threads * Results};
+#else
+    const std::span<std::uint32_t, Threads * Inputs> inputs{Input};
+    const std::span<std::uint32_t, Threads * Results> outputs{Output};
+#endif
+    for (std::uint32_t tid = 0; tid < Threads; ++tid) std::copy(std::begin(rows[tid]), std::end(rows[tid]), &inputs[tid * Inputs]);
+    std::fill(outputs.begin(), outputs.end(), 0xdeadbeefu);
     std::vector<std::uint32_t> userData(8, 0u);
-    const auto input = BufferDescriptor(Input.data(), static_cast<std::uint32_t>(Input.size() * 4u));
-    const auto output = BufferDescriptor(Output.data(), static_cast<std::uint32_t>(Output.size() * 4u));
+    const auto input = BufferDescriptor(inputs.data(), static_cast<std::uint32_t>(inputs.size() * 4u));
+    const auto output = BufferDescriptor(outputs.data(), static_cast<std::uint32_t>(outputs.size() * 4u));
     std::copy(input.begin(), input.end(), userData.begin());
     std::copy(output.begin(), output.end(), userData.begin() + 4);
-    const std::array<ShaderRecompiler::MemoryRegion, 1> memory{{{reinterpret_cast<std::uintptr_t>(code.data()), std::as_bytes(code)}}};
+    const auto codeAddress = GuestArena::HostToGuest(code.data());
+    const std::array<ShaderRecompiler::MemoryRegion, 1> memory{{{codeAddress, std::as_bytes(code)}}};
     const ShaderRecompiler::ShaderComputeStageInfo compute{{Threads, 1, 1}, 0u, {false, false, false}, false, 1};
     ShaderRecompiler::RecompileRequest request{
-        {ShaderStage::Compute, reinterpret_cast<std::uintptr_t>(code.data()), code, 0, {}},
+        {ShaderStage::Compute, codeAddress, code, 0, {}},
         {32, 0, userData, compute, std::nullopt, std::nullopt, memory},
         target,
         {0, 0, 0, 128}
@@ -209,9 +238,9 @@ std::vector<std::uint32_t> Run(VulkanDevice& device, const ShaderRecompiler::Spi
     request.useCache = false;
     request.context.floatMode = floatMode;
     const auto result = ShaderRecompiler::Recompile(request);
-    device.Dispatch(result, 1, 1, 1, {}, reinterpret_cast<std::uintptr_t>(code.data()));
+    device.Dispatch(result, 1, 1, 1, {}, codeAddress);
     device.WaitIdle();
-    return {Output.begin(), Output.end()};
+    return {outputs.begin(), outputs.end()};
 }
 
 void Compare(FloatFlushProbeResult& result, const std::vector<std::uint32_t>& expected, const std::vector<std::uint32_t>& actual) {
@@ -235,9 +264,6 @@ void CompareTranscendental(FloatFlushProbeResult& result, const std::vector<std:
 }
 
 FloatFlushProbeResult ProbeFloat32FlushToZero(VulkanDevice& device, const ShaderRecompiler::SpirvTarget& target) {
-#ifdef ANYPS5_TRANSLATED_GUEST
-    throw std::runtime_error("AGC driver: the f32 denormal flush probe runs from the driver's own memory, which a translated guest's GPU cannot address");
-#endif
     FloatFlushProbeResult result;
     const std::array<std::optional<ShaderRecompiler::ShaderFloatMode>, 3> modes{std::nullopt, ShaderRecompiler::ShaderFloatMode{0xc0u, true, false, false}, ShaderRecompiler::ShaderFloatMode{0x00u, false, true, false}};
     const std::array<std::pair<std::span<const std::uint32_t>, const std::uint32_t (*)[Inputs]>, 3> programs{{{MixedCode, MixedRows}, {TinyCode, TinyRows}, {MixedTinyCode, MixedTinyRows}}};

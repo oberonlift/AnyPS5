@@ -8,6 +8,7 @@
 #include "prx/libSceAgcDriver/Execution/include/Driver/Shaders/ShaderRegistry.hpp"
 #include "prx/libSceAgcDriver/Execution/include/Driver/Synchronization/SynchronizationStatistics.hpp"
 #include "prx/libSceAgcDriver/Execution/include/VulkanDevice.hpp"
+#include "prx/libSceAgcDriver/Execution/include/FloatFlushProbe.hpp"
 #include "prx/libSceAgcDriver/Graphics/include/GuestBufferMemory.hpp"
 #include "prx/libc/include/GuestArena.hpp"
 #include "prx/libc/include/GuestHeap.hpp"
@@ -1156,6 +1157,13 @@ int main(int argc, char** argv) {
         }
         const auto device = OpenVulkanTestDevice();
         if (!device) return VulkanTestSkipped;
+        if (argc == 2 && std::string_view(argv[1]) == "--float-flush-probe") {
+            const auto probe = AgcDriver::ProbeFloat32FlushToZero(*device, device->Target());
+            check(probe.compared != 0, "the f32 denormal flush probe compared no results");
+            LibcRunShutdown_nid_postfix();
+            std::printf("The f32 denormal flush probe compared %u results, %u differ\n", probe.compared, probe.mismatches);
+            return 0;
+        }
         if (argc == 2 && std::string_view(argv[1]) == "--guest-form-multi-submits") {
             testGuestFormMultiSubmits();
             LibcRunShutdown_nid_postfix();
