@@ -18,6 +18,7 @@ import platform
 import re
 import shlex
 import shutil
+import signal
 import struct
 import subprocess
 import sys
@@ -1178,6 +1179,7 @@ KERNEL_IMPORTS = ["printf", "exit", "scePthreadCreate", "scePthreadJoin", "scePt
 FIBER_IMPORTS = ["printf", "fflush", "exit", "_sceFiberInitializeImpl", "sceFiberFinalize", "sceFiberRun", "sceFiberSwitch", "sceFiberReturnToThread", "sceFiberGetSelf",
                  "scePthreadCreate", "scePthreadJoin"]
 LOADER_IMPORTS = ["printf", "exit", "dlopen", "sceKernelGetExecutableModuleHandle", "sceKernelLoadStartModule", "sceKernelDlsym"]
+UNCONVERTED_IMPORTS = ["printf", "fflush", "exit", "pthread_mutexattr_init"]
 TRANSLATION_IMPORTS = ["printf", "fflush", "exit", "mmap", "munmap", "strlen", "strchr", "strtol", "qsort", "writev", "pthread_mutex_lock",
                        "pthread_mutex_unlock", "scePthreadMutexLock", "scePthreadMutexUnlock", "pthread_mutexattr_init", "scePthreadMutexattrSettype",
                        "pthread_mutexattr_gettype", "pthread_mutexattr_getkind_np", "pthread_mutexattr_destroy", "pthread_self", "pthread_equal",
@@ -1246,10 +1248,14 @@ def build_translation_guest(args, work, optimization):
     return build_stubbed_guest(args, work, optimization, "translation", TRANSLATION_IMPORTS)
 
 
+def build_unconverted_guest(args, work, optimization):
+    return build_stubbed_guest(args, work, optimization, "unconverted", UNCONVERTED_IMPORTS)
+
+
 LIBRARY_GUESTS = {"libc": build_libc_guest, "exceptions": build_exceptions_guest, "kernel": build_kernel_guest, "fiber": build_fiber_guest,
-                  "loader": build_loader_guest, "translation": build_translation_guest}
+                  "loader": build_loader_guest, "translation": build_translation_guest, "unconverted": build_unconverted_guest}
 GUEST_LIBRARIES = {"libc": ["libc"], "exceptions": ["libc"], "kernel": ["libc", "libkernel", "libkernel_sys"], "fiber": ["libc", "libkernel", "libSceFiber"],
-                   "loader": ["libc", "libkernel"], "translation": ["libc", "libkernel"]}
+                   "loader": ["libc", "libkernel"], "translation": ["libc", "libkernel"], "unconverted": ["libc", "libkernel"]}
 
 
 def libc_fixture_command(args):
@@ -1280,11 +1286,12 @@ def libc_fixture_command(args):
             program = work / f"{guest.name}-lifted"
             link_lifted(args.clangxx, triple, program, [lifted, *host_sources, *linked], runtime)
             result = run_lifted(runner, program, label, LIBRARY_PROGRAM_TIMEOUT, work)
-            ended = result is not None and (result.returncode == 0 if stop is None else result.returncode != 0 and stop in result.stderr)
+            reason = "" if result is None else result.stderr + (f"killed by {signal.Signals(-result.returncode).name}\n" if result.returncode < 0 else "")
+            ended = result is not None and (result.returncode == 0 if stop is None else result.returncode != 0 and stop in reason)
             ok = ended and compare(expected, LOG_LINE.sub("", result.stdout), label)
             if result is not None and not ended:
                 expectation = "exit code 0" if stop is None else f"a stop with {stop!r}"
-                sys.stderr.write(f"{label}: exit code {result.returncode}, expected {expectation}\n{result.stderr}")
+                sys.stderr.write(f"{label}: exit code {result.returncode}, expected {expectation}\n{reason}")
             print(f"{'PASS' if ok else 'FAIL'} {args.fixture} {label}: {report}")
             failures += not ok
     finally:
