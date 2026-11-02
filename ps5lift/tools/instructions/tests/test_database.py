@@ -145,6 +145,12 @@ class DatabaseTest(unittest.TestCase):
         self.assertEqual(encodings("bsf", modrm_mod="3", mandatory_prefix="none"), [(32, False, 0), (64, False, 1)])
         self.assertEqual(encodings("vaddps", encoding="vex", vector_length="256", modrm_mod="3"), [(32, False, 0), (64, False, 1)])
 
+    def test_address_size_prefix(self):
+        add = self.find("add", opcode=0x01, modrm_mod="!3")
+        bndcl = self.find("bndcl", modrm_mod="!3")
+        self.assertEqual((database.address_size_prefix(add, 64), database.address_size_prefix(add, 32)), (False, True))
+        self.assertEqual((database.address_size_prefix(bndcl, 64), database.address_size_prefix(bndcl, 32)), (False, None))
+
     def test_undefined_flags(self):
         bsf = self.find("bsf", modrm_mod="3", mandatory_prefix="ignore")
         self.assertEqual(bsf.undefined_flags, frozenset({"cf", "pf", "af", "sf", "of"}))

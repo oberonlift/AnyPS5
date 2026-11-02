@@ -17,10 +17,12 @@ from dataclasses import dataclass, field
 from typing import List, NamedTuple, Optional, Union
 
 from .database import (
+    ADDRESS_SIZE_MAPS,
     DECODER_MODES,
     FEATURE_FILTER,
     MODRM_FIELD_VALUES,
     OPERAND_SIZE_MAPS,
+    address_size_prefix,
     claimed_by_sibling,
     filter_matches,
     operand_size_encoding,
@@ -127,7 +129,19 @@ _FILTERS = {
     "force_modrm_rm": {True},
     **{FEATURE_FILTER + mode: {"1" if enabled else "0"} for mode, enabled in DECODER_MODES.items()},
 }
+_BEHAVIOUR_FLAGS = frozenset({
+    "protected_mode", "far_branch", "near_branch", "short_branch", "cpu_state_cr", "cpu_state_cw", "fpu_state_cr",
+    "fpu_state_cw", "xmm_state_cr", "xmm_state_cw",
+})
 _DISTINCT_REGISTER_FLAGS = frozenset({"is_gather", "no_source_dest_match", "no_source_source_match"})
+_REGISTER_FORM_FLAG = "ignore_modrm_mod"
+_FLAGS = _BEHAVIOUR_FLAGS | _DISTINCT_REGISTER_FLAGS | {_REGISTER_FORM_FLAG}
+_MASK_MODES = frozenset({None, "allowed", "forbidden", "required"})
+_OPERAND_KEYS = frozenset({
+    "operand_type", "encoding", "visible", "action", "element_type", "width16", "width32", "width64", "register",
+    "mem_base", "mem_segment", "scale_factor", "ignore_seg_override", "is_multisource4",
+})
+_MULTISOURCE_BLOCK = 4
 
 _SIZED_REGISTER_TYPES = {
     "gpr16_32_64": {16: "gpr16", 32: "gpr32", 64: "gpr64"},
@@ -174,6 +188,10 @@ _PREFIXES = {
     "repne": (0xF2, frozenset({"accepts_repnerepnz"})),
     "bnd": (0xF2, frozenset({"accepts_bound"})),
 }
+_UNEMITTED_PREFIX_FLAGS = frozenset({
+    "accepts_xacquire", "accepts_xrelease", "accepts_lockless_hle", "accepts_notrack", "accepts_branch_hints",
+})
+_PREFIX_FLAGS = frozenset().union(*(accepting for _, accepting in _PREFIXES.values())) | _UNEMITTED_PREFIX_FLAGS
 _GROUP1_MANDATORY_PREFIXES = {"f2": 0xF2, "f3": 0xF3}
 _GROUP1_PREFIX_NAMES = {0xF2: "f2", 0xF3: "f3"}
 _DEFAULT_TARGET = "target"
@@ -185,6 +203,7 @@ class _Sizes:
     operand_prefix: bool
     w: int
     address: int
+    address_prefix: bool
 
 
 @dataclass(frozen=True)
@@ -263,6 +282,19 @@ def _category(form, operand):
     raise EncodingError(f"{form.key}: no rule for operand type {operand_type!r} encoded as {encoding!r}")
 
 
+def _check_values(form, values, known, what):
+    unknown = sorted(values - known, key=repr)
+    if unknown:
+        raise EncodingError(f"{form.key}: no rule for {what} {', '.join(repr(value) for value in unknown)}")
+
+
+def _check_operand(form, operand):
+    _check_values(form, set(operand), _OPERAND_KEYS, "operand key")
+    if "is_multisource4" in operand and operand["is_multisource4"] is not True:
+        raise EncodingError(f"{form.key}: no rule for is_multisource4 {operand['is_multisource4']!r}")
+    _category(form, operand)
+
+
 def _check_definition(form):
     definition = form.definition
     filters = definition.filters
@@ -272,9 +304,13 @@ def _check_definition(form):
     for forced, field_name in (("force_modrm_reg", "modrm_reg"), ("force_modrm_rm", "modrm_rm")):
         if forced in filters and filters.get(field_name) not in MODRM_FIELD_VALUES:
             raise EncodingError(f"{form.key}: {forced} needs a fixed {field_name}, not {filters.get(field_name)!r}")
+    _check_values(form, definition.flags, _FLAGS, "flag")
+    _check_values(form, definition.prefix_flags, _PREFIX_FLAGS, "prefix flag")
+    _check_values(form, {definition.mask_mode}, _MASK_MODES, "mask_mode")
     _rule(form, OPERAND_SIZE_MAPS, definition.opsize_map, "opsize_map")
+    _rule(form, ADDRESS_SIZE_MAPS, definition.adsize_map, "adsize_map")
     for operand in definition.operands:
-        _category(form, operand)
+        _check_operand(form, operand)
 
 
 def _explicit_operands(definition):
@@ -321,7 +357,12 @@ def _requested_address_size(form, pairs):
 
 def _sizes(form, pairs):
     choice = _operand_size(form)
-    return _Sizes(choice.size, choice.operand_size_prefix, choice.w, _requested_address_size(form, pairs))
+    address = _requested_address_size(form, pairs)
+    prefix = address_size_prefix(form.definition, address)
+    if prefix is None:
+        raise EncodingError(f"{form.key}: adsize_map {form.definition.adsize_map!r} gives no {address}-bit address "
+                            "form, because the 67 prefix has no effect")
+    return _Sizes(choice.size, choice.operand_size_prefix, choice.w, address, prefix)
 
 
 def _register_kind(form, operand, operand_size, address_size):
@@ -418,6 +459,9 @@ def _place_register(form, operand, choice, sizes, parts):
     kind = _register_kind(form, operand, sizes.operand, sizes.address)
     if register.kind != kind:
         raise EncodingError(f"{form.key}: {choice.name} is not a {kind} register")
+    if operand.get("is_multisource4") and register.number % _MULTISOURCE_BLOCK:
+        raise EncodingError(f"{form.key}: {choice.name} cannot name a block of {_MULTISOURCE_BLOCK} registers, "
+                            f"whose first register number is a multiple of {_MULTISOURCE_BLOCK}")
     parts.needs_rex |= choice.name in _REX_BYTE_REGISTERS
     parts.forbids_rex |= choice.name in _HIGH_BYTE_REGISTERS
     encoding = operand["encoding"]
@@ -498,10 +542,14 @@ def _reg_field(form, parts):
 
 
 def _modrm(form, parts):
-    filters = form.definition.filters
+    definition = form.definition
+    filters = definition.filters
     has_operand = parts.reg is not None or parts.rm is not None or parts.memory is not None
     if not has_operand and not {"modrm_mod", "modrm_reg", "modrm_rm"} & filters.keys():
         return []
+    if _REGISTER_FORM_FLAG in definition.flags and parts.memory is not None:
+        raise EncodingError(f"{form.key}: {_REGISTER_FORM_FLAG} decodes every ModRM.mod as the register form, "
+                            "so the r/m operand cannot be memory")
     reg = _reg_field(form, parts)
     if parts.memory is not None:
         mod, rm = parts.memory.mod, parts.memory.rm
@@ -573,7 +621,7 @@ def _extensions(form, parts):
 
 
 def _address_override(sizes):
-    return b"\x67" if sizes.address == 32 else b""
+    return b"\x67" if sizes.address_prefix else b""
 
 
 def _legacy(form, parts, sizes, prefixes, tail):
@@ -735,6 +783,8 @@ def _first_register(form, kind, operand, used, candidate):
         if encoding in filters and not filter_matches(filters[encoding], str(register.number & 7)):
             continue
         if encoding == "mask" and definition.mask_mode == "required" and register.number == 0:
+            continue
+        if operand.get("is_multisource4") and register.number % _MULTISOURCE_BLOCK:
             continue
         if used is not None and kind in _DISTINCT_KINDS:
             used.add(register.number)

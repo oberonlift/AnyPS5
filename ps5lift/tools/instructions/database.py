@@ -2,7 +2,7 @@
 
 It keeps the rows that the lifter's Zydis decoder modes select, and gives each definition the forms that its own row
 decodes: an operand size that no prefix and W reach, or whose bytes Zydis gives to another row, is not a form of this
-one. It is the one source of the operand-size rules, which Zydis's tables for 64-bit mode define."""
+one. It is the one source of the operand-size and address-size rules, which Zydis's tables for 64-bit mode define."""
 import dataclasses
 import enum
 import json
@@ -67,6 +67,11 @@ OPERAND_SIZE_MAPS = {
     "force32_or_rexw": _size_map(32, 32, 64, 64),
     "force32_or_64": _size_map(64, 64, 64, 64),
 }
+ADDRESS_SIZE_MAPS = {
+    None: {False: 64, True: 32},
+    "ignored": {False: 64, True: 64},
+    "force32_or_64": {False: 64, True: 64},
+}
 
 
 @dataclass(frozen=True)
@@ -83,6 +88,7 @@ class Definition:
     category: str
     cpl: Optional[int]
     opsize_map: Optional[str]
+    adsize_map: Optional[str]
     undefined_flags: frozenset
     prefix_flags: frozenset
     flags: frozenset
@@ -128,6 +134,7 @@ def _definition(index, row):
         category=meta["category"],
         cpl=row.get("cpl"),
         opsize_map=row.get("opsize_map"),
+        adsize_map=row.get("adsize_map"),
         undefined_flags=frozenset(flag for flag, effect in flags.items() if effect == "u"),
         prefix_flags=frozenset(row.get("prefix_flags", ())),
         flags=frozenset(row.get("flags", ())),
@@ -237,6 +244,11 @@ def operand_size_encodings(definition):
 def operand_size_encoding(definition, operand_size):
     choices = operand_size_encodings(definition)
     return next((choice for choice in choices if operand_size is None or choice.size == operand_size), None)
+
+
+def address_size_prefix(definition, address_size):
+    sizes = _size_rule(definition, ADDRESS_SIZE_MAPS, "adsize_map")
+    return next((prefix for prefix in (False, True) if sizes[prefix] == address_size), None)
 
 
 def load(path=DATABASE):

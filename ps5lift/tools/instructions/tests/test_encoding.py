@@ -29,6 +29,7 @@ class EncodingTest(unittest.TestCase):
             (self.form("movaps", encoding=None, opcode=0x28, modrm_mod="!3"), [Reg("xmm8"), Mem("r12")], "450f280424"),
             (self.form("pshufb", encoding=None, mandatory_prefix="none", modrm_mod="3"), [Reg("mm0"), Reg("mm1")], "0f3800c1"),
             (self.form("pi2fd", modrm_mod="3"), [Reg("mm0"), Reg("mm1")], "0f0fc10d"),
+            (self.form("mov", opcode=0x22), [Reg("cr8"), Reg("rax")], "440f22c0"),
         ]
         self.assert_encodes([(form, operands, (), [bytes.fromhex(expected)]) for form, operands, expected in cases])
 
@@ -54,11 +55,46 @@ class EncodingTest(unittest.TestCase):
         with self.assertRaisesRegex(encoding.EncodingError, r"^movsb\.\d+: .*f3.*more specific row"):
             encoding.encode(self.form("movsb", mandatory_prefix="ignore"), [], ("rep",))
 
+    def test_address_size_follows_adsize_map(self):
+        add = self.form("add", 64, opcode=0x03, modrm_mod="!3")
+        self.assertEqual(encoding.encode(add, [Reg("rax"), Mem("ebx")]), [bytes.fromhex("67480303")])
+        bndcl = self.form("bndcl", modrm_mod="!3")
+        self.assertEqual(bndcl.definition.adsize_map, "ignored")
+        self.assertEqual(encoding.encode(bndcl, [Reg("bnd0"), Mem("rbx")]), [bytes.fromhex("f30f1a03")])
+        with self.assertRaisesRegex(encoding.EncodingError, rf"^{bndcl.key}: .*adsize_map 'ignored'"):
+            encoding.encode(bndcl, [Reg("bnd0"), Mem("ebx")])
+
+    def test_ignore_modrm_mod_is_a_register_form(self):
+        mov = self.form("mov", opcode=0x20)
+        self.assertIn("ignore_modrm_mod", mov.definition.flags)
+        self.assertEqual(encoding.encode(mov, [Reg("rax"), Reg("cr0")]), [bytes.fromhex("0f20c0")])
+        movaps = self.form("movaps", encoding=None, opcode=0x28, modrm_mod="!3")
+        with_flag = dataclasses.replace(movaps.definition, flags=movaps.definition.flags | {"ignore_modrm_mod"})
+        with self.assertRaisesRegex(encoding.EncodingError, rf"^{movaps.key}: .*ignore_modrm_mod"):
+            encoding.encode(database.Form(with_flag, None, movaps.key), [Reg("xmm0"), Mem("rbx")])
+
+    def test_multisource_names_a_block_of_four(self):
+        v4fmaddps = self.form("v4fmaddps")
+        self.assertEqual(encoding.default_operands(v4fmaddps), [Reg("zmm0"), Reg("k0"), Reg("zmm0"), Mem("rbx")])
+        encoding.encode(v4fmaddps, [Reg("zmm1"), Reg("k1"), Reg("zmm4"), Mem("rbx")])
+        with self.assertRaisesRegex(encoding.EncodingError, rf"^{v4fmaddps.key}: .*zmm5.*multiple of 4"):
+            encoding.encode(v4fmaddps, [Reg("zmm1"), Reg("k1"), Reg("zmm5"), Mem("rbx")])
+
     def test_unknown_value_names_the_form(self):
         addps = self.form("addps", modrm_mod="3")
-        broken = dataclasses.replace(addps.definition, filters={**addps.definition.filters, "modrm_mod": "4"})
-        with self.assertRaisesRegex(encoding.EncodingError, rf"^{addps.key}: .*'4'"):
-            encoding.encode(database.Form(broken, None, addps.key), [Reg("xmm0"), Reg("xmm1")])
+        definition = addps.definition
+        broken = {
+            "'4'": dataclasses.replace(definition, filters={**definition.filters, "modrm_mod": "4"}),
+            "'new_flag'": dataclasses.replace(definition, flags=definition.flags | {"new_flag"}),
+            "'accepts_new'": dataclasses.replace(definition, prefix_flags=definition.prefix_flags | {"accepts_new"}),
+            "'shrunk'": dataclasses.replace(definition, adsize_map="shrunk"),
+            "'new_key'": dataclasses.replace(definition, operands=({**definition.operands[0], "new_key": 1}, *definition.operands[1:])),
+            "'sometimes'": dataclasses.replace(definition, operands=({**definition.operands[0], "is_multisource4": "sometimes"}, *definition.operands[1:])),
+        }
+        for value, changed in broken.items():
+            with self.subTest(value=value):
+                with self.assertRaisesRegex(encoding.EncodingError, rf"^{addps.key}: .*{value}"):
+                    encoding.encode(database.Form(changed, None, addps.key), [Reg("xmm0"), Reg("xmm1")])
 
     def test_default_operands_leave_a_siblings_bytes(self):
         nop = self.form("nop", 32, opcode=0x1C, modrm_mod="!3")
