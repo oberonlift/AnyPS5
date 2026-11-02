@@ -139,7 +139,8 @@ class RunnerTest(unittest.TestCase):
 
     def test_death_before_ready_ends_the_run(self):
         _inputs(self.inputs, range(CASES))
-        with self.assertRaisesRegex(runner.RunnerError, "before it was ready(.|\\n)*error while loading shared libraries"):
+        with self.assertRaisesRegex(runner.RunnerError,
+                                    "before it was ready(.|\\n)*error while loading shared libraries"):
             runner.run(self._command("early-death"), {}, self.inputs, self.results, 30)
         self.assertEqual(self._spawn_count(), 1)
         _, results, _ = records.read_result_prefix(self.results.read_bytes())
