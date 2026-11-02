@@ -79,3 +79,6 @@
 [submodule "3rdparty/sqlite"]
 	path = 3rdparty/sqlite
 	url = https://github.com/sqlite/sqlite.git
+[submodule "3rdparty/softfloat"]
+	path = 3rdparty/softfloat
+	url = https://github.com/ucb-bar/berkeley-softfloat-3
