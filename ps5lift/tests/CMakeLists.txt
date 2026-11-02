@@ -137,6 +137,25 @@ add_custom_target(ps5lift_host_runtime
 
 set(PS5LIFT_ANYPS5_BUILD ${CMAKE_BINARY_DIR}/anyps5)
 set(PS5LIFT_ANYPS5_LIBRARIES ${PS5LIFT_ANYPS5_BUILD}/core/libs/libs/unpatched)
+set(PS5LIFT_BRIDGES_libc libc)
+set(PS5LIFT_BRIDGES_exceptions libc)
+set(PS5LIFT_BRIDGES_kernel libc libkernel libkernel_sys)
+set(PS5LIFT_BRIDGES_fiber libc libkernel libSceFiber)
+set(PS5LIFT_BRIDGES_loader libc libkernel)
+set(PS5LIFT_BRIDGES_translation libc libkernel)
+set(PS5LIFT_BRIDGES_unconverted libc libkernel)
+set(PS5LIFT_BRIDGES_json libc libkernel libSceJson2)
+set(PS5LIFT_LIBRARY_FIXTURES libc exceptions kernel fiber loader translation json)
+if(APPLE)
+    list(APPEND PS5LIFT_LIBRARY_FIXTURES unconverted)
+endif()
+set(PS5LIFT_FIXTURE_LIBRARIES)
+foreach(fixture IN LISTS PS5LIFT_LIBRARY_FIXTURES)
+    list(TRANSFORM PS5LIFT_BRIDGES_${fixture} PREPEND ${PS5LIFT_ANYPS5_LIBRARIES}/ OUTPUT_VARIABLE PS5LIFT_LIBRARIES_${fixture})
+    list(TRANSFORM PS5LIFT_LIBRARIES_${fixture} APPEND .prx)
+    list(APPEND PS5LIFT_FIXTURE_LIBRARIES ${PS5LIFT_LIBRARIES_${fixture}})
+endforeach()
+list(REMOVE_DUPLICATES PS5LIFT_FIXTURE_LIBRARIES)
 ExternalProject_Add(anyps5
         SOURCE_DIR ${CMAKE_SOURCE_DIR}/..
         BINARY_DIR ${PS5LIFT_ANYPS5_BUILD}
@@ -147,8 +166,7 @@ ExternalProject_Add(anyps5
         BUILD_COMMAND ${CMAKE_COMMAND} --build <BINARY_DIR> --target libs relinker
         INSTALL_COMMAND ""
         BUILD_ALWAYS ON
-        BUILD_BYPRODUCTS ${PS5LIFT_ANYPS5_BUILD}/core/relinker/relinker ${PS5LIFT_ANYPS5_LIBRARIES}/libc.prx ${PS5LIFT_ANYPS5_LIBRARIES}/libkernel.prx
-                         ${PS5LIFT_ANYPS5_LIBRARIES}/libSceFiber.prx ${PS5LIFT_ANYPS5_LIBRARIES}/libkernel_sys.prx
+        BUILD_BYPRODUCTS ${PS5LIFT_ANYPS5_BUILD}/core/relinker/relinker ${PS5LIFT_FIXTURE_LIBRARIES}
         EXCLUDE_FROM_ALL OFF)
 
 foreach(triple IN LISTS PS5LIFT_TEST_TRIPLES)
@@ -167,30 +185,14 @@ if(NOT PS5LIFT_LIBCLANG_PYTHON EQUAL 0)
             "which ${Python3_EXECUTABLE} cannot load:\n${PS5LIFT_LIBCLANG_PYTHON_ERROR}"
             "Install them (python3-clang-18 on Ubuntu, Homebrew's llvm on macOS) or configure with -DBUILD_TESTING=OFF.")
 endif()
-set(PS5LIFT_BRIDGES_libc libc)
-set(PS5LIFT_BRIDGES_exceptions libc)
-set(PS5LIFT_BRIDGES_kernel libc libkernel libkernel_sys)
-set(PS5LIFT_BRIDGES_fiber libc libkernel libSceFiber)
-set(PS5LIFT_BRIDGES_loader libc libkernel)
-set(PS5LIFT_BRIDGES_translation libc libkernel)
-set(PS5LIFT_BRIDGES_unconverted libc libkernel)
-set(PS5LIFT_BRIDGES_json libc libkernel libSceJson2)
-set(PS5LIFT_LIBRARY_FIXTURES libc exceptions kernel fiber loader translation json)
-if(APPLE)
-    list(APPEND PS5LIFT_LIBRARY_FIXTURES unconverted)
-endif()
 set(PS5LIFT_TEST_BRIDGES)
 foreach(fixture IN LISTS PS5LIFT_LIBRARY_FIXTURES)
     set(bridges ${CMAKE_BINARY_DIR}/test-bridges/${fixture}.cpp)
-    set(libraries)
-    foreach(library IN LISTS PS5LIFT_BRIDGES_${fixture})
-        list(APPEND libraries ${PS5LIFT_ANYPS5_LIBRARIES}/${library}.prx)
-    endforeach()
     add_custom_command(OUTPUT ${bridges}
             COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_BINARY_DIR}/test-bridges
             COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tools/ps5lift.py bridges ${PS5LIFT_BRIDGES_${fixture}}
                     --anyps5-build ${PS5LIFT_ANYPS5_BUILD} -o ${bridges} ${PS5LIFT_LIBCLANG_ARGUMENTS}
-            DEPENDS ${libraries} ${CMAKE_SOURCE_DIR}/tools/ps5lift.py
+            DEPENDS ${PS5LIFT_LIBRARIES_${fixture}} ${CMAKE_SOURCE_DIR}/tools/ps5lift.py
             VERBATIM)
     list(APPEND PS5LIFT_TEST_BRIDGES ${bridges})
     foreach(level O0 O2)
