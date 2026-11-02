@@ -5,13 +5,14 @@ import struct
 import subprocess
 import tempfile
 import unittest
-from collections import defaultdict
+from collections import Counter, defaultdict
+from dataclasses import dataclass
 from pathlib import Path
 
 import ps5lift
 from instructions import cases, decoder, program, records
 from instructions.cases import BlockOffset
-from instructions.encoding import Mem, placeholder
+from instructions.encoding import Field, Mem, placeholder
 from instructions.tests.support import generated
 
 GROUP = "base"
@@ -21,6 +22,16 @@ void host_exit(int code) { (void)code; for (;;) {} }
 ELF_EXECUTABLE = 2
 ELF_X86_64 = 62
 TARGET_HELPERS = {cases.Shape.CALL: "callee", cases.Shape.INDIRECT_JUMP: "target"}
+FIELD_KINDS = ("branch", "rip", "absolute")
+MASK64 = 2**64 - 1
+
+
+@dataclass(frozen=True)
+class Built:
+    assembly: str
+    elf: Path
+    layout: program.Layout
+    image: program.Elf
 
 
 def _compiler():
@@ -34,14 +45,34 @@ def _gpr(slot, number):
     return struct.unpack_from("<Q", slot, records.gpr_offset(number))[0]
 
 
+def _block_address(layout, expression):
+    match = re.fullmatch(rf"{cases.BLOCK}\+(\d+)", expression)
+    if match is None:
+        raise AssertionError(f"{expression!r} names no block offset")
+    return layout.block + int(match.group(1))
+
+
 def _effective_address(layout, slot, memory):
     if memory.base == "rip":
-        match = re.fullmatch(rf"{cases.BLOCK}\+(\d+)", memory.displacement)
-        return layout.block + int(match.group(1))
+        return _block_address(layout, memory.displacement)
     address = _gpr(slot, records.GPR_NAMES.index(memory.base)) + memory.displacement
     if memory.index is not None:
         address += _gpr(slot, records.GPR_NAMES.index(memory.index)) * memory.scale
-    return address & 2**64 - 1
+    return address & MASK64
+
+
+def _build(compiler, work, group, instances):
+    assembly = program.emit(group, instances)
+    source = work / f"{group}.s"
+    source.write_text(assembly)
+    elf = program.link(compiler, source, work, None, ps5lift.GUEST_FLAGS, ps5lift.GUEST_BASE)
+    return Built(assembly, elf, program.read_layout(elf), program.Elf(elf))
+
+
+def _only(values, what):
+    if len(values) != 1:
+        raise AssertionError(f"{len(values)} {what}, not 1")
+    return values[0]
 
 
 class ProgramTest(unittest.TestCase):
@@ -55,12 +86,9 @@ class ProgramTest(unittest.TestCase):
         stub.write_text(HOST_STUB)
         library = cls.work / "libinstructionhost.so"
         subprocess.run([compiler, *ps5lift.GUEST_FLAGS, "-O2", "-fPIC", "-shared", stub, "-o", library], check=True)
-        cls.assembly = program.emit(GROUP, cls.instances)
-        source = cls.work / f"{GROUP}.s"
-        source.write_text(cls.assembly)
-        cls.elf = program.link(compiler, source, cls.work, None, ps5lift.GUEST_FLAGS, ps5lift.GUEST_BASE)
-        cls.layout = program.read_layout(cls.elf)
-        cls.image = program.Elf(cls.elf)
+        cls.programs = {group: _build(compiler, cls.work, group, members) for group, members in generated()[1].items()}
+        base = cls.programs[GROUP]
+        cls.assembly, cls.elf, cls.layout, cls.image = base.assembly, base.elf, base.layout, base.image
 
     @classmethod
     def tearDownClass(cls):
@@ -82,6 +110,35 @@ class ProgramTest(unittest.TestCase):
                 self.assertEqual(result.mnemonic, instance.form.definition.mnemonic)
                 self.assertEqual(result.length, entry.length)
                 self.assertEqual(entry.length, len(placeholder(instance.encoded)))
+
+    def test_fields_resolve_to_their_targets(self):
+        checked = Counter()
+        for group, built in self.programs.items():
+            pairs = [
+                (instance, entry) for instance, entry in zip(generated()[1][group], built.layout.instances)
+                if any(isinstance(piece, Field) for piece in instance.encoded)
+            ]
+            encodings = [built.image.read(entry.address, entry.length) for _, entry in pairs]
+            for (instance, entry), result in zip(pairs, decoder.from_environment().decode(encodings)):
+                end = entry.address + entry.length
+                for field in (piece for piece in instance.encoded if isinstance(piece, Field)):
+                    what = f"{group} instance {instance.index} ({instance.text}) {field.expression}"
+                    if field.expression == cases.TARGET:
+                        immediates = [operand.immediate for operand in result.operands if operand.type == "immediate"]
+                        reached, kind = end + _only(immediates, "immediates"), "branch"
+                        intended = entry.label(cases.TARGET)
+                    elif field.relative:
+                        rip = [operand.displacement for operand in result.operands if operand.base == "rip"]
+                        reached, kind = end + _only(rip, "RIP-relative operands"), "rip"
+                        intended = _block_address(built.layout, field.expression)
+                    else:
+                        absolute = [operand.displacement for operand in result.operands
+                                    if operand.type == "memory" and operand.base == "none"]
+                        reached, kind = _only(absolute, "absolute addresses") & MASK64, "absolute"
+                        intended = _block_address(built.layout, field.expression)
+                    self.assertEqual(hex(reached), hex(intended), what)
+                    checked[kind] += 1
+        self.assertTrue(all(checked[kind] for kind in FIELD_KINDS), f"checked only {dict(checked)}")
 
     def test_layout_alignment(self):
         layout = self.layout
