@@ -10,8 +10,8 @@ class DatabaseTest(unittest.TestCase):
     def setUpClass(cls):
         cls.definitions = database.load()
 
-    def find(self, mnemonic, **conditions):
-        matches = [
+    def matching(self, mnemonic, **conditions):
+        return [
             definition
             for definition in self.definitions
             if definition.mnemonic == mnemonic
@@ -20,6 +20,9 @@ class DatabaseTest(unittest.TestCase):
                 for name, value in conditions.items()
             )
         ]
+
+    def find(self, mnemonic, **conditions):
+        matches = self.matching(mnemonic, **conditions)
         self.assertEqual(len(matches), 1, f"{mnemonic} {conditions} matched {len(matches)} definitions")
         return matches[0]
 
@@ -28,8 +31,57 @@ class DatabaseTest(unittest.TestCase):
 
     def test_counts(self):
         in_set = [definition for definition in self.definitions if database.classify(definition) is Group.SET]
-        self.assertEqual(len(in_set), 2888)
+        self.assertEqual(len(self.definitions), 7260)
+        self.assertEqual(len(in_set), 2860)
         self.assertEqual(len({definition.mnemonic for definition in in_set}), 922)
+        self.assertEqual(len(database.forms(in_set)), 3522)
+
+    def test_decoder_modes_match_ps5lift_decode(self):
+        probes = {
+            "amd": ("66e800000000", ("call", 4), ("call", 6)),
+            "cet": ("f30f1efa", ("endbr64", 4), ("nop", 4)),
+            "cldemote": ("0f1c03", ("cldemote", 3), ("nop", 3)),
+            "iprefetch": ("0f183d00000000", ("prefetchit0", 7), ("nop", 7)),
+            "knc": ("c5f890c1", ("kmov", 4), ("kmovw", 4)),
+            "lzcnt": ("f30fbdc0", ("lzcnt", 4), ("bsr", 4)),
+            "mpx": ("0f1a03", ("bndldx", 3), ("nop", 3)),
+            "tzcnt": ("f30fbcc0", ("tzcnt", 4), ("bsf", 4)),
+            "ud0_compat": ("0fffc0", ("ud0", 2), ("ud0", 3)),
+        }
+        self.assertEqual(set(probes), set(database.DECODER_MODES))
+        decoded = decoder.from_environment().decode([bytes.fromhex(probe) for probe, _, _ in probes.values()])
+        for (mode, (probe, enabled, disabled)), result in zip(probes.items(), decoded):
+            with self.subTest(mode=mode, probe=probe):
+                expected = enabled if database.DECODER_MODES[mode] else disabled
+                self.assertEqual((result.mnemonic, result.length), expected)
+
+    def test_rows_for_other_decoder_modes_dropped(self):
+        for definition in self.definitions:
+            for name, value in definition.filters.items():
+                if name.startswith(database.FEATURE_FILTER):
+                    self.assertEqual(value == "1", database.DECODER_MODES[name[len(database.FEATURE_FILTER):]], definition)
+        self.assertEqual(self.find("call", opcode=0xE8).opsize_map, "default64")
+        self.assertFalse(self.matching("nop", opcode=0x1A, modrm_mod="!3"))
+        self.assertFalse(self.matching("nop", opcode=0x1E, modrm_reg="7", modrm_rm="2"))
+        self.assertFalse(self.matching("ud0", modrm_mod=None))
+        self.assertIs(database.classify(self.find("nop", opcode=0x1F, modrm_mod="!3", modrm_reg="0")), Group.SET)
+
+    def test_no_16_bit_form_where_66_is_mandatory(self):
+        self.assertEqual(self.sizes("bsf", modrm_mod="3", mandatory_prefix="none"), {32, 64})
+        self.assertEqual(self.sizes("nop", opcode=0x1A, modrm_mod="3", mandatory_prefix="none"), {32, 64})
+        self.assertEqual(self.sizes("nop", opcode=0x1E, modrm_mod="3", mandatory_prefix="66"), {32, 64})
+
+    def test_sibling_claims(self):
+        self.assertEqual(self.sizes("bsf", modrm_mod="3", mandatory_prefix="ignore"), {16})
+        self.assertEqual(self.sizes("bsr", modrm_mod="!3", mandatory_prefix="ignore"), {16})
+        self.assertEqual(self.sizes("nop", opcode=0x1E, modrm_mod="3", mandatory_prefix="ignore"), set())
+        cldemote_space = self.find("nop", opcode=0x1C, modrm_mod="!3")
+        self.assertEqual(self.sizes("nop", opcode=0x1C, modrm_mod="!3"), {16, 32, 64})
+        self.assertTrue(database.claimed_by_sibling(cldemote_space, "none", "0"))
+        self.assertFalse(database.claimed_by_sibling(cldemote_space, "none", "1"))
+        self.assertFalse(database.claimed_by_sibling(cldemote_space, "66", "0"))
+        movsb = self.find("movsb", mandatory_prefix="ignore")
+        self.assertEqual({prefix for prefix, _ in movsb.sibling_claims}, {"f2", "f3"})
 
     def test_classify_examples(self):
         examples = [
