@@ -10,9 +10,9 @@ floating-point mode and the `Run` the case belongs to, and lists every `Mismatch
 - **Completed cases** compare every slot field and every block word, except the storer's FOP, FIP, FDP, MXCSR_MASK,
   reserved bytes and XMM area (the YMM slots hold the vector state), flags the database marks undefined (x87 condition
   codes included), and the status flags of calls, returns and indirect jumps, which lifted code drops (DF compares).
-- **Tolerances** (`tolerance`): `rcp*` and `rsqrt*` lanes within the documented relative error; x87 transcendentals
-  within one ulp of the true result where the operands lie in the documented range, with C1, the rounding indicator,
-  not compared there.
+- **Tolerances** (`tolerance`): `rcp*` and `rsqrt*` lanes within the documented relative error; the results an x87
+  transcendental approximates within one ulp of the 64-bit format of the true result, whatever the precision control,
+  where the operands lie in the documented range, with C1, the rounding indicator, not compared there.
 - **Properties:** `rdrand` and `rdseed` set CF and clear the other status flags, and keep the destination's untouched
   bits as recorded; the counters of `rdtsc` and `rdtscp` do not decrease from case to case in a run and leave the high
   halves 0; `rdpid` and `rdtscp`'s ecx are below the host's processor count; `cpuid` and `xgetbv` give the console's
@@ -82,7 +82,6 @@ _MXCSR_STORES = {
        "xsaveopt64".split()},
 }
 _X87_PUSHES = frozenset({"fsincos", "fptan"})
-_X87_PRECISIONS = {0: 24, 2: 53, 3: 64}
 _STATUS_FLAGS = ("CF", "PF", "AF", "ZF", "SF", "OF")
 _RANDOM_FLAGS = {"CF": 1, "PF": 0, "AF": 0, "ZF": 0, "SF": 0, "OF": 0}
 _DROPPING_SHAPES = frozenset({Shape.CALL, Shape.RETURN, Shape.INDIRECT_JUMP})
@@ -450,16 +449,11 @@ def _x87_reference(case, rules):
         return None
     if rules.mnemonic in _X87_PUSHES and tags >> (top + 7) % 8 & 1:
         return None
-    precision_control = control >> 8 & 3
-    if precision_control not in _X87_PRECISIONS:
-        raise CompareError(f"case {case.spec.index} runs {rules.mnemonic} with the reserved precision control 1")
-    precision = _X87_PRECISIONS[precision_control]
     operands = tuple(
         int.from_bytes(slot[records.fx_st_offset(number):records.fx_st_offset(number) + _EXTENDED_BYTES], "little")
         for number in range(count)
     )
-    reference = tolerance.x87_reference(rules.mnemonic, operands, precision, control >> 10 & 3)
-    return None if reference is None else (reference, precision)
+    return tolerance.x87_reference(rules.mnemonic, operands, control >> 10 & 3)
 
 
 def _flags(slot):
@@ -562,11 +556,10 @@ class _Judgement:
             if x87 is not None:
                 ignored |= 1 << _CONDITION_BITS["C1"]
             return (int.from_bytes(expected, "little") ^ int.from_bytes(actual, "little")) & ~ignored == 0
-        if x87 is not None and name in self.rules.x87_names[:len(x87[0])]:
-            reference = x87[0][self.rules.x87_names.index(name)]
+        if x87 is not None and name in self.rules.x87_names and self.rules.x87_names.index(name) in x87:
+            reference = x87[self.rules.x87_names.index(name)]
             value = int.from_bytes(actual[:_EXTENDED_BYTES], "little")
-            return (expected[_EXTENDED_BYTES:] == actual[_EXTENDED_BYTES:]
-                    and (value == reference or tolerance.within_ulp(reference, value, x87[1])))
+            return expected[_EXTENDED_BYTES:] == actual[_EXTENDED_BYTES:] and tolerance.within_ulp(reference, value)
         if expected == actual:
             return True
         location = ("vector", int(name[3:])) if name.startswith("ymm") else None

@@ -2,12 +2,14 @@
 
 `within_rcp` accepts a result within the relative error both vendors document for the approximations, and requires
 zeros, infinities and NaNs exactly. `x87_reference` computes the true result of an x87 transcendental with `decimal` at
-`DIGITS` digits, rounded to a precision of 24, 53 or 64 bits with the x87 rounding control, and gives the results in the
-stack order they end in (`fsincos` leaves the cosine in ST(0), `fptan` leaves 1.0). It gives None for an operand outside
-the instruction's documented range, or for an operand or result that is no normal number (NaN, infinity, zero,
-denormal, an unnormal encoding, or a result past the extended range): such a case is compared exactly. `within_ulp`
-accepts a result within one unit in the last place of the reference, at the reference's binade and the given
-precision. Values are bit patterns: integers of the float's width, and 80-bit extended values as 80-bit integers."""
+`DIGITS` digits, rounded to 64-bit precision with the x87 rounding control (precision control does not apply to these
+instructions), and gives the approximated results by the stack slot they end in: `fsincos` leaves the cosine in ST(0)
+and the sine in ST(1), `fptan` the tangent in ST(1) under an exact 1.0, which is no approximation. It gives None for an
+operand outside the instruction's documented range, or for an operand or result that is no normal number (NaN,
+infinity, zero, denormal, an unnormal encoding, or a result past the extended range): such a case is compared exactly.
+`within_ulp` accepts the reference and the extended values next to it, one unit in the last place of the 64-bit format
+on either side, across a binade boundary too. Values are bit patterns: integers of the float's width, and 80-bit
+extended values as 80-bit integers."""
 from decimal import ROUND_HALF_EVEN, Decimal, localcontext
 from fractions import Fraction
 
@@ -16,7 +18,7 @@ DIGITS = 80
 OPERAND_COUNTS = {
     "fsin": 1, "fcos": 1, "fsincos": 1, "fptan": 1, "f2xm1": 1, "fpatan": 2, "fyl2x": 2, "fyl2xp1": 2,
 }
-PRECISIONS = (24, 53, 64)
+APPROXIMATED_SLOTS = {"fsincos": (0, 1), "fptan": (1,)}
 NEAREST, DOWN, UP, TOWARD_ZERO = range(4)
 
 _REDUCTION_DIGITS = 20
@@ -76,9 +78,8 @@ def _exponent(magnitude):
     return exponent - 1 if Fraction(2) ** exponent > magnitude else exponent
 
 
-def _round_extended(value, precision, rounding):
-    if precision not in PRECISIONS:
-        raise ToleranceError(f"an x87 precision is one of {PRECISIONS} bits, not {precision}")
+def _round_extended(value, rounding):
+    precision = _EXTENDED_SIGNIFICAND_BITS
     if value == 0:
         return None
     negative = value < 0
@@ -177,8 +178,7 @@ def _true_results(mnemonic, x, y):
         if abs(x) >= _TRIGONOMETRY_LIMIT:
             return None
         sine, cosine = _sine_cosine(x)
-        return {"fsin": (sine,), "fcos": (cosine,), "fsincos": (cosine, sine), "fptan": (Decimal(1), sine / cosine)}[
-            mnemonic]
+        return {"fsin": (sine,), "fcos": (cosine,), "fsincos": (cosine, sine), "fptan": (sine / cosine,)}[mnemonic]
     if mnemonic == "f2xm1":
         return (_exp_minus_one(x * Decimal(2).ln()),) if abs(x) <= _F2XM1_LIMIT else None
     if mnemonic == "fpatan":
@@ -194,7 +194,7 @@ def _true_results(mnemonic, x, y):
     raise ToleranceError(f"no reference for {mnemonic}")
 
 
-def x87_reference(mnemonic, operands, precision, rounding):
+def x87_reference(mnemonic, operands, rounding):
     if mnemonic not in OPERAND_COUNTS:
         raise ToleranceError(f"{mnemonic} is no x87 transcendental: those are {sorted(OPERAND_COUNTS)}")
     if len(operands) != OPERAND_COUNTS[mnemonic]:
@@ -209,16 +209,23 @@ def x87_reference(mnemonic, operands, precision, rounding):
         results = _true_results(mnemonic, x, y)
         if results is None:
             return None
-        rounded = tuple(_round_extended(Fraction(result), precision, rounding) for result in results)
-    return None if any(value is None for value in rounded) else rounded
+        rounded = [_round_extended(Fraction(result), rounding) for result in results]
+    if any(value is None for value in rounded):
+        return None
+    return dict(zip(APPROXIMATED_SLOTS.get(mnemonic, (0,)), rounded))
 
 
-def within_ulp(reference, actual, precision):
-    reference_value = _extended_value(reference)
-    if reference_value is None:
+def _ordinal(bits):
+    if _extended_value(bits) is None:
+        return None
+    exponent = bits >> _EXTENDED_SIGNIFICAND_BITS & _EXTENDED_MAXIMUM_EXPONENT
+    magnitude = exponent << _EXTENDED_SIGNIFICAND_BITS - 1 | bits & _INTEGER_BIT - 1
+    return -magnitude if bits & _SIGN_80 else magnitude
+
+
+def within_ulp(reference, actual):
+    reference_ordinal = _ordinal(reference)
+    if reference_ordinal is None:
         raise ToleranceError(f"a reference is a normal extended value, not {reference:#x}")
-    actual_value = _extended_value(actual)
-    if actual_value is None:
-        return False
-    unit = Fraction(2) ** (_exponent(abs(reference_value)) - precision + 1)
-    return abs(actual_value - reference_value) <= unit
+    actual_ordinal = _ordinal(actual)
+    return actual_ordinal is not None and abs(actual_ordinal - reference_ordinal) <= 1

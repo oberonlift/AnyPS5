@@ -66,7 +66,7 @@ SSE4A (`extrq`, `insertq`, `movntsd`, `movntss`) exists only on AMD. Its expecta
 
 ### Tolerances
 
-- The x87 transcendental instructions (`fsin`, `fcos`, `fsincos`, `fptan`, `fpatan`, `f2xm1`, `fyl2x`, `fyl2xp1`) differ between processors, and AMD documents no error bound for them. They are compared against the true function rounded to the precision control, within one unit in the last place, for operands inside each instruction's documented range; an operand outside it (for example `fsin` of a value of magnitude 2^63 or more, which sets C2 and leaves the operand) is compared exactly. They are listed in TechnicalDebt.md as unverified on Zen 2.
+- The x87 transcendental instructions (`fsin`, `fcos`, `fsincos`, `fptan`, `fpatan`, `f2xm1`, `fyl2x`, `fyl2xp1`) differ between processors, and AMD documents no error bound for them. They are compared against the true function rounded to 64-bit precision (precision control does not apply to these instructions), within one unit in the last place, for operands inside each instruction's documented range; an operand outside it (for example `fsin` of a value of magnitude 2^63 or more, which sets C2 and leaves the operand) is compared exactly. They are listed in TechnicalDebt.md as unverified on Zen 2.
 - `rcpps`, `rcpss`, `rsqrtps`, `rsqrtss` and their VEX forms return approximations that differ between vendors. They are compared within the relative error both vendors document (1.5 * 2^-12), with exact results for zeros, infinities and NaNs, and listed in TechnicalDebt.md as unverified on Zen 2.
 - `rdrand` and `rdseed` are compared by their flags and the fact that they write, since their values cannot repeat.
 

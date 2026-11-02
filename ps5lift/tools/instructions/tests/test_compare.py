@@ -5,7 +5,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from instructions import compare, program, records, suite, tolerance
+from instructions import compare, program, records, suite
 from instructions.cases import CONSOLE_MXCSR, BlockOffset
 from instructions.encoding import Mem
 from instructions.model import LOCATIONS, Shape
@@ -26,6 +26,9 @@ _AH_BITS = {"CF": 0, "PF": 2, "AF": 4, "ZF": 6, "SF": 7}
 _DAZ = 1 << 6
 _FTZ = 1 << 15
 _UNMASK_INVALID = 0x1F80 & ~(1 << 7)
+ONE_80 = 0x3FFF8000000000000000
+SIN_1 = 0x3FFED76AA47848677021
+TAN_1 = 0x3FFFC75922E5F71D2DC5
 _GROUPS = {}
 
 
@@ -281,19 +284,40 @@ class StateTest(unittest.TestCase):
         self.assertEqual(_fields(_judge(case, _completed(case), _completed(case, {0: struct.pack("<H", control)}))),
                          {"fcw"})
 
-    def test_fsin_compared_with_reference(self):
-        case = _case("x87", lambda instance: instance.form.definition.mnemonic == "fsin")
+    def _x87_case(self, mnemonic, control, tags, *registers):
+        case = _case("x87", lambda instance: instance.form.definition.mnemonic == mnemonic)
         slot = bytearray(case.input.slot)
-        struct.pack_into("<HHB", slot, records.FX_FCW, 0x037F, 0, 0x01)
-        slot[records.fx_st_offset(0):records.fx_st_offset(0) + 10] = (0x3FFF8000000000000000).to_bytes(10, "little")
-        case = dataclasses.replace(case, input=dataclasses.replace(case.input, slot=bytes(slot)))
-        (reference,) = tolerance.x87_reference("fsin", (0x3FFF8000000000000000,), 64, 0)
+        struct.pack_into("<HHB", slot, records.FX_FCW, control, 0, tags)
+        for number, value in enumerate(registers):
+            slot[records.fx_st_offset(number):records.fx_st_offset(number) + 10] = value.to_bytes(10, "little")
+        return dataclasses.replace(case, input=dataclasses.replace(case.input, slot=bytes(slot)))
+
+    def test_fsin_compared_with_reference(self):
+        case = self._x87_case("fsin", 0x037F, 0x01, ONE_80)
         st0 = records.fx_st_offset(0)
-        recorded = _completed(case, {st0: (reference + 5).to_bytes(10, "little"), 2: struct.pack("<H", 0x0200)})
-        within = _completed(case, {st0: (reference - 1).to_bytes(10, "little")})
+        recorded = _completed(case, {st0: (SIN_1 + 5).to_bytes(10, "little"), 2: struct.pack("<H", 0x0200)})
+        within = _completed(case, {st0: (SIN_1 - 1).to_bytes(10, "little")})
         self.assertEqual(_judge(case, recorded, within), [])
-        outside = _completed(case, {st0: (reference + 2).to_bytes(10, "little")})
+        outside = _completed(case, {st0: (SIN_1 + 2).to_bytes(10, "little")})
         self.assertEqual(_fields(_judge(case, recorded, outside)), {"st0"})
+
+    def test_x87_reference_ignores_precision_control(self):
+        case = self._x87_case("fsin", 0x007F, 0x01, ONE_80)
+        st0 = records.fx_st_offset(0)
+        recorded = _completed(case, {st0: SIN_1.to_bytes(10, "little")})
+        wrong_low_bits = _completed(case, {st0: (SIN_1 + (1 << 39)).to_bytes(10, "little")})
+        self.assertEqual(_fields(_judge(case, recorded, wrong_low_bits)), {"st0"})
+        self.assertEqual(_judge(case, recorded, _completed(case, {st0: (SIN_1 - 1).to_bytes(10, "little")})), [])
+
+    def test_fptan_pushed_one_exact(self):
+        case = self._x87_case("fptan", 0x037F, 0x01, ONE_80)
+        st0, st1 = records.fx_st_offset(0), records.fx_st_offset(1)
+        recorded = _completed(case, {st0: ONE_80.to_bytes(10, "little"), st1: TAN_1.to_bytes(10, "little")})
+        tangent_off_by_one = _completed(case, {st0: ONE_80.to_bytes(10, "little"),
+                                               st1: (TAN_1 + 1).to_bytes(10, "little")})
+        self.assertEqual(_judge(case, recorded, tangent_off_by_one), [])
+        one_off_by_one = _completed(case, {st0: (ONE_80 + 1).to_bytes(10, "little"), st1: TAN_1.to_bytes(10, "little")})
+        self.assertEqual(_fields(_judge(case, recorded, one_off_by_one)), {"st0"})
 
     def test_rcp_lanes_within_tolerance(self):
         case = _case("sse", _primary("rcpps"), lambda spec: spec.mxcsr == CONSOLE_MXCSR)

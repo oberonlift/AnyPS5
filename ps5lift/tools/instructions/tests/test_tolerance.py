@@ -50,44 +50,47 @@ class RcpTest(unittest.TestCase):
 
 class X87ReferenceTest(unittest.TestCase):
     def test_fsin_reference(self):
-        self.assertEqual(tolerance.x87_reference("fsin", (ONE_80,), 64, NEAREST), (SIN_1,))
-        self.assertEqual(tolerance.x87_reference("fsin", (TWO_62_80,), 64, NEAREST), (SIN_2_62,))
-        self.assertEqual(tolerance.x87_reference("fsin", (ONE_80,), 64, TOWARD_ZERO), (SIN_1 - 1,))
-        self.assertEqual(tolerance.x87_reference("fsin", (ONE_80,), 64, DOWN), (SIN_1 - 1,))
-        self.assertEqual(tolerance.x87_reference("fsin", (ONE_80,), 64, UP), (SIN_1,))
-        self.assertEqual(tolerance.x87_reference("fsin", (ONE_80,), 24, NEAREST), (0x3FFED76AA40000000000,))
-        self.assertEqual(tolerance.x87_reference("fsin", (ONE_80,), 24, UP), (0x3FFED76AA50000000000,))
+        self.assertEqual(tolerance.x87_reference("fsin", (ONE_80,), NEAREST), {0: SIN_1})
+        self.assertEqual(tolerance.x87_reference("fsin", (TWO_62_80,), NEAREST), {0: SIN_2_62})
+        self.assertEqual(tolerance.x87_reference("fsin", (ONE_80,), TOWARD_ZERO), {0: SIN_1 - 1})
+        self.assertEqual(tolerance.x87_reference("fsin", (ONE_80,), DOWN), {0: SIN_1 - 1})
+        self.assertEqual(tolerance.x87_reference("fsin", (ONE_80,), UP), {0: SIN_1})
         for actual, inside in ((SIN_1, True), (SIN_1 + 1, True), (SIN_1 - 1, True), (SIN_1 + 2, False),
-                               (SIN_1 - 2, False), (SIN_1 ^ 1 << 79, False)):
+                               (SIN_1 - 2, False), (SIN_1 ^ 1 << 79, False), (SIN_1 + (1 << 39), False)):
             with self.subTest(actual=hex(actual)):
-                self.assertEqual(tolerance.within_ulp(SIN_1, actual, 64), inside)
-        self.assertTrue(tolerance.within_ulp(0x3FFED76AA40000000000, 0x3FFED76AA50000000000, 24))
-        self.assertFalse(tolerance.within_ulp(0x3FFED76AA40000000000, 0x3FFED76AA60000000000, 24))
+                self.assertEqual(tolerance.within_ulp(SIN_1, actual), inside)
+
+    def test_ulp_at_a_power_of_two(self):
+        below_one = 0x3FFEFFFFFFFFFFFFFFFF
+        for actual, inside in ((ONE_80, True), (ONE_80 + 1, True), (below_one, True), (ONE_80 + 2, False),
+                               (below_one - 1, False)):
+            with self.subTest(actual=hex(actual)):
+                self.assertEqual(tolerance.within_ulp(ONE_80, actual), inside)
+        self.assertTrue(tolerance.within_ulp(below_one, ONE_80))
+        self.assertFalse(tolerance.within_ulp(below_one, ONE_80 + 1))
+        self.assertTrue(tolerance.within_ulp(ONE_80 | 1 << 79, below_one | 1 << 79))
+        self.assertFalse(tolerance.within_ulp(ONE_80 | 1 << 79, (below_one - 1) | 1 << 79))
 
     def test_fsin_out_of_range_exact(self):
         for operand in (TWO_63_80, TWO_63_80 | 1 << 79, INFINITY_80, TWO_63_80 + (1 << 64)):
             with self.subTest(operand=hex(operand)):
-                self.assertIsNone(tolerance.x87_reference("fsin", (operand,), 64, NEAREST))
-        self.assertIsNotNone(tolerance.x87_reference("fsin", (BELOW_TWO_63_80,), 64, NEAREST))
-        self.assertFalse(tolerance.within_ulp(SIN_1, INFINITY_80, 64))
+                self.assertIsNone(tolerance.x87_reference("fsin", (operand,), NEAREST))
+        self.assertIsNotNone(tolerance.x87_reference("fsin", (BELOW_TWO_63_80,), NEAREST))
+        self.assertFalse(tolerance.within_ulp(SIN_1, INFINITY_80))
 
-    def test_two_result_order(self):
-        cosine, sine = tolerance.x87_reference("fsincos", (ONE_80,), 64, NEAREST)
-        self.assertEqual(sine, SIN_1)
-        self.assertEqual(cosine, 0x3FFE8A51407DA8345C92)
-        one, tangent = tolerance.x87_reference("fptan", (ONE_80,), 64, NEAREST)
-        self.assertEqual(one, ONE_80)
-        self.assertEqual(tangent, 0x3FFFC75922E5F71D2DC5)
+    def test_approximated_results_by_stack_slot(self):
+        self.assertEqual(tolerance.x87_reference("fsincos", (ONE_80,), NEAREST), {0: 0x3FFE8A51407DA8345C92, 1: SIN_1})
+        self.assertEqual(tolerance.x87_reference("fptan", (ONE_80,), NEAREST), {1: 0x3FFFC75922E5F71D2DC5})
 
     def test_ranges(self):
         two = 0x40008000000000000000
         half = 0x3FFE8000000000000000
-        self.assertIsNone(tolerance.x87_reference("f2xm1", (two,), 64, NEAREST))
-        self.assertEqual(tolerance.x87_reference("f2xm1", (ONE_80,), 64, NEAREST), (ONE_80,))
-        self.assertIsNone(tolerance.x87_reference("fyl2x", (ONE_80 | 1 << 79, ONE_80), 64, NEAREST))
-        self.assertEqual(tolerance.x87_reference("fyl2x", (two, half), 64, NEAREST), (half,))
-        self.assertIsNone(tolerance.x87_reference("fyl2xp1", (half, ONE_80), 64, NEAREST))
-        self.assertEqual(tolerance.x87_reference("fpatan", (ONE_80, ONE_80), 64, NEAREST), (0x3FFEC90FDAA22168C235,))
+        self.assertIsNone(tolerance.x87_reference("f2xm1", (two,), NEAREST))
+        self.assertEqual(tolerance.x87_reference("f2xm1", (ONE_80,), NEAREST), {0: ONE_80})
+        self.assertIsNone(tolerance.x87_reference("fyl2x", (ONE_80 | 1 << 79, ONE_80), NEAREST))
+        self.assertEqual(tolerance.x87_reference("fyl2x", (two, half), NEAREST), {0: half})
+        self.assertIsNone(tolerance.x87_reference("fyl2xp1", (half, ONE_80), NEAREST))
+        self.assertEqual(tolerance.x87_reference("fpatan", (ONE_80, ONE_80), NEAREST), {0: 0x3FFEC90FDAA22168C235})
 
 
 if __name__ == "__main__":
