@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <memory>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -69,6 +70,7 @@ private:
 };
 
 int AddHeader(Settings& settings, const char* name, const char* value, std::uint32_t mode);
+bool HttpUrl(std::string_view url);
 std::shared_ptr<Capacity> CreateCapacity_nid_no_patch(int maximum);
 std::shared_ptr<Request> CreateRequest_nid_no_patch(int id, int version, int sslContext, std::shared_ptr<Capacity> capacity, Settings settings, std::string method, std::string url);
 

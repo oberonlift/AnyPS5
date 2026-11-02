@@ -74,8 +74,8 @@ struct Url {
 };
 
 Url Parse(std::string_view text) {
-    const bool secure = text.size() >= 8 && Lower(std::string(text.substr(0, 8))) == "https://";
-    Require(secure || (text.size() >= 7 && Lower(std::string(text.substr(0, 7))) == "http://"), "sceHttp2: unsupported URL scheme");
+    Require(HttpUrl(text), ("sceHttp2: the URL " + std::string(text) + " is neither http nor https").c_str());
+    const bool secure = Lower(std::string(text.substr(0, 8))) == "https://";
     for (const unsigned char c : text) Require(c > 0x20 && c != 0x7f, "sceHttp2: invalid URL character");
     text.remove_prefix(secure ? 8 : 7);
     const auto end = text.find_first_of("/?#");
@@ -272,6 +272,11 @@ void CheckNg(int result) {
     Require(result >= 0, "sceHttp2: HTTP/2 protocol failure; console error mapping is unknown");
 }
 
+}
+
+bool HttpUrl(std::string_view url) {
+    const auto scheme = Lower(std::string(url.substr(0, 8)));
+    return scheme.starts_with("http://") || scheme == "https://";
 }
 
 int AddHeader(Settings& settings, const char* name, const char* value, std::uint32_t mode) {

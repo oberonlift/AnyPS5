@@ -145,6 +145,7 @@ int APS5_VABI sceHttp2CreateRequestWithURL(int tmpl_id, const char* method, cons
     const auto* parent = FindHandle(tmpl_id, Http2Kind::Template);
     if (!parent) return ERROR_INVALID_ID;
     if (!method || !url) NotImplemented_nid_no_patch(__func__);
+    if (!Http2::HttpUrl(url)) return ERROR_INVALID_VALUE;
     Http2Handle handle{Http2Kind::Request, tmpl_id, 0};
     handle.sslContext = parent->sslContext;
     handle.capacity = parent->capacity;

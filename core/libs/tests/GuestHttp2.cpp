@@ -12,6 +12,7 @@ static constexpr int InvalidId = static_cast<int>(0x817B1100);
 static constexpr int NullPointer = static_cast<int>(0x817B1225);
 static constexpr int AsyncNotReady = static_cast<int>(0x817B1079);
 static constexpr int ResolverNoDns = static_cast<int>(0x804101E1);
+static constexpr int InvalidValue = static_cast<int>(0x817B11FE);
 
 extern "C" void Http2SetLookupHook_nid_no_patch(int (*hook)(const char* host));
 
@@ -112,6 +113,14 @@ int main() {
     Require(sceKernelDeleteEqueue(eq) == 0);
     const int sibling = sceHttp2CreateTemplate(context, "other", 2, 0);
     const int child = sceHttp2CreateRequestWithURL(sibling, "CONNECT", "https://localhost/", 0);
+    const int lookup = sceHttp2CreateRequestWithURL(sibling, "GET", "https://localhost/", 0);
+    Http2SetLookupHook_nid_no_patch(FailLookup);
+    Require(sceHttp2SendRequest(lookup, nullptr, 0) == ResolverNoDns);
+    Require(sceHttp2CreateRequestWithURL(sibling, "GET", "localhost", 0) == InvalidValue);
+    Require(sceHttp2CreateRequestWithURL(sibling, "GET", "ftp://localhost/", 0) == InvalidValue);
+    const int plain = sceHttp2CreateRequestWithURL(sibling, "GET", "http://localhost:8080/path", 0);
+    Require(plain > 0 && sceHttp2SendRequest(plain, nullptr, 0) == ResolverNoDns);
+    Http2SetLookupHook_nid_no_patch(nullptr);
     Require(sceHttp2DeleteTemplate(tmpl) == 0);
     Require(sceHttp2SslEnableOption(sibling, 0) == 0);
     Require(sceHttp2DeleteRequest(request) == InvalidId);
