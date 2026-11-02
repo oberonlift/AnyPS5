@@ -83,7 +83,7 @@ std::uint64_t PageSpan(std::uint64_t address, std::uint64_t size) {
     return ((address + size + pageMask) & ~pageMask) - (address & ~pageMask);
 }
 
-#if defined(__APPLE__)
+#if defined(__APPLE__) && !defined(ANYPS5_GUEST_LIFTED)
 struct MachImage {
     const mach_header_64* header;
     std::uintptr_t slide;
@@ -551,7 +551,7 @@ int FillModuleInfo(KernelModule handle, TInfo* info, bool titleOnly) {
         if (titleOnly && SystemImage(image)) return SCE_KERNEL_ERROR_EPERM;
         TInfo result{};
         result.st_size = sizeof(TInfo);
-#if defined(_WIN32) || defined(__APPLE__)
+#if defined(_WIN32) || (defined(__APPLE__) && !defined(ANYPS5_GUEST_LIFTED))
         if (!Fill(image.address, result)) return SCE_KERNEL_ERROR_ESRCH;
 #else
         ImageSearch<TInfo> search{image.address, &result, false};
@@ -653,7 +653,7 @@ std::int32_t APS5_VABI sceKernelGetLibkernelTextLocation_nid_postfix(void** addr
     const auto images = GuestImages();
     if (images.empty()) throw std::runtime_error("sceKernelGetLibkernelTextLocation: the main program is not loaded");
     ModuleInfo info{};
-#if defined(_WIN32) || defined(__APPLE__)
+#if defined(_WIN32) || (defined(__APPLE__) && !defined(ANYPS5_GUEST_LIFTED))
     const bool found = Fill(images.front().address, info);
 #else
     ImageSearch<ModuleInfo> search{images.front().address, &info, false};

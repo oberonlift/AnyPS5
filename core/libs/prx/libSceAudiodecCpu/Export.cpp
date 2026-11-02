@@ -112,7 +112,7 @@ int DecodeLpcmBd(const AudiodecCtrl* ctrl, const AudiodecCpuMemory* memory) {
     static constexpr std::uint32_t frameUnits[] = {10, 10, 20, 20, 20, 20, 30, 30, 40, 40};
     static constexpr std::uint32_t rates[] = {48, 96, 192};
     static constexpr std::uint32_t bits[] = {16, 24, 24};
-    auto* param = static_cast<LpcmParam*>(ctrl->pParam);
+    auto* param = static_cast<LpcmParam*>(static_cast<void*>(ctrl->pParam));
     if (param->size != LpcmParamSize) return ErrorLpcmParam;
     const std::uint32_t channelConfig = static_cast<std::uint8_t>(param->header >> 32);
     const std::uint32_t rateIndex = static_cast<std::uint8_t>(param->header >> 40);
@@ -127,7 +127,7 @@ int DecodeLpcmBd(const AudiodecCtrl* ctrl, const AudiodecCpuMemory* memory) {
     if (channelConfig != 2) NotImplemented_nid_no_patch("sceAudiodecCpuDecode: LPCM channel layouts other than stereo");
     if (auBytes > LpcmInputCapacity) NotImplemented_nid_no_patch("sceAudiodecCpuDecode: an LPCM frame larger than the input buffer of the module");
     if (ctrl->pAuInfo->ui_au_size < auBytes) NotImplemented_nid_no_patch("sceAudiodecCpuDecode: an AU shorter than its LPCM frame");
-    const auto* input = static_cast<const std::uint8_t*>(ctrl->pAuInfo->p_au_addr);
+    const auto* input = static_cast<const std::uint8_t*>(static_cast<void*>(ctrl->pAuInfo->p_au_addr));
     const std::uint32_t width = bitsIndex == 1 ? 2 : 3;
     const std::uint32_t samples = auBytes / width;
     if (samples * 4 > LpcmOutputCapacity) NotImplemented_nid_no_patch("sceAudiodecCpuDecode: an LPCM frame producing more PCM than the output buffer capacity of the module");
@@ -142,7 +142,7 @@ int DecodeLpcmBd(const AudiodecCtrl* ctrl, const AudiodecCpuMemory* memory) {
     if (samples != 0) std::memcpy(ctrl->pPcmItem->p_pcm_addr, output.data(), samples * 4);
     ctrl->pPcmItem->ui_pcm_size = samples * 4;
     ctrl->pAuInfo->ui_au_size = auBytes;
-    auto* info = static_cast<LpcmBsiInfo*>(ctrl->pBsiInfo);
+    auto* info = static_cast<LpcmBsiInfo*>(static_cast<void*>(ctrl->pBsiInfo));
     LpcmTimestamp(*param, *info, memory);
     info->header = param->header;
     info->channelConfig = channelConfig;

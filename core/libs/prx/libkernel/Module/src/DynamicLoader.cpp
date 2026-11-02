@@ -122,7 +122,7 @@ struct Module {
 #ifdef _WIN32
     std::uintptr_t globalOrder = 0;
 #endif
-#ifdef __APPLE__
+#if defined(__APPLE__) && !defined(ANYPS5_GUEST_LIFTED)
     const void* image = nullptr;
     const void* loadBias = nullptr;
 #endif
@@ -598,7 +598,7 @@ void* APS5_VABI dlsym_nid_postfix(void* handle, const char* name) {
         bool defaultScope = handle == nullptr || handle == reinterpret_cast<void*>(static_cast<std::intptr_t>(-2));
         {
             std::lock_guard lock(modulesMutex);
-#ifdef __APPLE__
+#if defined(__APPLE__) && !defined(ANYPS5_GUEST_LIFTED)
             if (!defaultScope) {
                 auto found = modules.find(reinterpret_cast<std::uintptr_t>(handle));
                 defaultScope = found != modules.end() && found->second->image != nullptr &&
@@ -648,8 +648,10 @@ int APS5_VABI dlclose_nid_postfix(void* handle) {
         GuestAllocations::Mutation mutation;
 #ifdef _WIN32
         mutation.UnregisterImage(module->native);
-#elif defined(__APPLE__)
+#elif defined(__APPLE__) && !defined(ANYPS5_GUEST_LIFTED)
         mutation.UnregisterImage(module->loadBias);
+#elif defined(__APPLE__)
+        mutation.UnregisterImage(_dyld_get_dlopen_image_header(module->native));
 #else
         mutation.UnregisterImage(reinterpret_cast<const void*>(static_cast<link_map*>(module->native)->l_addr));
 #endif

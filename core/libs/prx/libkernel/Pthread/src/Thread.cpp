@@ -1039,7 +1039,7 @@ static void ReleaseThread(PthreadPrivate* thread) {
     auto* expected = thread;
     if (finalThreadReleaseTestTarget.compare_exchange_strong(expected, nullptr, std::memory_order_acq_rel)) {
         if (const auto hook = finalThreadReleaseTestHook.exchange(nullptr, std::memory_order_acq_rel))
-            hook(reinterpret_cast<Pthread>(thread));
+            hook(Pthread(thread));
     }
 #ifdef _WIN32
     if (thread->wakeEvent)

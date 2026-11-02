@@ -406,7 +406,7 @@ int32_t APS5_VABI sceJpegDecDecode(void* handle, const JpegDecDecodeParam* param
     if (!context) return SCE_JPEG_DEC_ERROR_INVALID_HANDLE;
     if (!param) return SCE_JPEG_DEC_ERROR_INVALID_ADDR;
     if (!param->jpeg_mem_addr || !param->image_mem_addr) return SCE_JPEG_DEC_ERROR_INVALID_ADDR;
-    if ((reinterpret_cast<std::uintptr_t>(param->image_mem_addr) & 3) != 0 && (param->pixel_format == 0 || param->pixel_format == 1 || param->pixel_format == 9 || param->pixel_format == 10)) return SCE_JPEG_DEC_ERROR_INVALID_ADDR;
+    if ((reinterpret_cast<std::uintptr_t>(static_cast<const void*>(param->image_mem_addr)) & 3) != 0 && (param->pixel_format == 0 || param->pixel_format == 1 || param->pixel_format == 9 || param->pixel_format == 10)) return SCE_JPEG_DEC_ERROR_INVALID_ADDR;
     if (param->jpeg_mem_size == 0 || param->image_mem_size == 0) return SCE_JPEG_DEC_ERROR_INVALID_SIZE;
     if (!validDecodeOptions(param->decode_mode, param->down_scale)) return SCE_JPEG_DEC_ERROR_INVALID_PARAM;
     if (param->pixel_format != 0 && param->pixel_format != 1 && param->pixel_format != 9 && param->pixel_format != 10 && param->pixel_format != 11) return SCE_JPEG_DEC_ERROR_INVALID_PARAM;
