@@ -258,12 +258,25 @@ static bool WriteResult(int file, const Program* program, const Case* item, Faul
     return WriteAll(file, resultBuffer, used);
 }
 
+static bool ReportReady(const char* text)
+{
+    uint32_t descriptor;
+    if (!ReadNumber(PS5LIFT_INSTRUCTION_READY_VARIABLE, text, INT32_MAX, &descriptor)) return false;
+    const uint8_t ready = 1;
+    if (write((int)descriptor, &ready, sizeof(ready)) != (ssize_t)sizeof(ready)) {
+        return Fail("cannot report readiness on descriptor %u: %s", descriptor, strerror(errno));
+    }
+    close((int)descriptor);
+    return true;
+}
+
 static bool RunCases(const void* table, const DriverHooks* hooks)
 {
     const char* inputsPath = Variable(PS5LIFT_INSTRUCTION_INPUTS_VARIABLE);
     const char* resultsPath = Variable(PS5LIFT_INSTRUCTION_RESULTS_VARIABLE);
     const char* firstText = Variable(PS5LIFT_INSTRUCTION_FIRST_VARIABLE);
-    if (inputsPath == NULL || resultsPath == NULL || firstText == NULL) return false;
+    const char* readyText = Variable(PS5LIFT_INSTRUCTION_READY_VARIABLE);
+    if (inputsPath == NULL || resultsPath == NULL || firstText == NULL || readyText == NULL) return false;
     Program program;
     Cursor cursor;
     Ps5LiftInstructionFileHeader header;
@@ -277,7 +290,7 @@ static bool RunCases(const void* table, const DriverHooks* hooks)
     if (mprotect(program.Guard, PS5LIFT_INSTRUCTION_GUARD_SIZE, PROT_NONE) != 0) {
         return Fail("cannot protect the guard: %s", strerror(errno));
     }
-    if (!hooks->InstallHandlers()) return false;
+    if (!hooks->InstallHandlers() || !ReportReady(readyText)) return false;
     for (uint32_t position = 0; position < header.Count; ++position) {
         Case item;
         if (!ReadCase(&cursor, position, &item)) return false;

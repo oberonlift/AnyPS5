@@ -15,10 +15,21 @@ import time
 sys.path.insert(0, {str(TOOLS)!r})
 from instructions import records
 
-behaviour, at = sys.argv[1], int(sys.argv[2])
+behaviour, at, spawns = sys.argv[1], int(sys.argv[2]), sys.argv[3]
+with open(spawns, "a") as log:
+    log.write("spawn\\n")
 if behaviour == "fail":
     sys.stderr.write("cannot start\\n")
     sys.exit(records.DRIVER_FAILED)
+if behaviour == "early-death":
+    sys.stderr.write("error while loading shared libraries\\n")
+    sys.exit(127)
+if behaviour == "early-hang":
+    sys.stderr.write("initialising\\n")
+    time.sleep(1000)
+ready = int(os.environ[records.READY_VARIABLE])
+os.write(ready, b"r")
+os.close(ready)
 _, inputs = records.read_inputs(os.environ[records.INPUTS_VARIABLE])
 first = int(os.environ[records.FIRST_VARIABLE])
 with open(os.environ[records.RESULTS_VARIABLE], "ab", buffering=0) as results:
@@ -53,6 +64,7 @@ class RunnerTest(unittest.TestCase):
         self.work = Path(self.directory.name)
         self.stub = self.work / "stub.py"
         self.stub.write_text(STUB)
+        self.spawns = self.work / "spawns"
         self.inputs = self.work / "cases.inputs"
         self.results = self.work / "cases.results"
 
@@ -61,11 +73,17 @@ class RunnerTest(unittest.TestCase):
 
     def _run(self, behaviour, at, cases=range(CASES), timeout=30):
         header = _inputs(self.inputs, cases)
-        stderr = runner.run([sys.executable, str(self.stub), behaviour, str(at)], {}, self.inputs, self.results, timeout)
+        stderr = runner.run(self._command(behaviour, at), {}, self.inputs, self.results, timeout)
         found, results = records.read_results(self.results.read_bytes())
         self.assertEqual(found, header)
         self.assertEqual([result.case for result in results], list(cases))
         return stderr, {result.case: result for result in results}
+
+    def _command(self, behaviour, at=0):
+        return [sys.executable, str(self.stub), behaviour, str(at), str(self.spawns)]
+
+    def _spawn_count(self):
+        return len(self.spawns.read_text().splitlines())
 
     def _assert_completed(self, results, except_case):
         for case, result in results.items():
@@ -80,6 +98,7 @@ class RunnerTest(unittest.TestCase):
         self._assert_completed(results, 2)
         self.assertEqual(list(stderr), [2])
         self.assertIn("stopped at case 2", stderr[2])
+        self.assertEqual(self._spawn_count(), 2)
 
     def test_runner_records_timeout(self):
         stderr, results = self._run("hang", 1, timeout=1)
@@ -104,7 +123,9 @@ class RunnerTest(unittest.TestCase):
 
     def test_runner_keeps_the_end_of_stderr(self):
         stub = self.work / "noisy.py"
-        stub.write_text("import sys\nsys.stderr.write('x' * 10000 + 'end')\nsys.exit(70)\n")
+        stub.write_text(f"import os\nimport sys\nsys.path.insert(0, {str(TOOLS)!r})\nfrom instructions import records\n"
+                        "os.write(int(os.environ[records.READY_VARIABLE]), b'r')\n"
+                        "sys.stderr.write('x' * 10000 + 'end')\nsys.exit(70)\n")
         _inputs(self.inputs, range(1))
         stderr = runner.run([sys.executable, str(stub)], {}, self.inputs, self.results, 30)
         self.assertEqual(len(stderr[0]), runner.STDERR_KEPT)
@@ -113,7 +134,22 @@ class RunnerTest(unittest.TestCase):
     def test_driver_failure_ends_the_run(self):
         _inputs(self.inputs, range(CASES))
         with self.assertRaisesRegex(runner.RunnerError, "cannot start"):
-            runner.run([sys.executable, str(self.stub), "fail", "0"], {}, self.inputs, self.results, 30)
+            runner.run(self._command("fail"), {}, self.inputs, self.results, 30)
+        self.assertEqual(self._spawn_count(), 1)
+
+    def test_death_before_ready_ends_the_run(self):
+        _inputs(self.inputs, range(CASES))
+        with self.assertRaisesRegex(runner.RunnerError, "before it was ready(.|\\n)*error while loading shared libraries"):
+            runner.run(self._command("early-death"), {}, self.inputs, self.results, 30)
+        self.assertEqual(self._spawn_count(), 1)
+        _, results, _ = records.read_result_prefix(self.results.read_bytes())
+        self.assertEqual(results, [])
+
+    def test_hang_before_ready_ends_the_run(self):
+        _inputs(self.inputs, range(CASES))
+        with self.assertRaisesRegex(runner.RunnerError, "before it was ready(.|\\n)*initialising"):
+            runner.run(self._command("early-hang"), {}, self.inputs, self.results, 1)
+        self.assertEqual(self._spawn_count(), 1)
 
 
 if __name__ == "__main__":

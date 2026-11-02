@@ -10,9 +10,10 @@ before it compares the slots. A fault's result holds no words. A console-defined
 values the console defines for its inputs; the native driver knows none, and gives none.
 
 A driver reads the input file that `INPUTS_VARIABLE` names, starting at the case at the position `FIRST_VARIABLE` gives,
-and appends each case's result to the result file that `RESULTS_VARIABLE` names, whose header the runner writes. It exits
-with `DRIVER_FAILED` when it cannot run cases at all. `header_text` emits `records.h` for the drivers, so the C and
-Python sides cannot drift apart."""
+and appends each case's result to the result file that `RESULTS_VARIABLE` names, whose header the runner writes. Once it
+is set up and about to run its first case, it writes one byte to the file descriptor `READY_VARIABLE` gives and closes
+it. It exits with `DRIVER_FAILED` when it cannot run cases at all. `header_text` emits `records.h` for the drivers, so
+the C and Python sides cannot drift apart."""
 import struct
 from dataclasses import dataclass
 from enum import IntEnum
@@ -70,6 +71,7 @@ FINGERPRINT_SIZE = 32
 INPUTS_VARIABLE = "PS5LIFT_INSTRUCTION_INPUTS"
 RESULTS_VARIABLE = "PS5LIFT_INSTRUCTION_RESULTS"
 FIRST_VARIABLE = "PS5LIFT_INSTRUCTION_FIRST"
+READY_VARIABLE = "PS5LIFT_INSTRUCTION_READY"
 DRIVER_FAILED = 2
 
 FLAG_NAMES = ("CF", "PF", "AF", "ZF", "SF", "OF", "DF")
@@ -516,7 +518,10 @@ def _defines():
     lines.append(f'#define PS5LIFT_INSTRUCTION_TABLE_MAGIC "{TABLE_MAGIC.decode()}"')
     lines.append(f'#define PS5LIFT_INSTRUCTION_INPUT_MAGIC "{INPUT_MAGIC.decode()}"')
     lines.append(f'#define PS5LIFT_INSTRUCTION_RESULT_MAGIC "{RESULT_MAGIC.decode()}"')
-    for name, variable in (("INPUTS", INPUTS_VARIABLE), ("RESULTS", RESULTS_VARIABLE), ("FIRST", FIRST_VARIABLE)):
+    variables = (
+        ("INPUTS", INPUTS_VARIABLE), ("RESULTS", RESULTS_VARIABLE), ("FIRST", FIRST_VARIABLE), ("READY", READY_VARIABLE),
+    )
+    for name, variable in variables:
         lines.append(f'#define PS5LIFT_INSTRUCTION_{name}_VARIABLE "{variable}"')
     lines += [f"#define PS5LIFT_INSTRUCTION_OUTCOME_{outcome.name} {outcome.value}" for outcome in Outcome]
     return "\n".join(lines)
