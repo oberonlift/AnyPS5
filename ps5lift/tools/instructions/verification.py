@@ -1,12 +1,13 @@
 """Check encodings by decoding them with the lifter's Zydis settings.
 
-`verify_all` decodes a batch of (form, operands, prefixes, encoded) instances with one `ps5lift_decode` call. It raises
-`EncodingError` naming each form whose bytes decode to anything but that form with those operands and prefixes:
+`verify_all` decodes a batch of (form, operands, prefixes, encoded) instances with one `ps5lift_decode` call and
+returns what Zydis decoded for each. It raises `EncodingError` naming each form whose bytes decode to anything but that
+form with those operands and prefixes:
 - the length, mnemonic and operand width;
 - every visible operand: a register, an immediate (0 for a branch field), or memory with its base, index, scale,
   displacement (0 for a field) and displacement size;
 - the prefixes Zydis's formatter prints, from the last f2/f3 byte and the definition's prefix flags.
-`verify` checks one instance the same way."""
+`verify` checks one instance the same way and returns its decoding."""
 from dataclasses import fields
 
 from .decoder import RejectedEncoding
@@ -152,7 +153,8 @@ def verify_all(decoder, instances):
     mismatches = [mismatch for mismatch in mismatches if mismatch is not None]
     if mismatches:
         raise EncodingError("\n".join(mismatches))
+    return results
 
 
 def verify(decoder, form, operands, prefixes, encoded):
-    verify_all(decoder, [(form, operands, prefixes, encoded)])
+    return verify_all(decoder, [(form, operands, prefixes, encoded)])[0]

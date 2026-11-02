@@ -72,7 +72,7 @@ def _numbered(prefix, count):
 
 
 _LEGACY_GPRS = ["ax", "cx", "dx", "bx", "sp", "bp", "si", "di"]
-_REGISTER_FILES = {
+REGISTER_FILES = {
     "gpr8": ["al", "cl", "dl", "bl", "spl", "bpl", "sil", "dil"] + [f"r{number}b" for number in range(8, 16)],
     "gpr16": _LEGACY_GPRS + [f"r{number}w" for number in range(8, 16)],
     "gpr32": ["e" + name for name in _LEGACY_GPRS] + [f"r{number}d" for number in range(8, 16)],
@@ -89,11 +89,12 @@ _REGISTER_FILES = {
     "dr": _numbered("dr", 16),
     "tmm": _numbered("tmm", 8),
 }
-_HIGH_BYTE_REGISTERS = ["ah", "ch", "dh", "bh"]
+HIGH_BYTE_REGISTERS = ["ah", "ch", "dh", "bh"]
 _REX_BYTE_REGISTERS = frozenset({"spl", "bpl", "sil", "dil"})
 _DISTINCT_KINDS = frozenset({"xmm", "ymm", "zmm", "tmm"})
 _SIZED_IMPLICIT_PREFIXES = ("osz_", "asz_", "ssz_")
 _STACK_SIZE = 64
+_INSTRUCTION_POINTERS = {16: "ip", 32: "eip", 64: "rip"}
 
 
 @dataclass(frozen=True)
@@ -104,12 +105,12 @@ class _Register:
 
 
 _REGISTERS = {
-    name: _Register(name, kind, number) for kind, names in _REGISTER_FILES.items() for number, name in enumerate(names)
+    name: _Register(name, kind, number) for kind, names in REGISTER_FILES.items() for number, name in enumerate(names)
 }
-_REGISTERS.update({name: _Register(name, "gpr8", 4 + offset) for offset, name in enumerate(_HIGH_BYTE_REGISTERS)})
-_CANDIDATES = {kind: [_REGISTERS[name] for name in names] for kind, names in _REGISTER_FILES.items()}
+_REGISTERS.update({name: _Register(name, "gpr8", 4 + offset) for offset, name in enumerate(HIGH_BYTE_REGISTERS)})
+_CANDIDATES = {kind: [_REGISTERS[name] for name in names] for kind, names in REGISTER_FILES.items()}
 _CANDIDATES["gpr8"] = [
-    _REGISTERS[name] for name in _REGISTER_FILES["gpr8"][:4] + _HIGH_BYTE_REGISTERS + _REGISTER_FILES["gpr8"][4:]
+    _REGISTERS[name] for name in REGISTER_FILES["gpr8"][:4] + HIGH_BYTE_REGISTERS + REGISTER_FILES["gpr8"][4:]
 ]
 
 _FILTERS = {
@@ -154,7 +155,7 @@ _ADDRESS_KINDS = {"gpr32": 32, "gpr64": 64}
 _MEMORY_TYPES = frozenset({"mem", "agen", "agen_norel", "mib"})
 _VSIB_INDEX_KINDS = {"mem_vsibx": "xmm", "mem_vsiby": "ymm", "mem_vsibz": "zmm"}
 _IMPLICIT_TYPES = frozenset({"implicit_reg", "implicit_mem", "implicit_imm1"})
-_REGISTER_TYPES = frozenset(_REGISTER_FILES) | frozenset(_SIZED_REGISTER_TYPES) | frozenset(_ADDRESS_REGISTER_TYPES)
+_REGISTER_TYPES = frozenset(REGISTER_FILES) | frozenset(_SIZED_REGISTER_TYPES) | frozenset(_ADDRESS_REGISTER_TYPES)
 _REGISTER_ENCODINGS = frozenset({"modrm_reg", "modrm_rm", "ndsndd", "mask", "opcode", "is4"})
 _IMMEDIATE_ENCODINGS = {
     "uimm8": ({16: 1, 32: 1, 64: 1}, False),
@@ -260,7 +261,7 @@ def _register(form, name):
     return _rule(form, _REGISTERS, name, "register")
 
 
-def _category(form, operand):
+def operand_category(form, operand):
     operand_type = operand["operand_type"]
     encoding = operand.get("encoding")
     if encoding is None:
@@ -296,7 +297,7 @@ def _check_operand(form, operand):
     _check_values(form, set(operand), _OPERAND_KEYS, "operand key")
     if "is_multisource4" in operand and operand["is_multisource4"] is not True:
         raise EncodingError(f"{form.key}: no rule for is_multisource4 {operand['is_multisource4']!r}")
-    _category(form, operand)
+    operand_category(form, operand)
 
 
 def _check_definition(form):
@@ -317,15 +318,15 @@ def _check_definition(form):
         _check_operand(form, operand)
 
 
-def _explicit_operands(definition):
+def explicit_operands(definition):
     return [operand for operand in definition.operands if "encoding" in operand]
 
 
 def _pairs(form, operands):
-    explicit = _explicit_operands(form.definition)
+    explicit = explicit_operands(form.definition)
     if len(operands) != len(explicit):
         raise EncodingError(f"{form.key}: takes {len(explicit)} operands, not {len(operands)}")
-    return [(operand, _category(form, operand), choice) for operand, choice in zip(explicit, operands)]
+    return [(operand, operand_category(form, operand), choice) for operand, choice in zip(explicit, operands)]
 
 
 def _operand_size(form):
@@ -369,7 +370,7 @@ def _sizes(form, pairs):
     return _Sizes(choice.size, choice.operand_size_prefix, choice.w, address, prefix)
 
 
-def _register_kind(form, operand, operand_size, address_size):
+def operand_register_kind(form, operand, operand_size, address_size):
     operand_type = operand["operand_type"]
     if operand_type in _SIZED_REGISTER_TYPES:
         return _SIZED_REGISTER_TYPES[operand_type][operand_size]
@@ -460,14 +461,14 @@ def _place_register(form, operand, choice, sizes, parts):
     opcode = form.definition.opcode
     _expect(form, choice, Reg)
     register = _register(form, choice.name)
-    kind = _register_kind(form, operand, sizes.operand, sizes.address)
+    kind = operand_register_kind(form, operand, sizes.operand, sizes.address)
     if register.kind != kind:
         raise EncodingError(f"{form.key}: {choice.name} is not a {kind} register")
     if operand.get("is_multisource4") and register.number % _MULTISOURCE_BLOCK:
         raise EncodingError(f"{form.key}: {choice.name} cannot name a block of {_MULTISOURCE_BLOCK} registers, "
                             f"whose first register number is a multiple of {_MULTISOURCE_BLOCK}")
     parts.needs_rex |= choice.name in _REX_BYTE_REGISTERS
-    parts.forbids_rex |= choice.name in _HIGH_BYTE_REGISTERS
+    parts.forbids_rex |= choice.name in HIGH_BYTE_REGISTERS
     encoding = operand["encoding"]
     if encoding == "modrm_reg":
         _set_slot(form, parts, "reg", register.number)
@@ -488,11 +489,15 @@ def _place_register(form, operand, choice, sizes, parts):
         _set_slot(form, parts, "is4", register.number)
 
 
+def immediate_layout(operand, operand_size):
+    sizes_by_operand_size, signed = _IMMEDIATE_ENCODINGS[operand["encoding"]]
+    return sizes_by_operand_size[operand_size], signed
+
+
 def _place_immediate(form, operand, choice, sizes, parts):
     _expect(form, choice, Imm)
     encoding = operand["encoding"]
-    sizes_by_operand_size, signed = _IMMEDIATE_ENCODINGS[encoding]
-    size = sizes_by_operand_size[sizes.operand]
+    size, signed = immediate_layout(operand, sizes.operand)
     low, high = (-(1 << (8 * size - 1)), 1 << (8 * size - 1)) if signed else (0, 1 << (8 * size))
     if not low <= choice.value < high:
         raise EncodingError(f"{form.key}: immediate {choice.value} does not fit {encoding} "
@@ -526,10 +531,10 @@ def _place(form, operand, category, choice, sizes, parts):
         parts.immediates.append(Field(_BRANCH_ENCODINGS[operand["encoding"]][sizes.operand], choice.label, True))
 
 
-def _mandatory_candidate(group1, sizes):
+def _mandatory_candidate(group1, operand_size_prefix):
     if group1 is not None:
         return _GROUP1_PREFIX_NAMES[group1]
-    return "66" if sizes.operand_prefix else "none"
+    return "66" if operand_size_prefix else "none"
 
 
 def _fixed_field(form, name):
@@ -641,7 +646,7 @@ def _legacy(form, parts, sizes, prefixes, tail):
     if "prefix_group1" in filters and group1_present != (filters["prefix_group1"] == "1"):
         raise EncodingError(f"{form.key}: prefix_group1 {filters['prefix_group1']!r} "
                             f"contradicts the prefixes {list(prefixes)}")
-    candidate, register = _mandatory_candidate(group1, sizes), str(_reg_field(form, parts) & 7)
+    candidate, register = _mandatory_candidate(group1, sizes.operand_prefix), str(_reg_field(form, parts) & 7)
     if claimed_by_sibling(definition, candidate, register):
         raise EncodingError(f"{form.key}: with mandatory prefix {candidate} and modrm.reg {register}, "
                             "the bytes decode from a more specific row")
@@ -783,32 +788,41 @@ def implicit_register(form, name, operand_size, address_size):
     for prefix, size in zip(_SIZED_IMPLICIT_PREFIXES, (operand_size, address_size, _STACK_SIZE)):
         if name.startswith(prefix):
             base = name[len(prefix):]
+            if base == "ip":
+                return _INSTRUCTION_POINTERS[size]
             if base not in _LEGACY_GPRS:
                 raise EncodingError(f"{form.key}: no rule for implicit register {name!r}")
-            return _REGISTER_FILES[f"gpr{size}"][_LEGACY_GPRS.index(base)]
+            return REGISTER_FILES[f"gpr{size}"][_LEGACY_GPRS.index(base)]
     return name
 
 
-def _first_register(form, kind, operand, used, candidate):
+def _admits(form, operand, register, candidate):
     definition = form.definition
     filters = definition.filters
     encoding = operand.get("encoding")
-    for register in _CANDIDATES[kind]:
-        if used is not None and kind in _DISTINCT_KINDS and register.number in used:
-            continue
-        if encoding == "modrm_reg" and claimed_by_sibling(definition, candidate, str(register.number & 7)):
-            continue
-        if encoding == "opcode" and register.number & 7 != definition.opcode & 7:
-            continue
-        if encoding == "opcode" and "rex_b" in filters and _bit(register.number, 3) != int(filters["rex_b"]):
-            continue
-        if encoding in filters and not filter_matches(filters[encoding], str(register.number & 7)):
-            continue
-        if encoding == "mask" and definition.mask_mode == "required" and register.number == 0:
-            continue
-        if operand.get("is_multisource4") and register.number % _MULTISOURCE_BLOCK:
-            continue
+    if encoding == "modrm_reg" and claimed_by_sibling(definition, candidate, str(register.number & 7)):
+        return False
+    if encoding == "opcode" and register.number & 7 != definition.opcode & 7:
+        return False
+    if encoding == "opcode" and "rex_b" in filters and _bit(register.number, 3) != int(filters["rex_b"]):
+        return False
+    if encoding in filters and not filter_matches(filters[encoding], str(register.number & 7)):
+        return False
+    if encoding == "mask" and definition.mask_mode == "required" and register.number == 0:
+        return False
+    return not (operand.get("is_multisource4") and register.number % _MULTISOURCE_BLOCK)
+
+
+def register_candidates(form, operand, kind, candidate):
+    return [register.name for register in _CANDIDATES[kind] if _admits(form, operand, register, candidate)]
+
+
+def _first_register(form, kind, operand, used, candidate):
+    for name in register_candidates(form, operand, kind, candidate):
+        register = _REGISTERS[name]
         if used is not None and kind in _DISTINCT_KINDS:
+            if register.number in used:
+                continue
             used.add(register.number)
         return register
     raise EncodingError(f"{form.key}: no {kind} register satisfies its filters")
@@ -819,21 +833,26 @@ def _default_memory(form, operand, address_size, used, candidate):
     number = 3 if rm in (None, "4") else int(rm)
     vsib_kind = _VSIB_INDEX_KINDS.get(operand["operand_type"])
     index = _first_register(form, vsib_kind, {}, used, candidate).name if vsib_kind else None
-    return Mem(_REGISTER_FILES[f"gpr{address_size}"][number], index, displacement_size=8 if number == 5 else 0)
+    return Mem(REGISTER_FILES[f"gpr{address_size}"][number], index, displacement_size=8 if number == 5 else 0)
+
+
+def mandatory_candidate(form, prefixes=()):
+    _, group1 = _requested_prefixes(form, prefixes)
+    return _mandatory_candidate(group1, _operand_size(form).operand_size_prefix)
 
 
 def default_operands(form):
     definition = form.definition
     _check_definition(form)
     choice = _operand_size(form)
-    candidate = "66" if choice.operand_size_prefix else "none"
+    candidate = mandatory_candidate(form)
     address_size = 32 if definition.filters.get("address_size") == "32" else 64
     used = set() if definition.flags & _DISTINCT_REGISTER_FLAGS else None
     choices = []
-    for operand in _explicit_operands(definition):
-        category = _category(form, operand)
+    for operand in explicit_operands(definition):
+        category = operand_category(form, operand)
         if category == "register":
-            kind = _register_kind(form, operand, choice.size, address_size)
+            kind = operand_register_kind(form, operand, choice.size, address_size)
             choices.append(Reg(_first_register(form, kind, operand, used, candidate).name))
         elif category == "memory":
             choices.append(_default_memory(form, operand, address_size, used, candidate))

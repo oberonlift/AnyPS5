@@ -163,6 +163,12 @@ class DatabaseTest(unittest.TestCase):
         bsf = self.find("bsf", modrm_mod="3", mandatory_prefix="ignore")
         self.assertEqual(bsf.undefined_flags, frozenset({"cf", "pf", "af", "sf", "of"}))
 
+    def test_tested_flags(self):
+        self.assertEqual(self.find("adc", opcode=0x10, modrm_mod="3").tested_flags, frozenset({"cf"}))
+        self.assertEqual(self.find("jle", opcode=0x7E).tested_flags, frozenset({"zf", "sf", "of"}))
+        self.assertEqual(self.find("movsb", mandatory_prefix="ignore").tested_flags, frozenset({"df"}))
+        self.assertEqual(self.find("add", opcode=0x00, modrm_mod="3").tested_flags, frozenset())
+
     def test_form_sizes(self):
         self.assertEqual(self.sizes("add", opcode=0x01, modrm_mod="3"), {16, 32, 64})
         self.assertEqual(self.sizes("push", opcode=0x50), {16, 64})

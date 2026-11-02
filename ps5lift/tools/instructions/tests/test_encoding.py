@@ -98,6 +98,13 @@ class EncodingTest(unittest.TestCase):
                 with self.assertRaisesRegex(encoding.EncodingError, rf"^{addps.key}: .*{value}"):
                     encoding.encode(database.Form(changed, None, addps.key), [Reg("xmm0"), Reg("xmm1")])
 
+    def test_implicit_registers_take_their_sizes(self):
+        call = self.form("call", 64, modrm_mod="3", modrm_reg="2")
+        self.assertEqual(encoding.implicit_register(call, "ssz_ip", 64, 64), "rip")
+        self.assertEqual(encoding.implicit_register(call, "ssz_sp", 64, 64), "rsp")
+        self.assertEqual(encoding.implicit_register(call, "osz_ax", 16, 64), "ax")
+        self.assertEqual(encoding.implicit_register(call, "asz_cx", 64, 32), "ecx")
+
     def test_default_operands_leave_a_siblings_bytes(self):
         nop = self.form("nop", 32, opcode=0x1C, modrm_mod="!3")
         self.assertEqual(encoding.default_operands(nop), [Mem("rbx"), Reg("ecx")])

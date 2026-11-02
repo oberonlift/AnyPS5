@@ -45,6 +45,7 @@ KERNEL_MNEMONICS = frozenset({"syscall", "int", "int1"})
 FAR_INDIRECT = {"call": "3", "jmp": "5"}
 FAR_RET_OPCODES = frozenset({0xCA, 0xCB})
 SEGMENT_REGISTERS_PUSHED = frozenset({"fs", "gs"})
+TESTED_FLAG_EFFECTS = frozenset({"t", "t_m"})
 
 OPERAND_TYPE_SIZES = {
     "gpr16_32_64": {16, 32, 64},
@@ -90,6 +91,7 @@ class Definition:
     opsize_map: Optional[str]
     adsize_map: Optional[str]
     undefined_flags: frozenset
+    tested_flags: frozenset
     prefix_flags: frozenset
     flags: frozenset
     mask_mode: Optional[str]
@@ -136,6 +138,7 @@ def _definition(index, row):
         opsize_map=row.get("opsize_map"),
         adsize_map=row.get("adsize_map"),
         undefined_flags=frozenset(flag for flag, effect in flags.items() if effect == "u"),
+        tested_flags=frozenset(flag for flag, effect in flags.items() if effect in TESTED_FLAG_EFFECTS),
         prefix_flags=frozenset(row.get("prefix_flags", ())),
         flags=frozenset(row.get("flags", ())),
         mask_mode=(row.get("evex") or row.get("mvex") or {}).get("mask_mode"),
