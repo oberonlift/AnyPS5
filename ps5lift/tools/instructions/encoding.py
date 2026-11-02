@@ -122,6 +122,7 @@ _FILTERS = {
     "rex_b": {"0", "1"},
     "vector_length": {"128", "256", "512"},
     "evex_b": {"0", "1"},
+    "mvex_e": {"0", "1"},
     "operand_size": {"16", "32", "64", "!16", "!64"},
     "address_size": {"32", "64", "!16"},
     "prefix_group1": {"0", "1"},
@@ -172,15 +173,18 @@ _SCALES = {1: 0, 2: 1, 4: 2, 8: 3}
 _MODS = {0: 0, 8: 1, 32: 2}
 
 _LEGACY_ENCODINGS = frozenset({None, "3dnow"})
+_EVEX_FAMILY = frozenset({"evex", "mvex"})
 _LEGACY_MAPS = {None: b"", "0f": b"\x0f", "0f38": b"\x0f\x38", "0f3a": b"\x0f\x3a"}
 _THREE_DNOW_MAPS = {"0f0f": b"\x0f\x0f"}
-_VEX_MAPS = {"0f": 1, "0f38": 2, "0f3a": 3}
+_VEX_MAPS = {None: 0, "0f": 1, "0f38": 2, "0f3a": 3}
 _XOP_MAPS = {"xop8": 8, "xop9": 9, "xopa": 10}
 _EVEX_MAPS = {"0f": 1, "0f38": 2, "0f3a": 3, "map5": 5, "map6": 6}
+_MVEX_MAPS = {"0f": 1, "0f38": 2, "0f3a": 3}
 _LEGACY_MANDATORY_PREFIXES = {None: b"", "none": b"", "ignore": b"", "66": b"\x66", "f3": b"\xf3", "f2": b"\xf2"}
 _VECTOR_PREFIXES = {None: 0, "none": 0, "66": 1, "f3": 2, "f2": 3}
 _VEX_LENGTHS = {None: 0, "128": 0, "256": 1}
 _EVEX_LENGTHS = {None: 0, "128": 0, "256": 1, "512": 2}
+_MVEX_LENGTHS = {None: 2, "512": 2}
 
 _PREFIXES = {
     "lock": (0xF0, frozenset({"accepts_lock"})),
@@ -420,8 +424,8 @@ def _memory(form, operand, choice, address_size):
         raise EncodingError(f"{form.key}: scale {choice.scale} without an index")
     if size == 0 and choice.displacement != 0:
         raise EncodingError(f"{form.key}: displacement {choice.displacement!r} needs a displacement size")
-    if size == 8 and definition.encoding == "evex":
-        raise EncodingError(f"{form.key}: no rule for EVEX's 8-bit displacement, which the tuple type scales")
+    if size == 8 and definition.encoding in _EVEX_FAMILY:
+        raise EncodingError(f"{form.key}: no rule for {definition.encoding}'s 8-bit displacement, which it scales")
     if choice.base == "rip":
         if choice.index is not None or size != 32 or sib_forced or vsib:
             raise EncodingError(f"{form.key}: RIP-relative addressing takes a 32-bit displacement and no index")
@@ -615,8 +619,8 @@ def _extensions(form, parts):
         raise EncodingError(f"{form.key}: V' cannot extend both the VSIB index and vvvv")
     extensions = _Extensions(_bit(reg, 3), x, b, _bit(reg, 4), _bit(vvvv, 4) | index_top, vvvv)
     extended = extensions.r2 or extensions.v2 or parts.aaa or (parts.memory is None and x)
-    if form.definition.encoding != "evex" and extended:
-        raise EncodingError(f"{form.key}: only EVEX encodes registers numbered 16 and up, or a mask")
+    if form.definition.encoding not in _EVEX_FAMILY and extended:
+        raise EncodingError(f"{form.key}: only EVEX and MVEX encode registers numbered 16 and up, or a mask")
     return extensions
 
 
@@ -716,7 +720,25 @@ def _evex(form, parts, sizes, prefixes, tail):
     return [_address_override(sizes) + prefix + bytes([definition.opcode]), *tail]
 
 
-_ASSEMBLERS = {None: _legacy, "3dnow": _legacy, "vex": _vex, "xop": _xop, "evex": _evex}
+def _mvex(form, parts, sizes, prefixes, tail):
+    definition = form.definition
+    filters = definition.filters
+    _reject_prefixes(form, prefixes)
+    selected_map = _rule(form, _MVEX_MAPS, definition.opcode_map, "mvex opcode_map")
+    pp = _rule(form, _VECTOR_PREFIXES, filters.get("mandatory_prefix"), "mvex mandatory_prefix")
+    _rule(form, _MVEX_LENGTHS, filters.get("vector_length"), "mvex vector_length")
+    eviction_hint = int(filters.get("mvex_e", "0"))
+    r, x, b, r2, v2, vvvv = _extensions(form, parts)
+    prefix = bytes([
+        0x62,
+        (1 - r) << 7 | (1 - x) << 6 | (1 - b) << 5 | (1 - r2) << 4 | selected_map,
+        sizes.w << 7 | (~vvvv & 0xF) << 3 | pp,
+        eviction_hint << 7 | (1 - v2) << 3 | parts.aaa,
+    ])
+    return [_address_override(sizes) + prefix + bytes([definition.opcode]), *tail]
+
+
+_ASSEMBLERS = {None: _legacy, "3dnow": _legacy, "vex": _vex, "xop": _xop, "evex": _evex, "mvex": _mvex}
 
 
 def _joined(pieces):

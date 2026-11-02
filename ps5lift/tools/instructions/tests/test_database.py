@@ -31,7 +31,7 @@ class DatabaseTest(unittest.TestCase):
 
     def test_counts(self):
         in_set = [definition for definition in self.definitions if database.classify(definition) is Group.SET]
-        self.assertEqual(len(self.definitions), 7260)
+        self.assertEqual(len(self.definitions), 7704)
         self.assertEqual(len(in_set), 2860)
         self.assertEqual(len({definition.mnemonic for definition in in_set}), 922)
         self.assertEqual(len(database.forms(in_set)), 3522)
@@ -128,8 +128,16 @@ class DatabaseTest(unittest.TestCase):
         for definition in far:
             self.assertIs(database.classify(definition), Group.SEGMENT_TABLES)
 
-    def test_knc_rows_dropped(self):
-        self.assertFalse([definition for definition in self.definitions if definition.mnemonic == "popcnt" and definition.extension == "KNC"])
+    def test_knc_and_mvex_rows_kept_outside_the_set(self):
+        popcnt = self.find("popcnt", encoding="vex", rex_w="0")
+        vaddps = self.find("vaddps", encoding="mvex", modrm_mod="3", mvex_e="0")
+        self.assertEqual((popcnt.extension, vaddps.extension), ("KNC", "KNCE"))
+        self.assertIs(database.classify(popcnt), Group.NOT_ON_PS5)
+        self.assertIs(database.classify(vaddps), Group.NOT_ON_PS5)
+        self.assertEqual(len([definition for definition in self.definitions if definition.encoding == "mvex"]), 407)
+        self.assertFalse(self.matching("kmov"))
+        decoded = decoder.from_environment().decode([bytes.fromhex("c5fab8c0"), bytes.fromhex("62f1780858c0")])
+        self.assertEqual([(item.mnemonic, item.isa_ext) for item in decoded], [("popcnt", "KNC"), ("vaddps", "KNCE")])
 
     def test_operand_size_encodings(self):
         def encodings(mnemonic, **conditions):

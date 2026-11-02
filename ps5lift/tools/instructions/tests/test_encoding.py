@@ -29,6 +29,7 @@ class EncodingTest(unittest.TestCase):
             (self.form("movaps", encoding=None, opcode=0x28, modrm_mod="!3"), [Reg("xmm8"), Mem("r12")], "450f280424"),
             (self.form("pshufb", encoding=None, mandatory_prefix="none", modrm_mod="3"), [Reg("mm0"), Reg("mm1")], "0f3800c1"),
             (self.form("pi2fd", modrm_mod="3"), [Reg("mm0"), Reg("mm1")], "0f0fc10d"),
+            (self.form("vaddps", encoding="mvex", modrm_mod="3", mvex_e="0"), [Reg("zmm1"), Reg("k0"), Reg("zmm2"), Reg("zmm3")], "62f1680858cb"),
             (self.form("mov", opcode=0x22), [Reg("cr8"), Reg("rax")], "440f22c0"),
         ]
         self.assert_encodes([(form, operands, (), [bytes.fromhex(expected)]) for form, operands, expected in cases])
@@ -41,6 +42,7 @@ class EncodingTest(unittest.TestCase):
             (mov_load, [Reg("rax"), Mem("rbx", displacement="offset", displacement_size=8)], (), [bytes.fromhex("488b43"), Field(1, "offset", False)]),
             (mov_load, [Reg("r9"), Mem("rsp", "r13", 8, -2, 32)], (), [bytes.fromhex("4e8b8cec") + (-2).to_bytes(4, "little", signed=True)]),
             (self.form("mov", 64, opcode=0xA1), [Mem(None, displacement="block", displacement_size=64)], (), [bytes.fromhex("48a1"), Field(8, "block", False)]),
+            (self.form("jkzd", opcode=0x74), [Reg("k1"), Target("taken")], (), [bytes.fromhex("c4e07074"), Field(1, "taken", True)]),
         ])
 
     def test_prefixes(self):

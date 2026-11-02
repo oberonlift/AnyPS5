@@ -1,8 +1,9 @@
 """Read Zydis's instruction database and classify every definition into the PS5 set or one of four groups outside it.
 
-It keeps the rows that the lifter's Zydis decoder modes select, and gives each definition the forms that its own row
-decodes: an operand size that no prefix and W reach, or whose bytes Zydis gives to another row, is not a form of this
-one. It is the one source of the operand-size and address-size rules, which Zydis's tables for 64-bit mode define."""
+It keeps every row valid in 64-bit mode that the lifter's Zydis decoder modes select, whatever its extension or encoding
+(KNC rows and MVEX rows included), and gives each definition the forms that its own row decodes: an operand size that
+no prefix and W reach, or whose bytes Zydis gives to another row, is not a form of this one. It is the one source of
+the operand-size and address-size rules, which Zydis's tables for 64-bit mode define."""
 import dataclasses
 import enum
 import json
@@ -20,7 +21,6 @@ PS5_EXTENSIONS = frozenset({
     "AMD3DNOW_PREFETCH",
 })
 
-KNC_EXTENSIONS = frozenset({"KNC", "KNCE", "KNCV"})
 DECODER_MODES = {
     "amd": True,
     "cet": True,
@@ -138,7 +138,7 @@ def _definition(index, row):
         undefined_flags=frozenset(flag for flag, effect in flags.items() if effect == "u"),
         prefix_flags=frozenset(row.get("prefix_flags", ())),
         flags=frozenset(row.get("flags", ())),
-        mask_mode=row.get("evex", {}).get("mask_mode"),
+        mask_mode=(row.get("evex") or row.get("mvex") or {}).get("mask_mode"),
         sibling_claims=frozenset(),
     )
 
@@ -156,12 +156,7 @@ def _selected_by_decoder_modes(definition):
 
 
 def _kept(definition):
-    return (
-        definition.filters.get("mode") != "!64"
-        and definition.encoding != "mvex"
-        and definition.extension not in KNC_EXTENSIONS
-        and _selected_by_decoder_modes(definition)
-    )
+    return definition.filters.get("mode") != "!64" and _selected_by_decoder_modes(definition)
 
 
 def _always_satisfied(name):

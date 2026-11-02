@@ -32,7 +32,9 @@ class VerificationTest(unittest.TestCase):
             self.instance(self.form("add", 64, opcode=0x01, modrm_mod="!3"), [Mem("rbx"), Reg("rax")], ("lock",)),
             self.instance(self.form("jmp", 64, opcode=0xE9, feature_amd="1"), [Target("taken")], ("bnd",)),
             self.instance(self.form("movsb", mandatory_prefix="f3"), []),
+            self.instance(self.form("vaddps", encoding="mvex", modrm_mod="3", mvex_e="0"), [Reg("zmm17"), Reg("k1"), Reg("zmm2"), Reg("zmm31")]),
             self.instance(self.form("vaddps", encoding="evex", vector_length="512", modrm_mod="3", evex_b="0"), [Reg("zmm17"), Reg("k1"), Reg("zmm20"), Reg("zmm31")]),
+            self.instance(self.form("jkzd", opcode=0x74), [Reg("k1"), Target("taken")]),
         ])
 
     def test_names_the_form(self):
