@@ -1,14 +1,15 @@
 """The instruction suite's commands: `instructions-bundle`, which packs what a recording host needs, and
 `instructions-import`, which checks a recording and commits it.
 
-`generate(decoder)` builds every test group's instances and case specs from the database: the set's forms, and the
-first form of each definition outside the set. `bundle` writes into a new directory, for each group with cases to
-record (`recordable_groups`), `<group>/<group>` (the guest program, linked at the image base its caller gives),
-`<group>/<group>.inputs` and `<group>/libinstructionhost.so` (the native driver); the self-test the same way in
-`self-test/`, with `expected.json`; `record.py` with the `instructions` modules it imports; and `groups.json`, which
-gives the `/proc/cpuinfo` flags each group needs (`CPU_FLAGS`). The inputs leave out the cases
-`cases.expectation_written` names and keep the other cases' indices, so a group with no other case, such as every
-group outside the set, is not bundled.
+`generate(decoder, groups)` builds the instances and case specs of the test groups it names, or of every group, from the
+database: the set's forms, and the first form of each definition outside the set. It chooses the forms of the groups
+before it builds any instance, and a group's instances and specs do not depend on the other groups'. `bundle` writes
+into a new directory, for each group with cases to record (`recordable_groups`), `<group>/<group>` (the guest program,
+linked at the image base its caller gives), `<group>/<group>.inputs` and `<group>/libinstructionhost.so` (the native
+driver); the self-test the same way in `self-test/`, with `expected.json`; `record.py` with the `instructions` modules
+it imports; and `groups.json`, which gives the `/proc/cpuinfo` flags each group needs (`CPU_FLAGS`). The inputs leave
+out the cases `cases.expectation_written` names and keep the other cases' indices, so a group with no other case, such
+as every group outside the set, is not bundled.
 `recording_header` gives the fingerprints of a group's assembly and of the input records its recording ran.
 
 `import_bundle` checks the results in the bundle's `results/` against the bundle: each group's results carry its inputs'
@@ -90,12 +91,15 @@ class SuiteError(Exception):
     pass
 
 
-def generate(decoder):
+def generate(decoder, groups=None):
     definitions = database.load()
     forms = [form for form in database.forms(definitions) if database.in_set(form.definition)]
     outside = [database.forms([definition])[0] for definition in definitions if not database.in_set(definition)]
+    candidates = forms + outside
+    selected = set(selected_groups(groups, {database.test_group(form) for form in candidates}))
+    chosen = [form for form in candidates if database.test_group(form) in selected]
     by_group = defaultdict(list)
-    for instance in cases.instances(forms + outside, decoder):
+    for instance in cases.instances(chosen, decoder):
         by_group[database.test_group(instance.form)].append(instance)
     specs = {group: cases.case_specs(members) for group, members in by_group.items()}
     return forms, dict(by_group), specs
@@ -271,7 +275,8 @@ def read_recording(path, header):
 def bundle_command(args, guest_flags, guest_base):
     decode = decoder.from_environment()
     try:
-        counts = bundle(args.output, args.clang, args.group, generate(decode), decode, guest_flags, guest_base)
+        counts = bundle(args.output, args.clang, args.group, generate(decode, args.group), decode, guest_flags,
+                        guest_base)
     except SuiteError as error:
         raise SystemExit(str(error)) from error
     for group, count in counts.items():

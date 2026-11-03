@@ -201,7 +201,7 @@ def _report(group, mode, judged, by_form, stops, lift_report, elapsed):
 
 
 def run_groups(toolchain, groups, float_modes, unoptimized, work):
-    _, instances, specs = suite.generate(decoder.from_environment())
+    _, instances, specs = suite.generate(decoder.from_environment(), groups)
     passed = True
     for group in suite.selected_groups(groups, instances):
         guest = _guest(toolchain, work, group, instances[group], specs[group])

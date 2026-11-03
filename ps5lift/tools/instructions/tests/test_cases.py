@@ -8,10 +8,10 @@ import unittest
 from collections import defaultdict
 from pathlib import Path
 
-from instructions import cases, database, decoder, records, values
+from instructions import cases, database, decoder, program, records, suite, values
 from instructions.cases import BlockOffset
 from instructions.encoding import Mem
-from instructions.tests.support import find_form, generate, generated
+from instructions.tests.support import fake_layout, find_form, generate, generated
 
 CPUID_SOURCE = Path(__file__).resolve().parents[3] / "runtime" / "src" / "Cpuid.cpp"
 RUNTIME_INCLUDE = Path(__file__).resolve().parents[3] / "runtime" / "include"
@@ -174,6 +174,19 @@ class CasesTest(unittest.TestCase):
         _, second_instances, second_specs = generate()
         self.assertEqual(first_instances, second_instances)
         self.assertEqual(first_specs, second_specs)
+
+    def test_selected_groups_generate_as_in_the_whole_suite(self):
+        _, every_instance, every_spec = generated()
+        selected = ("base", "x87", "hint", "outside-privileged")
+        _, instances, specs = suite.generate(decoder.from_environment(), selected)
+        self.assertEqual(sorted(instances), sorted(selected))
+        self.assertEqual(sorted(specs), sorted(selected))
+        for group in selected:
+            with self.subTest(group=group):
+                self.assertEqual(program.emit(group, instances[group]), program.emit(group, every_instance[group]))
+                layout = fake_layout(every_instance[group])
+                self.assertEqual(records.pack_input_records(program.case_inputs(layout, specs[group])),
+                                 records.pack_input_records(program.case_inputs(layout, every_spec[group])))
 
     def test_every_form_has_cases(self):
         forms, instances, specs = generated()
