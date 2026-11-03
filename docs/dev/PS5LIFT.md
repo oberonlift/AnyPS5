@@ -85,6 +85,24 @@ Several libraries can go into one file (`ps5lift.py bridges libc libkernel --any
 
 The bridges call AnyPS5's libraries as AnyPS5's own CMake build makes them with `ANYPS5_GUEST_LIFTED`: the test build builds AnyPS5 in `build/anyps5`, whose `core/libs/libs/unpatched` holds each library as a shared object before NID patching. `tools/ps5lift.py libc-tests` runs upstream's libc, socket and resolver tests against those libraries, and `tools/ps5lift.py libc-fixture` lifts a guest that calls the libraries through the generated bridges; ctest runs both.
 
+## Instruction tests
+
+The instruction suite ([the design](PS5LIFT_INSTRUCTION_TESTS.md)) generates cases for every instruction of the PS5's CPU, runs them on x86-64 hardware to record the expected results, and runs the same guest programs lifted to compare. `tools/ps5lift.py instructions` runs the lifted side; it needs `ps5lift`, the compilers and `ps5lift_decode`, the decoder tool that tests build, whose path is in `PS5LIFT_DECODE`:
+
+```sh
+PS5LIFT_DECODE=build/tests/ps5lift_decode python3 tools/ps5lift.py instructions \
+    --ps5lift build/lifter/ps5lift --clang clang --clangxx clang++ --triple aarch64-unknown-linux-gnu
+```
+
+It prints one `PASS` or `FAIL` line per form, then the failing cases, and exits 0 only when every case passes. With no other option it runs every test group in both floating-point modes. `--group` runs one group and can be repeated; the groups are the extension names in lower case (`base`, `x87`, `sse`, `avx2`, `fma` and so on), `hint`, `sse4a`, and the four groups outside the set, `outside-not-on-ps5`, `outside-privileged`, `outside-segment-tables` and `outside-console-kernel`. `--float exact` or `--float fast` runs one floating-point mode, and `--unoptimized-lift` lifts with `-O0`. ctest registers only the groups whose every case passes in all four modes (exact and fast, lifted with and without optimization), as `instructions_<group>_<optimized|unoptimized>_<exact|fast>_<arch>` (`PS5LIFT_INSTRUCTION_GROUPS` in `tests/CMakeLists.txt`); [TechnicalDebt.md](TechnicalDebt.md) lists the others.
+
+The recordings are made on an x86-64 Linux host and committed in `tests/instructions/recordings`:
+
+1. `python3 tools/ps5lift.py instructions-bundle --output DIR --clang clang` links every group's guest program and the native driver for x86-64 and writes them with the inputs, the recorder and the self-test into `DIR`, a new directory. `--group` limits the groups.
+2. Copy `DIR` to the recording host. There, `python3 DIR/record.py --self-test` runs the self-test, a small guest program whose results only a working driver on a working host gives; it records nothing.
+3. `python3 DIR/record.py` records every group in the bundle (`--group` limits them) and writes `DIR/results`. It first runs the self-test, and it refuses, naming the flags, a group that needs a `/proc/cpuinfo` flag the host lacks; nothing is recorded until `--group` leaves that group out.
+4. Copy `DIR/results` back into `DIR` on the development machine and run `python3 tools/ps5lift.py instructions-import DIR`. It checks each group's results against the bundle (fingerprints of the program and inputs, one result per case, none crashed or timed out) and only then writes `tests/instructions/recordings/<group>.results.xz`.
+
 ## Benchmark
 
 `tools/ps5lift.py bench` times five memory-heavy kernels (streaming, pointer chasing, struct copies, a hash table and heap sort) built natively, natively without vectorization, and lifted with each memory model, and checks that every build computes the same results:
