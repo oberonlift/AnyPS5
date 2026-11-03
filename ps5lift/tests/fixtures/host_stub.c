@@ -20,3 +20,8 @@ unsigned long host_ticks(void) {
     __asm__ volatile("syscall" : "=a"(result) : "a"(228), "D"(1), "S"(&time) : "rcx", "r11", "memory");
     return (unsigned long)(time.seconds * 1000000000l + time.nanoseconds);
 }
+
+void host_clear_fs_base(void) {
+    long number = 158;
+    __asm__ volatile("syscall" : "+a"(number) : "D"(0x1002), "S"(0) : "rcx", "r11", "memory");
+}

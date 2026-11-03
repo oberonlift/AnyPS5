@@ -38,6 +38,7 @@ constexpr std::size_t HostStackSize = 512ull << 20;
 constexpr std::uint64_t TlsSize = 64ull << 10;
 constexpr std::uint32_t ConsoleMxcsr = 0x9fc0;
 constexpr std::uint16_t ConsoleX87Control = 0x037f;
+constexpr char InterruptMnemonic[] = "int ";
 
 std::uint64_t PageSize() {
     return static_cast<std::uint64_t>(sysconf(_SC_PAGESIZE));
@@ -56,6 +57,15 @@ std::atomic<Ps5LiftStopHandler> StopHandler{nullptr};
     }
 }
 
+[[noreturn]] void ConsoleKernel(const Ps5LiftState* state, const std::uint64_t address, const char* mnemonic) {
+    if (std::strncmp(mnemonic, InterruptMnemonic, sizeof(InterruptMnemonic) - 1) != 0) {
+        ps5lift_fail("%s at 0x%" PRIx64 " enters the console's kernel, which PS5 code reaches only through libkernel", mnemonic, address);
+    }
+    std::uint32_t code = 0;
+    std::memcpy(&code, reinterpret_cast<const void*>(state->FsBase + 0x28), sizeof(code));
+    ps5lift_fail("%s at 0x%" PRIx64 " enters the console's kernel, which PS5 code reaches only through libkernel, with 0x%08x at %%fs:0x28", mnemonic, address, code);
+}
+
 void DefaultStopHandler(Ps5LiftState* state, const std::uint32_t kind, const std::uint64_t address, const std::uint64_t detail, const char* mnemonic) {
     switch (kind) {
     case PS5LIFT_STOP_DIVIDE_ERROR:
@@ -66,11 +76,8 @@ void DefaultStopHandler(Ps5LiftState* state, const std::uint32_t kind, const std
         InvalidOpcode(address, detail, mnemonic);
     case PS5LIFT_STOP_GENERAL_PROTECTION:
         ps5lift_fail("general-protection fault: %s at 0x%" PRIx64 " is privileged on the PS5", mnemonic, address);
-    case PS5LIFT_STOP_CONSOLE_KERNEL: {
-        std::uint32_t code = 0;
-        std::memcpy(&code, reinterpret_cast<const void*>(state->FsBase + 0x28), sizeof(code));
-        ps5lift_fail("%s at 0x%" PRIx64 " enters the console's kernel, which PS5 code reaches only through libkernel, with 0x%08x at %%fs:0x28", mnemonic, address, code);
-    }
+    case PS5LIFT_STOP_CONSOLE_KERNEL:
+        ConsoleKernel(state, address, mnemonic);
     case PS5LIFT_STOP_MISSING_TRANSLATION:
         ps5lift_fail("reached unsupported instruction %s at 0x%" PRIx64, mnemonic, address);
     case PS5LIFT_STOP_SEGMENT_TABLES:

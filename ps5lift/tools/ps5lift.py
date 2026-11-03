@@ -47,7 +47,7 @@ GUEST_FLAGS = [
 ]
 
 GUEST_BASE = 0xFC00000000
-CONSOLE_ONLY = {"cpu", "stop_not_on_ps5", "stop_privileged", "stop_segment_tables", "stop_console_kernel"}
+CONSOLE_ONLY = {"cpu", "stop_not_on_ps5", "stop_privileged", "stop_segment_tables", "stop_console_kernel", "stop_syscall"}
 SSE4A_FIXTURES = {"basic"}
 PROGRAM_TIMEOUT = 300
 GUEST_MODULES = {"modules": ("guestmodule", "module.c")}
