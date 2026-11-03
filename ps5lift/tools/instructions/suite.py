@@ -15,11 +15,10 @@ as every group outside the set, is not bundled.
 `import_bundle` checks the results in the bundle's `results/` against the bundle: each group's results carry its inputs'
 fingerprints, hold one result for each of its cases in order, with each case's console-defined flag, and none crashed,
 timed out or ended by a host signal. Only when every group passes does it write each group's results as
-`<group>.results.xz` among the recordings. `read_recording` reads one back, refusing it unless it carries the
-fingerprints of the program and inputs it is to be compared with."""
+`<group>.results.txt` among the recordings, as the text `records.recording_text` gives. `read_recording` reads one back,
+refusing it unless it carries the fingerprints of the program and inputs it is to be compared with."""
 import hashlib
 import json
-import lzma
 import shutil
 import subprocess
 import tempfile
@@ -38,8 +37,7 @@ SELF_TEST = "self-test"
 GROUPS_FILE = "groups.json"
 RESULTS = "results"
 EXPECTED = "expected.json"
-RECORDING_SUFFIX = ".results.xz"
-RECORDING_PRESET = 9 | lzma.PRESET_EXTREME
+RECORDING_SUFFIX = ".results.txt"
 DRIVER = f"lib{program.HOST_LIBRARY}.so"
 DRIVER_FLAGS = (
     "--target=x86_64-unknown-linux-gnu", "-std=c17", "-O2", "-Wall", "-Wextra", "-Werror", "-fPIC", "-shared",
@@ -217,9 +215,8 @@ def _check_group(bundle_directory, group):
         problems.append(f"{inputs_path} does not match the inputs fingerprint in its own header")
     if not results_path.exists():
         return None, problems + [f"{results_path} does not exist: record {group}"]
-    data = results_path.read_bytes()
     try:
-        found, results = records.read_results(data)
+        found, results = records.read_results(results_path.read_bytes())
     except records.RecordError as error:
         return None, problems + [f"{results_path} is not a result file: {error}"]
     if found != header:
@@ -242,7 +239,7 @@ def _check_group(bundle_directory, group):
         ended = [result.case for result in results if result.outcome is outcome]
         if ended:
             problems.append(f"{results_path}: {outcome.name} in case {_listed(ended)}")
-    return data, problems
+    return records.recording_text(found, results), problems
 
 
 def import_bundle(bundle_directory, recordings):
@@ -258,15 +255,15 @@ def import_bundle(bundle_directory, recordings):
         raise SuiteError("the recording is not imported:\n" + "\n".join(problems))
     recordings.mkdir(exist_ok=True)
     sizes = {}
-    for group, data in accepted.items():
+    for group, text in accepted.items():
         path = recordings / f"{group}{RECORDING_SUFFIX}"
-        path.write_bytes(lzma.compress(data, preset=RECORDING_PRESET))
+        path.write_text(text)
         sizes[group] = path.stat().st_size
     return sizes
 
 
 def read_recording(path, header):
-    found, results = records.read_results(lzma.decompress(Path(path).read_bytes()))
+    found, results = records.read_recording_text(Path(path).read_text())
     if found.program != header.program:
         raise SuiteError(f"record again: the guest program differs from the recording's ({path})")
     if found.inputs != header.inputs:

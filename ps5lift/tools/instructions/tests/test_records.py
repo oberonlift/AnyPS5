@@ -90,6 +90,52 @@ class RecordsTest(unittest.TestCase):
         self.assertEqual(data[:8], b"PS5LRES1")
         self.assertEqual(records.read_results(data), (_header(), results))
 
+    def test_recording_text_round_trip(self):
+        results = [
+            Result(0, Outcome.COMPLETED, 0, 0, 0, {0: 5, 1024: 2**64 - 1}, {16: 9}, None),
+            Result(1, Outcome.PAGE_FAULT, 2, 0x1000, 0x20, {}, {}, None),
+            Result(2, Outcome.COMPLETED, 0, 0, 0, {8: 1}, {}, (1, 2**64 - 1, 3)),
+            Result(7, Outcome.BREAKPOINT, 0, 0xABCDEF, 0, {}, {}, ()),
+        ]
+        text = records.recording_text(_header(), results)
+        self.assertEqual(records.read_recording_text(text), (_header(), results))
+        self.assertEqual(records.read_recording_text(text), records.read_results(records.write_results(_header(), results)))
+
+    def test_recording_text_is_one_line_per_case(self):
+        results = [
+            Result(3, Outcome.COMPLETED, 0, 0, 0, {1024: 2**64 - 1, 8: 1}, {16: 9}, None),
+            Result(4, Outcome.PAGE_FAULT, 2, 0x1000, 0x20, {}, {}, (10, 11)),
+            Result(5, Outcome.COMPLETED, 0, 0, 0, {}, {}, ()),
+        ]
+        lines = records.recording_text(_header(), results).split("\n")
+        self.assertEqual(lines[0], f"PS5LRES1 {bytes(range(32)).hex()} {bytes(range(100, 132)).hex()} 3")
+        self.assertEqual(lines[1:], [
+            "3\t0\t0\t0\t0\t8:1 400:ffffffffffffffff\t10:9",
+            "4\t5\t2\t1000\t20\t-\t-\t* a b",
+            "5\t0\t0\t0\t0\t-\t-\t*",
+            "",
+        ])
+
+    def test_recording_text_rejects_malformed_text(self):
+        results = [Result(0, Outcome.COMPLETED, 0, 0, 0, {8: 1}, {16: 2}, (3,))]
+        text = records.recording_text(_header(), results)
+        for name, damaged in (
+            ("magic", text.replace("PS5LRES1", "PS5LRES2", 1)),
+            ("no final newline", text[:-1]),
+            ("missing case", text.replace(" 1\n", " 2\n", 1)),
+            ("extra case", text + text.split("\n")[1] + "\n"),
+            ("unknown outcome", text.replace("0\t0\t0\t0\t0\t", f"0\t{len(Outcome)}\t0\t0\t0\t", 1)),
+            ("uppercase hex", text.replace("8:1", "8:A", 1)),
+            ("prefixed hex", text.replace("8:1", "8:0x1", 1)),
+            ("duplicate offset", text.replace("8:1", "8:1 8:2", 1)),
+            ("too wide a value", text.replace("8:1", "8:" + "f" * 17, 1)),
+            ("short fingerprint", text.replace(bytes(range(32)).hex(), "00", 1)),
+            ("missing column", text.replace("\t10:2", "", 1)),
+            ("empty words", text.replace("10:2", "", 1)),
+        ):
+            with self.subTest(name), self.assertRaises(records.RecordError):
+                records.read_recording_text(damaged)
+
     def test_results_reject_truncation(self):
         data = records.write_results(_header(), [Result(0, Outcome.COMPLETED, 0, 0, 0, {8: 1}, {}, None)])
         with self.assertRaises(records.RecordError):

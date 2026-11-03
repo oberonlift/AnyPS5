@@ -1,6 +1,5 @@
 import hashlib
 import json
-import lzma
 import shutil
 import struct
 import subprocess
@@ -151,12 +150,13 @@ class ImportTest(unittest.TestCase):
             suite.import_bundle(self.bundle, self.recordings)
         self.assertEqual(list(self.recordings.iterdir()), [])
 
-    def test_import_compresses_the_results(self):
-        data = self._results([self._completed(case) for case in self.CASES])
+    def test_import_writes_the_results_as_text(self):
+        results = [self._completed(case) for case in self.CASES]
+        self._results(results)
         sizes = suite.import_bundle(self.bundle, self.recordings)
-        recording = self.recordings / "alpha.results.xz"
+        recording = self.recordings / "alpha.results.txt"
         self.assertEqual(sizes, {"alpha": recording.stat().st_size})
-        self.assertEqual(lzma.decompress(recording.read_bytes()), data)
+        self.assertEqual(recording.read_text(), records.recording_text(self.header, results))
 
     def test_import_refuses_a_missing_case(self):
         self._results([self._completed(case) for case in self.CASES[:2]])

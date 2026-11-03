@@ -1,5 +1,4 @@
 import dataclasses
-import lzma
 import struct
 import tempfile
 import unittest
@@ -457,8 +456,8 @@ class RecordingTest(unittest.TestCase):
         header = Header(bytes(range(32)), bytes(range(32, 64)))
         results = [Result(0, Outcome.COMPLETED, 0, 0, 0, {8: 1}, {}, None)]
         with tempfile.TemporaryDirectory() as directory:
-            path = Path(directory) / "alpha.results.xz"
-            path.write_bytes(lzma.compress(records.write_results(header, results)))
+            path = Path(directory) / "alpha.results.txt"
+            path.write_text(records.recording_text(header, results))
             self.assertEqual(suite.read_recording(path, header), {0: results[0]})
             with self.assertRaisesRegex(suite.SuiteError,
                                         "record again: the guest program differs from the recording's"):

@@ -7,13 +7,18 @@ lists the cases, and the result file records what each one did. Everything is li
 out `UNRECORDED_SLOT_RANGES`, the bytes of the stored FXSAVE image that no comparison reads (the pointer fields,
 MXCSR_MASK, the XMM area, which the YMM slots hold, and the reserved area): a driver copies the input's bytes over them
 before it compares the slots. A fault's result holds no words. A console-defined case's result says so, followed by the
-values the console defines for its inputs; the native driver knows none, and gives none.
+values the console defines for its inputs; the native driver knows none, and gives none. The committed recordings are
+the text form of the result file (`recording_text`): a header line of the magic, the two fingerprints in hex and the
+case count, then one line per case of tab-separated columns: the case index and outcome in decimal, the detail, address
+and data in hex, the slot words and the memory words as space-separated `offset:value` pairs in hex (`-` for none),
+and, for a console-defined case, `*` followed by the console's values in hex. Every line ends with a newline.
 
 A driver reads the input file that `INPUTS_VARIABLE` names, starting at the case at the position `FIRST_VARIABLE` gives,
 and appends each case's result to the result file that `RESULTS_VARIABLE` names, whose header the runner writes. Once it
 is set up and about to run its first case, it writes one byte to the file descriptor `READY_VARIABLE` gives and closes
 it. It exits with `DRIVER_FAILED` when it cannot run cases at all. `header_text` emits `records.h` for the drivers, so
 the C and Python sides cannot drift apart."""
+import re
 import struct
 from dataclasses import dataclass
 from enum import IntEnum
@@ -467,6 +472,95 @@ def read_result_prefix(data):
     if len(results) > count:
         raise RecordError(f"the result file holds {len(results)} results, more than the {count} its header gives")
     return header, results, end
+
+
+_HEX = re.compile(r"[0-9a-f]+")
+
+
+def _hex(text, bits, what):
+    if not _HEX.fullmatch(text) or int(text, 16) >> bits:
+        raise RecordError(f"{what} {text!r} is not lowercase hex of at most {bits} bits")
+    return int(text, 16)
+
+
+def _words_text(words):
+    return " ".join(f"{offset:x}:{value:x}" for offset, value in sorted(words.items())) or "-"
+
+
+def _result_line(result):
+    columns = [
+        str(result.case), str(int(result.outcome)), f"{result.detail:x}", f"{result.address:x}", f"{result.data:x}",
+        _words_text(result.slot_words), _words_text(result.memory_words),
+    ]
+    if result.expected is not None:
+        columns.append(" ".join(["*"] + [f"{value:x}" for value in result.expected]))
+    return "\t".join(columns)
+
+
+def recording_text(header, results):
+    _pack_header(RESULT_MAGIC, header, len(results))
+    first = f"{RESULT_MAGIC.decode()} {header.program.hex()} {header.inputs.hex()} {len(results)}"
+    return "\n".join([first] + [_result_line(result) for result in results]) + "\n"
+
+
+def _decimal(text, bits, what):
+    if not text.isascii() or not text.isdigit() or int(text) >> bits:
+        raise RecordError(f"{what} {text!r} is not a decimal number of at most {bits} bits")
+    return int(text)
+
+
+def _read_words_text(text, case, what):
+    if text == "-":
+        return {}
+    words = {}
+    for pair in text.split(" "):
+        offset, separator, value = pair.partition(":")
+        if not separator:
+            raise RecordError(f"case {case}: {what} word {pair!r} is not offset:value")
+        offset = _hex(offset, 16, f"case {case}: {what} offset")
+        if offset in words:
+            raise RecordError(f"case {case} holds word offset {offset} twice")
+        words[offset] = _hex(value, 64, f"case {case}: {what} value")
+    return words
+
+
+def _read_result_line(line):
+    columns = line.split("\t")
+    if len(columns) not in (7, 8):
+        raise RecordError(f"a case line holds {len(columns)} columns, not 7 or 8: {line!r}")
+    case = _decimal(columns[0], 32, "the case index")
+    outcome = _decimal(columns[1], 8, f"case {case}: the outcome")
+    if outcome not in _OUTCOMES:
+        raise RecordError(f"case {case} has outcome {outcome}, which is none of {[item.value for item in Outcome]}")
+    expected = None
+    if len(columns) == 8:
+        marker, *values = columns[7].split(" ")
+        if marker != "*":
+            raise RecordError(f"case {case}: the console values {columns[7]!r} do not start with *")
+        expected = tuple(_hex(value, 64, f"case {case}: console value") for value in values)
+    return Result(
+        case, Outcome(outcome), _hex(columns[2], 16, f"case {case}: the detail"),
+        _hex(columns[3], 64, f"case {case}: the address"), _hex(columns[4], 64, f"case {case}: the data"),
+        _read_words_text(columns[5], case, "slot"), _read_words_text(columns[6], case, "memory"), expected,
+    )
+
+
+def read_recording_text(text):
+    if not text.endswith("\n"):
+        raise RecordError("the recording does not end with a newline")
+    first, *lines = text[:-1].split("\n")
+    fields = first.split(" ")
+    if len(fields) != 4 or fields[0] != RESULT_MAGIC.decode():
+        raise RecordError(f"the recording starts with {first!r}, not {RESULT_MAGIC.decode()} and three more fields")
+    fingerprints = []
+    for name, field in (("program", fields[1]), ("inputs", fields[2])):
+        if not _HEX.fullmatch(field) or len(field) != 2 * FINGERPRINT_SIZE:
+            raise RecordError(f"the {name} fingerprint {field!r} is not {FINGERPRINT_SIZE} bytes of lowercase hex")
+        fingerprints.append(bytes.fromhex(field))
+    count = _decimal(fields[3], 32, "the case count")
+    if len(lines) != count:
+        raise RecordError(f"the recording holds {len(lines)} cases, not the {count} its header gives")
+    return Header(*fingerprints), [_read_result_line(line) for line in lines]
 
 
 _C_TEMPLATE = """#ifndef PS5LIFT_INSTRUCTION_RECORDS_H

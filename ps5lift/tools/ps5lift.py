@@ -1630,7 +1630,7 @@ def main():
     bundle.add_argument("--group", action="append", help="a test group to bundle; every group with cases to record by default")
     bundle.set_defaults(handler=lambda args: suite.bundle_command(args, GUEST_FLAGS, GUEST_BASE))
 
-    importer = commands.add_parser("instructions-import", help="check a recording and compress it into the repository", description="Check the results record.py wrote into BUNDLE/results against the bundle, and write each group's as tests/instructions/recordings/GROUP.results.xz")
+    importer = commands.add_parser("instructions-import", help="check a recording and store it as text in the repository", description="Check the results record.py wrote into BUNDLE/results against the bundle, and write each group's as tests/instructions/recordings/GROUP.results.txt")
     importer.add_argument("bundle", type=Path, help="the bundle directory, with the recording host's results/ copied into it")
     importer.set_defaults(handler=suite.import_command)
 
