@@ -987,8 +987,8 @@ def lift(ps5lift, guest, lifted, triple, flags):
     return run([ps5lift, guest, "-o", lifted, "--triple", triple, *flags]).stderr.strip()
 
 
-def link_lifted(clangxx, triple, program, inputs, runtime):
-    run([clangxx, f"--target={triple}", "-std=c++20", "-O1", f"-I{ROOT / 'runtime' / 'include'}", "-fuse-ld=lld", *inputs, *runtime, "-pthread", "-o", program])
+def link_lifted(clangxx, triple, program, inputs, runtime, flags=()):
+    run([clangxx, f"--target={triple}", "-std=c++20", "-O1", f"-I{ROOT / 'runtime' / 'include'}", "-fuse-ld=lld", *flags, *inputs, *runtime, "-pthread", "-o", program])
 
 
 def run_lifted(runner, program, label, timeout=PROGRAM_TIMEOUT, cwd=None):
@@ -1482,7 +1482,7 @@ def instructions_command(args):
     toolchain = lifted.Toolchain(
         ps5lift=Path(args.ps5lift), clang=args.clang, clangxx=args.clangxx, triple=args.triple, guest_flags=tuple(GUEST_FLAGS),
         guest_base=GUEST_BASE, runner=tuple(runner), lift_flags=tuple(lifter_target(args.triple, runner, cpu)),
-        runtime=tuple(runtime_link_arguments(args.ps5lift, args.triple, cpu, args.clang, args.clangxx)), include=ROOT / "runtime" / "include",
+        runtime=tuple(runtime_link_arguments(args.ps5lift, args.triple, cpu, args.clang, args.clangxx)), lift=lift, link=link_lifted,
     )
     return lifted.instructions_command(args, toolchain)
 

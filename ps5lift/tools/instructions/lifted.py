@@ -2,7 +2,8 @@
 
 For each group it links the guest program as the recording host ran it, checks the group's recording against that
 program and its inputs (`suite.read_recording`), and for each `--float` mode lifts the program (`-O0` with
-`--unoptimized-lift`), links it with `LiftedDriver.cpp` and the runtime, and runs every case through the runner, the
+`--unoptimized-lift`), links it with `LiftedDriver.cpp` and the runtime (both through the toolchain's `lift` and `link`,
+the shared helpers of `ps5lift.py`), and runs every case through the runner, the
 cases without a recording included. `compare` judges each case against its expectation (`expectations`), and each
 form by the checks that span its cases (`compare.form_mismatches`).
 
@@ -13,10 +14,10 @@ group's outcomes. The command exits 0 only when every case and every form passes
 import collections
 import os
 import shutil
-import subprocess
 import tempfile
 import time
 from dataclasses import dataclass
+from typing import Callable
 from pathlib import Path
 
 from . import compare, decoder, expectations, program, records, runner, suite
@@ -24,7 +25,7 @@ from .compare import Verdict
 from .state import Case, State
 
 LIFTED_DRIVER = suite.TESTS / "LiftedDriver.cpp"
-DRIVER_FLAGS = ("-std=c++20", "-O2", "-Wall", "-Wextra", "-Werror", "-fuse-ld=lld", "-pthread")
+DRIVER_FLAGS = ("-O2", "-Wall", "-Wextra", "-Werror")
 SHOWN_PER_FORM = 5
 RUN_TIMEOUT = 30
 _COUNTED = (Verdict.MISMATCHED, Verdict.MISSING, Verdict.STOPPED, Verdict.CRASHED, Verdict.TIMED_OUT)
@@ -45,7 +46,8 @@ class Toolchain:
     runner: tuple
     lift_flags: tuple
     runtime: tuple
-    include: Path
+    lift: Callable
+    link: Callable
 
 
 @dataclass(frozen=True)
@@ -66,14 +68,6 @@ class Judged:
     verdict: Verdict
     mismatches: list
     actual: State
-
-
-def _run(command, what):
-    completed = subprocess.run([str(part) for part in command], capture_output=True, text=True)
-    if completed.returncode != 0:
-        raise LiftError(f"{what} failed with exit code {completed.returncode}:\n$ {' '.join(map(str, command))}\n"
-                        f"{completed.stdout}{completed.stderr}")
-    return completed
 
 
 def _guest(toolchain, work, group, instances, specs):
@@ -105,13 +99,11 @@ def _recording(guest):
 def _lifted_program(toolchain, guest, float_mode, unoptimized):
     directory = guest.elf.parent
     archive = directory / f"{guest.group}-{float_mode}.a"
-    lift = [toolchain.ps5lift, guest.elf, "-o", archive, "--triple", toolchain.triple, "--float", float_mode,
-            *toolchain.lift_flags, *(["-O0"] if unoptimized else [])]
-    report = _run(lift, f"lifting {guest.group}").stderr.strip()
+    report = toolchain.lift(toolchain.ps5lift, guest.elf, archive, toolchain.triple,
+                            ["--float", float_mode, *toolchain.lift_flags, *(["-O0"] if unoptimized else [])])
     executable = directory / f"{guest.group}-{float_mode}"
-    link = [toolchain.clangxx, f"--target={toolchain.triple}", *DRIVER_FLAGS, f"-I{toolchain.include}",
-            f"-I{directory}", LIFTED_DRIVER, archive, *toolchain.runtime, "-o", executable]
-    _run(link, f"linking the lifted {guest.group}")
+    toolchain.link(toolchain.clangxx, toolchain.triple, executable, [LIFTED_DRIVER, archive], toolchain.runtime,
+                   [*DRIVER_FLAGS, f"-I{directory}"])
     return executable, report
 
 
