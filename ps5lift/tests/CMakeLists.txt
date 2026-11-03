@@ -102,6 +102,34 @@ foreach(triple IN LISTS PS5LIFT_TEST_TRIPLES)
     endif()
 endforeach()
 
+set(PS5LIFT_INSTRUCTION_GROUPS
+        outside-not-on-ps5 outside-privileged outside-segment-tables outside-console-kernel
+        adox_adcx amd3dnow_prefetch avxaes bmi1 clflushopt clfsh clwb hint lzcnt movbe pause rdpid rdrand rdseed rdtscp)
+foreach(triple IN LISTS PS5LIFT_TEST_TRIPLES)
+    string(REGEX REPLACE "-.*" "" arch ${triple})
+    foreach(group IN LISTS PS5LIFT_INSTRUCTION_GROUPS)
+        foreach(lift optimized unoptimized)
+            set(lift_option)
+            if(lift STREQUAL "unoptimized")
+                set(lift_option --unoptimized-lift)
+            endif()
+            foreach(float exact fast)
+                add_test(NAME instructions_${group}_${lift}_${float}_${arch}
+                        COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tools/ps5lift.py instructions
+                                --ps5lift $<TARGET_FILE:ps5lift>
+                                --clang ${CMAKE_C_COMPILER}
+                                --clangxx ${CMAKE_CXX_COMPILER}
+                                --triple ${triple}
+                                --group ${group}
+                                --float ${float}
+                                ${lift_option})
+                set_tests_properties(instructions_${group}_${lift}_${float}_${arch} PROPERTIES
+                        ENVIRONMENT PS5LIFT_DECODE=$<TARGET_FILE:ps5lift_decode>)
+            endforeach()
+        endforeach()
+    endforeach()
+endforeach()
+
 include(ExternalProject)
 
 set(PS5LIFT_HOST_TRIPLE ${PS5LIFT_HOST_ARCH}-unknown-linux-gnu)
