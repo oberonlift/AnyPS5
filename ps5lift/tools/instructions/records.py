@@ -403,8 +403,14 @@ def write_results(header, results):
     return result_file_header(header, len(results)) + b"".join(pack_result(result) for result in results)
 
 
-def _read_words(reader, count):
-    return dict(reader.unpack(_WORD) for _ in range(count))
+def _read_words(reader, case, count):
+    words = {}
+    for _ in range(count):
+        offset, value = reader.unpack(_WORD)
+        if offset in words:
+            raise RecordError(f"case {case} holds word offset {offset} twice")
+        words[offset] = value
+    return words
 
 
 _OUTCOMES = frozenset(Outcome)
@@ -414,8 +420,8 @@ def _read_result(reader):
     case, outcome, console_defined, detail, slot_count, memory_count, address, value = reader.unpack(_RESULT_HEAD)
     if outcome not in _OUTCOMES:
         raise RecordError(f"case {case} has outcome {outcome}, which is none of {[item.value for item in Outcome]}")
-    slot_words = _read_words(reader, slot_count)
-    memory_words = _read_words(reader, memory_count)
+    slot_words = _read_words(reader, case, slot_count)
+    memory_words = _read_words(reader, case, memory_count)
     expected = None
     if console_defined:
         (expected_count,) = reader.unpack(_EXPECTED_COUNT)

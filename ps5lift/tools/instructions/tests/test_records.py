@@ -132,6 +132,15 @@ class RecordsTest(unittest.TestCase):
         with self.assertRaisesRegex(records.RecordError, "outcome"):
             records.read_results(bytes(data))
 
+    def test_duplicate_word_offset_rejected(self):
+        word = records.WORD.struct()
+        for slot_count, memory_count in ((2, 0), (0, 2)):
+            with self.subTest(slot_words=slot_count, memory_words=memory_count):
+                head = records.RESULT_HEAD.struct().pack(5, Outcome.COMPLETED, 0, 0, slot_count, memory_count, 0, 0)
+                data = records.result_file_header(_header(), 1) + head + word.pack(16, 1) + word.pack(16, 2)
+                with self.assertRaisesRegex(records.RecordError, "case 5 .*word offset 16 twice"):
+                    records.read_results(data)
+
     def test_unrecorded_slot_ranges(self):
         self.assertEqual(records.UNRECORDED_SLOT_RANGES, ((6, 24), (28, 32), (160, 416), (416, 512)))
 
