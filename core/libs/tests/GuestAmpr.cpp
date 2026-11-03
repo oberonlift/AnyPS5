@@ -962,7 +962,7 @@ constexpr std::int32_t cpuGpuReadWrite = 0x33;
 constexpr std::int32_t amprReadWrite = 0xC0;
 
 volatile std::uint64_t& At(std::uint64_t address) {
-    return *reinterpret_cast<volatile std::uint64_t*>(address);
+    return *static_cast<volatile std::uint64_t*>(GuestArena::GuestToHost(address));
 }
 
 void TestAmmRangesAboveHintedMaps() {
@@ -982,13 +982,15 @@ void TestAmmRangesAboveHintedMaps() {
     std::uintptr_t arenaBase = 0;
     std::size_t arenaBytes = 0;
     GuestArena::GuestArenaRange_nid_postfix(&arenaBase, &arenaBytes);
-    Require(start >= arenaBase && multimapEnd <= arenaBase + arenaBytes && heap + 4 * step <= start);
+    const auto hostStart = reinterpret_cast<std::uint64_t>(GuestArena::GuestToHost(start));
+    const auto hostEnd = reinterpret_cast<std::uint64_t>(GuestArena::GuestToHost(multimapEnd));
+    Require(hostStart >= arenaBase && hostEnd <= arenaBase + arenaBytes && heap + 4 * step <= hostStart);
 
     for (std::uint64_t hint = heap + step; hint < heap + 4 * step; hint += step) {
         void* mapped = reinterpret_cast<void*>(hint);
         Require(sceKernelMapFlexibleMemory(&mapped, page, 3, 0) == 0);
         Require(reinterpret_cast<std::uint64_t>(mapped) == hint);
-        Require(hint + page <= start || hint >= multimapEnd);
+        Require(hint + page <= hostStart || hint >= hostEnd);
         Require(sceKernelMunmap(reinterpret_cast<std::uint64_t>(mapped), page) == 0);
     }
     Require(sceKernelMunmap(reinterpret_cast<std::uint64_t>(span), page) == 0);
@@ -1144,7 +1146,7 @@ void TestAmm() {
 
 int Protection(std::uint64_t address) {
     int protection = -1;
-    Require(sceKernelQueryMemoryProtection(reinterpret_cast<void*>(address), nullptr, nullptr, &protection) == 0);
+    Require(sceKernelQueryMemoryProtection(GuestArena::GuestToHost(address), nullptr, nullptr, &protection) == 0);
     return protection;
 }
 

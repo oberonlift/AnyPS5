@@ -308,7 +308,7 @@ std::uintptr_t _ammBase(AmmState& state) {
         if (top == 0) throw std::runtime_error("AMM: the guest address space arena has no free virtual address range");
         void* address = reinterpret_cast<void*>(top);
         if (DoReserveVirtual(&address, AmmReservedBytes, GuestMapFixed | GuestMapNoOverwrite, 0) != 0) throw std::runtime_error("AMM: cannot reserve the virtual address range");
-        state.base = reinterpret_cast<std::uintptr_t>(address);
+        state.base = GuestArena::HostToGuest(address);
     }
     return state.base;
 }
@@ -385,12 +385,12 @@ std::vector<AmmPage> _mappedPages(AmmState& state, std::uint64_t address, std::u
 }
 
 void _reserve(std::uint64_t address, std::uint64_t size) {
-    void* target = reinterpret_cast<void*>(address);
+    void* target = GuestArena::GuestToHost(address);
     if (DoReserveVirtual(&target, size, GuestMapFixed, 0) != 0) throw std::runtime_error("AMM: cannot return the range to the reservation");
 }
 
 void _mapRun(std::uint64_t address, std::uint64_t physical, std::uint64_t size, std::int32_t protection) {
-    void* target = reinterpret_cast<void*>(address);
+    void* target = GuestArena::GuestToHost(address);
     if (DoMapDirect(&target, size, _ammHostProtection(protection), GuestMapFixed, static_cast<std::int64_t>(physical), 0) != 0) throw std::runtime_error("AMM: map failed");
 }
 
@@ -416,7 +416,7 @@ void _requirePrt(AmmState& state, std::uint64_t address, std::uint64_t size) {
 
 void _zeroPrt(std::uint64_t address, std::uint64_t size) {
     constexpr int GpuRead = 0x10;
-    void* target = reinterpret_cast<void*>(address);
+    void* target = GuestArena::GuestToHost(address);
     if (DoMapZero(&target, size, GpuRead, GuestMapFixed) != 0) throw std::runtime_error("AMM: cannot map the unbacked PRT pages");
 }
 
@@ -464,7 +464,7 @@ void _ammAllocatePrt(const Apr::AmmProtectCommand& command) {
                 entry.type = command.type;
                 entry.protection = command.protection;
             }
-            if (DoMprotect(reinterpret_cast<void*>(address), bytes, _ammHostProtection(command.protection)) != 0) throw std::runtime_error("AMM: protection change failed");
+            if (DoMprotect(GuestArena::GuestToHost(address), bytes, _ammHostProtection(command.protection)) != 0) throw std::runtime_error("AMM: protection change failed");
         } else {
             try {
                 AmmPool::MapScattered(state, address, bytes, command.type, command.protection, [&](std::uint64_t at, std::uint64_t physical, std::uint64_t size) { _mapRun(at, physical, size, command.protection); });
@@ -540,7 +540,7 @@ void _ammProtect(const Apr::AmmProtectCommand& command, bool type) {
         const int host = _ammHostProtection(pages[first].protection);
         std::size_t last = first + 1;
         while (last < pages.size() && _ammHostProtection(pages[last].protection) == host) ++last;
-        if (DoMprotect(reinterpret_cast<void*>(command.address + first * PS5_PAGE_SIZE), (last - first) * PS5_PAGE_SIZE, host) != 0) throw std::runtime_error("AMM: protection change failed");
+        if (DoMprotect(GuestArena::GuestToHost(command.address + first * PS5_PAGE_SIZE), (last - first) * PS5_PAGE_SIZE, host) != 0) throw std::runtime_error("AMM: protection change failed");
         first = last;
     }
 }

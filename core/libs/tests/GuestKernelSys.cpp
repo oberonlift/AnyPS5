@@ -11,6 +11,7 @@
 #include "SceTypes.hpp"
 #include "prx/libc/include/general/VabiMacros.hpp"
 #include "prx/libc/include/General.hpp"
+#include "prx/libc/include/GuestArena.hpp"
 #include "prx/libc/include/RemoveTree.hpp"
 #include "prx/libkernel/File/include/FileFlags.hpp"
 #include "prx/libkernel/KernelErrors.hpp"
@@ -703,7 +704,7 @@ void CheckAmmWaitCompletion() {
     std::uint32_t id = 0;
     Require(sceAmprAmmSubmitCommandBuffer3(commands.data(), static_cast<std::uint32_t>(bytes), 0, &id) == 0 && id != 0);
     Require(sceKernelWaitCommandBufferCompletion(id) == 0);
-    auto* mapped = reinterpret_cast<volatile std::uint8_t*>(target);
+    auto* mapped = static_cast<volatile std::uint8_t*>(GuestArena::GuestToHost(target));
     *mapped = 0x5A;
     Require(*mapped == 0x5A);
     Require(sceKernelWaitCommandBufferCompletion(id) == 0);
