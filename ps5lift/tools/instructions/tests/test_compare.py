@@ -146,6 +146,34 @@ class FastModeTest(unittest.TestCase):
         copied = completed(scalar, {**_lane(scalar, 0, 0x7FC00001), **_lane(scalar, 0, 0x7FC00002, lane=1)})
         self.assertEqual(fields(judge(scalar, recorded, copied, FAST)), {vector_field(scalar, 0)})
 
+    def test_fast_allowances_for_approximations(self):
+        rsqrt = find_case("sse", primary("rsqrtps"), lambda spec: spec.mxcsr == CONSOLE_MXCSR)
+        rsqrt = with_lanes(rsqrt, 1, 0xBF800000)
+        recorded = completed(rsqrt, _lane(rsqrt, 0, 0xFFC00000))
+        host_nan = completed(rsqrt, _lane(rsqrt, 0, 0x7FC00000))
+        self.assertEqual(judge(rsqrt, recorded, host_nan, FAST), [])
+        self.assertEqual(fields(judge(rsqrt, recorded, host_nan, EXACT)), {vector_field(rsqrt, 0)})
+        scalar = find_case("avx", primary("vrcpss"), lambda spec: spec.mxcsr == CONSOLE_MXCSR)
+        scalar = with_lanes(scalar, 2, 0x7E800000)
+        recorded = completed(scalar, _lane(scalar, 0, 0x00800000))
+        flushed = completed(scalar, _lane(scalar, 0, 0x00000000))
+        self.assertEqual(judge(scalar, recorded, flushed, FAST), [])
+        self.assertEqual(fields(judge(scalar, recorded, flushed, EXACT)), {vector_field(scalar, 0)})
+
+    def test_fast_allowances_for_half_conversions(self):
+        widen = find_case("f16c", primary("vcvtph2ps"), lambda spec: spec.mxcsr == CONSOLE_MXCSR)
+        recorded = completed(widen, _lane(widen, 0, 0xFFC00000))
+        host_nan = completed(widen, _lane(widen, 0, 0x7FC00000))
+        self.assertEqual(judge(widen, recorded, host_nan, FAST), [])
+        self.assertEqual(fields(judge(widen, recorded, host_nan, EXACT)), {vector_field(widen, 0)})
+        narrow = find_case("f16c", primary("vcvtps2ph"), lambda spec: spec.mxcsr == CONSOLE_MXCSR)
+        recorded = completed(narrow, _lane(narrow, 0, 0xFE00, bits=16))
+        host_nan = completed(narrow, _lane(narrow, 0, 0x7E00, bits=16))
+        self.assertEqual(judge(narrow, recorded, host_nan, FAST), [])
+        self.assertEqual(fields(judge(narrow, recorded, host_nan, EXACT)), {vector_field(narrow, 0)})
+        not_nan = completed(narrow, _lane(narrow, 0, 0x3C00, bits=16))
+        self.assertEqual(fields(judge(narrow, recorded, not_nan, FAST)), {vector_field(narrow, 0)})
+
     def test_fast_exception_flags_ignored(self):
         case = self._addps()
         initial = _mxcsr(case)

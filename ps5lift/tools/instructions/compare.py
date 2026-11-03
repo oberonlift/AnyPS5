@@ -23,14 +23,15 @@ mode and the `Run` the case belongs to, and lists every `Mismatch`.
   (`form_mismatches`); the counters of `rdtsc` and `rdtscp` do not decrease from case to case in a run and leave the
   high halves 0; `rdpid` and `rdtscp`'s ecx are below the host's processor count; `cpuid` and `xgetbv` give the
   console's values, which the lifted driver appends to its results.
-- **Fast mode** allows, in the destination lanes an instruction computes (those of instructions whose exception class
-  is SDM type 2 or 3, compares excepted, as their destination is a mask; lane 0 of a scalar form), a NaN to be any NaN;
-  and under FTZ or DAZ, which fast mode treats as one switch, a `min*` or `max*` lane that x86 makes a signed zero to
-  be a denormal of that sign that equals the lane of one of its operands, and a lane that x86 rounds to the smallest
-  normal to be a zero of that sign. It does not compare MXCSR's exception flags, wherever MXCSR is stored. It compares
-  an FTZ-only or DAZ-only case with its twin's expectation (`reference_case`), with MXCSR's control bits as the case
-  set them. It expects NEEDS_EXACT_FLOAT at the loader's fxrstor for a case whose initial MXCSR unmasks an exception,
-  and at the instance for one that loads such an MXCSR, where the recording shows the load completing.
+- **Fast mode** allows, in the destination lanes an instruction computes (those of `rcp*` and `rsqrt*` and of
+  instructions whose exception class is SDM type 2, 3 or 11, the F16C conversions, compares excepted, as their
+  destination is a mask; lane 0 of a scalar form), a NaN to be any NaN; and under FTZ or DAZ, which fast mode treats as
+  one switch, a `min*` or `max*` lane that x86 makes a signed zero to be a denormal of that sign that equals the lane of
+  one of its operands, and a lane that x86 rounds to the smallest normal to be a zero of that sign. It does not compare
+  MXCSR's exception flags, wherever MXCSR is stored. It compares an FTZ-only or DAZ-only case with its twin's
+  expectation (`reference_case`), with MXCSR's control bits as the case set them. It expects NEEDS_EXACT_FLOAT at the
+  loader's fxrstor for a case whose initial MXCSR unmasks an exception, and at the instance for one that loads such an
+  MXCSR, where the recording shows the load completing.
 
 `format_mismatch` gives the instance as Zydis formats it, the case's inputs, and each differing field's values."""
 import collections
@@ -81,7 +82,7 @@ _TOLERANCES = {
     "rdtscp": Tolerance.COUNTER,
     "rdpid": Tolerance.PROCESSOR_ID,
 }
-_COMPUTING_EXCEPTION_CLASSES = frozenset({"sse2", "sse3", "avx2", "avx3"})
+_COMPUTING_EXCEPTION_CLASSES = frozenset({"sse2", "sse3", "avx2", "avx3", "avx11"})
 _COUNTER_HALVES = ("rax", "rdx")
 _PROCESSOR_REGISTER = "rcx"
 _CONSOLE_REGISTERS = {"cpuid": ("rax", "rbx", "rcx", "rdx"), "xgetbv": ("rax", "rdx")}
@@ -212,13 +213,15 @@ def _float_operands(model, instance, writes):
     return found
 
 
-def _computes(model):
+def _computes(model, kind):
+    if kind is Tolerance.RCP:
+        return True
     compares = any(operand.spec.get("element_type") in COMPARISON_PREDICATES for operand in model.operands)
     return model.definition.exception_class in _COMPUTING_EXCEPTION_CLASSES and not compares
 
 
 def _written_float_lanes(model, instance, kind):
-    if not _computes(model) and kind is not Tolerance.RCP:
+    if not _computes(model, kind):
         return ()
     lanes = []
     for operand, location, bits in _float_operands(model, instance, writes=True):
@@ -310,7 +313,7 @@ def rules_for(instance):
         status_flags_dropped=model.shape in _DROPPING_SHAPES,
         float_lanes=_written_float_lanes(model, instance, kind),
         float_sources=sources,
-        computes=_computes(model),
+        computes=_computes(model, kind),
         tolerance=kind,
         square_root=base.startswith("rsqrt"),
         min_max=model.floating and base.startswith(("min", "max")),
