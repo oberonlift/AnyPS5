@@ -640,8 +640,8 @@ class _Judgement:
             if x87 is not None:
                 ignored |= 1 << _CONDITION_BITS["C1"]
             return (int.from_bytes(expected, "little") ^ int.from_bytes(actual, "little")) & ~ignored == 0
-        if x87 is not None and name in self.rules.x87_names and self.rules.x87_names.index(name) in x87:
-            reference = x87[self.rules.x87_names.index(name)]
+        reference = self.transcendental_reference(name, x87)
+        if reference is not None:
             value = int.from_bytes(actual[:_EXTENDED_BYTES], "little")
             return expected[_EXTENDED_BYTES:] == actual[_EXTENDED_BYTES:] and tolerance.within_ulp(reference, value)
         if expected == actual:
@@ -652,12 +652,24 @@ class _Judgement:
         lanes = self.lanes_at(location) if location is not None else None
         return lanes is not None and self.lanes_match(expected, actual, lanes)
 
+    def transcendental_reference(self, name, x87):
+        if x87 is None or name not in self.rules.x87_names:
+            return None
+        return x87.get(self.rules.x87_names.index(name))
+
+    def expected_text(self, name, start, size, x87):
+        expected = bytes(self.expected[start:start + size])
+        reference = self.transcendental_reference(name, x87)
+        if reference is None:
+            return _hex(expected)
+        return f"{_hex(reference.to_bytes(_EXTENDED_BYTES, 'little') + expected[_EXTENDED_BYTES:])} within one ulp"
+
     def slot(self, x87):
         for name, start, size in _slot_fields(self.rules.x87_names):
             if name in self.settled:
                 continue
             if not self.field_matches(name, start, size, x87):
-                self.mismatch(name, _hex(self.expected[start:start + size]), _hex(self.actual[start:start + size]))
+                self.mismatch(name, self.expected_text(name, start, size, x87), _hex(self.actual[start:start + size]))
         differing = [offset for offset in _SCAFFOLD_OFFSETS if self.expected[offset] != self.actual[offset]]
         if differing:
             self.mismatch(f"scaffold bytes {differing[:8]}", _hex(bytes(self.expected[offset] for offset in differing)),

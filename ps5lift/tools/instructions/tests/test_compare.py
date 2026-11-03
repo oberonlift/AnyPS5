@@ -250,6 +250,16 @@ class StateTest(unittest.TestCase):
         outside = completed(case, {st0: (SIN_1 + 2).to_bytes(10, "little")})
         self.assertEqual(fields(judge(case, recorded, outside)), {"st0"})
 
+    def test_fsin_mismatch_shows_the_reference(self):
+        case = self._x87_case("fsin", 0x037F, 0x01, ONE_80)
+        st0 = records.fx_st_offset(0)
+        recorded = completed(case, {st0: (SIN_1 + 5).to_bytes(10, "little")})
+        (mismatch,) = judge(case, recorded, completed(case, {st0: (SIN_1 + 2).to_bytes(10, "little")}))
+        self.assertEqual(mismatch.field, "st0")
+        self.assertIn(f"{SIN_1:020x}", mismatch.expected)
+        self.assertNotIn(f"{SIN_1 + 5:020x}", mismatch.expected)
+        self.assertIn(f"{SIN_1 + 2:020x}", mismatch.actual)
+
     def test_x87_reference_ignores_precision_control(self):
         case = self._x87_case("fsin", 0x007F, 0x01, ONE_80)
         st0 = records.fx_st_offset(0)
