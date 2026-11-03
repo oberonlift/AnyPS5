@@ -4,6 +4,7 @@
 #include "ModuleLifter.hpp"
 
 #include <lifter/Discovery.hpp>
+#include <lifter/Lifter.hpp>
 
 #include <ps5lift/State.h>
 
@@ -146,8 +147,14 @@ private:
     llvm::FunctionCallee DispatchCallee();
     void TailCall(const std::uint64_t target);
     llvm::BasicBlock* Target(const std::uint64_t target);
+    std::string Mnemonic() const;
     void Unsupported(const std::string& what);
     void Stop(const Ps5LiftStopKind kind, const std::uint64_t detail, const std::string& mnemonic);
+    void StopOutside(const Ps5LiftStopKind kind, MnemonicCounts& counts, const std::uint64_t detail, const std::string& text);
+    void NotOnPs5();
+    void Privileged();
+    void SegmentTables();
+    void ConsoleKernel();
     void StringOp(const Ps5LiftStringOperation operation, const unsigned width);
     void ReadString(const StringRead kind, const unsigned width);
     bool Locked() const;

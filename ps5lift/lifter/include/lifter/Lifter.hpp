@@ -35,10 +35,29 @@ struct LiftOptions {
     bool ImportNids = false;
 };
 
+using MnemonicCounts = std::map<std::string, std::size_t>;
+
 struct LiftReport {
     std::size_t Functions = 0;
     std::size_t Instructions = 0;
-    std::map<std::string, std::size_t> Unsupported;
+    MnemonicCounts Unsupported;
+    MnemonicCounts NotOnPs5;
+    MnemonicCounts Privileged;
+    MnemonicCounts SegmentTables;
+    MnemonicCounts ConsoleKernel;
+};
+
+struct LiftReportGroup {
+    const char* Name;
+    MnemonicCounts LiftReport::*Counts;
+};
+
+inline constexpr LiftReportGroup LiftReportGroups[] = {
+    {"missing", &LiftReport::Unsupported},
+    {"not on the PS5 CPU", &LiftReport::NotOnPs5},
+    {"privileged", &LiftReport::Privileged},
+    {"segment-table", &LiftReport::SegmentTables},
+    {"console-kernel", &LiftReport::ConsoleKernel},
 };
 
 std::unique_ptr<llvm::Module> LiftFunctions(llvm::LLVMContext& context, const GuestImage& image, const std::map<std::uint64_t, GuestFunction>& functions, std::span<const std::uint64_t> addresses,

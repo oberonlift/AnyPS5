@@ -109,6 +109,11 @@ def _is_x87(form):
     return definition.extension == "X87" or bool(elements & X87_ELEMENTS) or bool(definition.flags & X87_STATE_FLAGS)
 
 
+def _set_groups(instances, specs):
+    return [(group, group_specs) for group, group_specs in specs.items()
+            if database.classify(instances[group][0].form.definition) is database.Group.SET]
+
+
 def _operand_size(instance):
     return instance.form.operand_size or 64
 
@@ -254,7 +259,7 @@ class CasesTest(unittest.TestCase):
     def test_crossing_case_per_memory_form(self):
         forms, instances, specs = generated()
         crossing, straddling = set(), set()
-        for group, group_specs in specs.items():
+        for group, group_specs in _set_groups(instances, specs):
             for spec in group_specs:
                 instance = instances[group][spec.instance]
                 aligned = "REQUIRES_ALIGNMENT" in instance.form.definition.xed_attributes
@@ -310,7 +315,7 @@ class CasesTest(unittest.TestCase):
     def test_x87_base_cases_cover_the_cycle(self):
         forms, instances, specs = generated()
         checked = 0
-        for group, group_specs in specs.items():
+        for group, group_specs in _set_groups(instances, specs):
             schedules = defaultdict(list)
             for spec in group_specs:
                 schedules[instances[group][spec.instance].form.key].append(spec)
@@ -406,16 +411,11 @@ class CasesTest(unittest.TestCase):
         self.assertNotIn(self.form("jmp", 64, feature_amd="1").key, written)
         self.assertNotIn(self.form("ret", 64, opcode=0xC3).key, written)
 
-    def test_written_expectations_only_for_set_forms(self):
+    def test_every_outside_form_is_written(self):
         every = database.forms(database.load())
-        written = [form for form in every if cases.expectation_written(form)]
-        self.assertEqual([form.key for form in written if database.classify(form.definition) is not database.Group.SET],
-                         [])
-        outside = {form.definition.mnemonic for form in every if form.operand_size == 16
-                   and form.definition.category in ("COND_BR", "UNCOND_BR", "CALL", "RET")
-                   and database.classify(form.definition) is not database.Group.SET}
-        self.assertLessEqual({"xbegin", "iret", "call", "ret"}, outside)
-        self.assertEqual(len(written), len({form.key for form in generated()[0] if cases.expectation_written(form)}))
+        outside = [form for form in every if database.classify(form.definition) is not database.Group.SET]
+        self.assertLessEqual({"vaddps", "wrmsr", "lar", "syscall"}, {form.definition.mnemonic for form in outside})
+        self.assertEqual([form.key for form in outside if not cases.expectation_written(form)], [])
 
     def _xrstor_images(self):
         _, instances, specs = generated()

@@ -952,7 +952,10 @@ def game_command(args):
         (out / "lift.log").write_text(result.stderr)
         if result.returncode != 0:
             raise SystemExit(f"lifting failed with exit code {result.returncode}; see {out / 'lift.log'}")
-        print(result.stderr.strip().splitlines()[-1] if result.stderr.strip() else "lifted")
+        summary = [line for line in result.stderr.splitlines() if line.startswith("ps5lift: ")]
+        if len(summary) != 1:
+            raise SystemExit(f"the lifter printed {len(summary)} summary lines, not 1; see {out / 'lift.log'}")
+        print(f"{summary[0]}; see {out / 'lift.log'}")
     triple = host_triple()
     runtime, main_library = build_runtime(triple, None, runtime_directory(build, triple, None), clang, clangxx, args.jobs or os.cpu_count())
     anyps5_build = AnyPS5Build(anyps5)

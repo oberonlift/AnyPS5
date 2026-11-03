@@ -3,7 +3,8 @@
 `compare` takes a `state.Case`, its instance's `Rules`, the expected and the actual `state.State`, the floating-point
 mode and the `Run` the case belongs to, and lists every `Mismatch`.
 
-- **Faults** compare by outcome, address and detail, and a page fault by its data address. For the FXSAVE and XSAVE
+- **Faults and stops** compare by outcome, address and detail, and a page fault by its data address. A case outside
+  the set expects a stop and nothing else, so its rules (`rules_for`) name only its mnemonic. For the FXSAVE and XSAVE
   family, whose processors report different bytes of a multi-byte state save, the data address only has to lie in the
   guard and in the instruction's access.
 - **Completed cases** compare every slot field and every block word, except the storer's FOP, FIP, FDP, MXCSR_MASK,
@@ -41,6 +42,7 @@ from typing import Optional
 
 from . import records, tolerance
 from .cases import form_model
+from .database import Group, classify
 from .encoding import Imm
 from .expectations import undefined_bits
 from .encoding import Mem, Reg
@@ -117,6 +119,7 @@ _HALF_BITS = 32
 _EXTENDED_BYTES = 10
 _INPUT_BYTES_SHOWN = 32
 _MASK64 = (1 << 64) - 1
+_ST_NAMES = tuple(f"st{number}" for number in range(8))
 
 
 class CompareError(Exception):
@@ -266,7 +269,32 @@ def _destination(model, instance):
     return location[1], model.operand_bits(model.explicit[0])
 
 
+def _outside_rules(instance):
+    return Rules(
+        mnemonic=instance.form.definition.mnemonic,
+        undefined_flags=frozenset(),
+        status_flags_dropped=False,
+        float_lanes=(),
+        float_sources=(),
+        computes=False,
+        tolerance=Tolerance.NONE,
+        square_root=False,
+        min_max=False,
+        dot_product=None,
+        console=None,
+        destination=None,
+        access=None,
+        mxcsr_stores=(),
+        x87_names=_ST_NAMES,
+        inputs=(),
+        show_mxcsr=False,
+        show_x87=False,
+    )
+
+
 def rules_for(instance):
+    if classify(instance.form.definition) is not Group.SET:
+        return _outside_rules(instance)
     model = form_model(instance.form)
     definition = model.definition
     mnemonic = model.mnemonic
@@ -324,7 +352,7 @@ def _slot_fields(x87_names):
 
 def _scaffold_offsets():
     covered = set()
-    for _, start, size in _slot_fields(tuple(f"st{number}" for number in range(8))):
+    for _, start, size in _slot_fields(_ST_NAMES):
         covered.update(range(start, start + size))
     for start, end in records.UNRECORDED_SLOT_RANGES:
         covered.update(range(start, end))

@@ -189,7 +189,7 @@ void FunctionLifter::Divide(const bool isSigned) {
     else _builder.CreateBr(done);
 
     _builder.SetInsertPoint(fault);
-    Stop(PS5LIFT_STOP_DIVIDE_ERROR, 0, ZydisMnemonicGetString(_instruction->Info.mnemonic));
+    Stop(PS5LIFT_STOP_DIVIDE_ERROR, 0, Mnemonic());
 
     _builder.SetInsertPoint(done);
     auto* quotient = _builder.CreatePHI(type, 2);

@@ -1,8 +1,12 @@
 """What a case is expected to do: its recording, or what AMD's manual documents where Zen 2 differs from the Intel
-recording or where there is none.
+recording or where there is none, or outside the set the console's stop.
 
 `expected_result(case, recorded)` gives the result a case is judged against. The forms `cases.expectation_written`
-names have no recording, and their results are written from AMD's manual:
+names have no recording, and their results are written:
+- Outside the set, the stop the console makes at the instance, with no state compared: an invalid opcode for an
+  instruction the PS5's CPU lacks, a general-protection fault for a privileged or I/O instruction, the segment-table
+  stop for one whose result depends on the console's descriptor tables, and the console-kernel stop for one whose
+  effect is the console kernel's, with `int`'s vector as its detail (0 for `syscall` and `int1`).
 - SSE4A (APM volume 4). `extrq` and `insertq` take a field's length from bits 5:0 of their first immediate, or of the
   control quadword (the low quadword of `extrq`'s source register, the high one of `insertq`'s), and its index from
   bits 5:0 of their second immediate or bits 13:8 of that quadword; a length of 0 is 64. `extrq` writes the field of
@@ -33,6 +37,7 @@ from dataclasses import replace
 
 from . import records
 from .cases import TARGET, expectation_written, form_model
+from .database import Group, classify
 from .encoding import Imm, Reg
 from .model import LOCATIONS, Shape
 from .records import Outcome, Result
@@ -73,6 +78,12 @@ _COMPONENTS = _X87 | _SSE | _AVX
 _XSAVE_HEADER = _LEGACY_IMAGE
 _XSAVE_AVX = _LEGACY_IMAGE + 64
 _COMPACTED = 1 << 63
+_OUTSIDE_STOPS = {
+    Group.NOT_ON_PS5: Outcome.INVALID_OPCODE,
+    Group.PRIVILEGED: Outcome.GENERAL_PROTECTION,
+    Group.SEGMENT_TABLES: Outcome.SEGMENT_TABLES,
+    Group.CONSOLE_KERNEL: Outcome.CONSOLE_KERNEL,
+}
 _STATE_SAVES = frozenset("fxsave fxsave64 fnstenv fnsave xsave xsave64 xsaveopt xsaveopt64 xsavec xsavec64".split())
 _ENVIRONMENT_SAVES = frozenset({"fnstenv", "fnsave"})
 
@@ -225,7 +236,22 @@ _SSE4A = {
 }
 
 
+def _kernel_vector(case):
+    immediates = [choice.value for choice in case.instance.operands if isinstance(choice, Imm)]
+    if len(immediates) > 1:
+        raise ExpectationError(f"{_key(case)} enters the console kernel with {len(immediates)} immediates, not one")
+    return immediates[0] if immediates else 0
+
+
+def _outside(case, group):
+    detail = _kernel_vector(case) if group is Group.CONSOLE_KERNEL else 0
+    return Result(case.spec.index, _OUTSIDE_STOPS[group], detail, case.address, 0, {}, {}, None)
+
+
 def _written(case):
+    group = classify(case.instance.form.definition)
+    if group is not Group.SET:
+        return _outside(case, group)
     if case.instance.shape in (Shape.BRANCH, Shape.CALL):
         return _near_branch16(case)
     if _mnemonic(case) not in _SSE4A:
@@ -386,8 +412,8 @@ _PATCHES = {
 def expected_result(case, recorded):
     if expectation_written(case.instance.form):
         if recorded is not None:
-            raise ExpectationError(f"{_key(case)} has a recording, but its form's expectations are written from "
-                                   "AMD's manual, not recorded")
+            raise ExpectationError(f"{_key(case)} has a recording, but its form's expectations are written, not "
+                                   "recorded")
         return _written(case)
     if recorded is None:
         raise NoExpectation(NO_EXPECTATION)

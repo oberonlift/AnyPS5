@@ -1,12 +1,14 @@
 """The instruction suite's commands: `instructions-bundle`, which packs what a recording host needs, and
 `instructions-import`, which checks a recording and commits it.
 
-`generate(decoder)` builds every test group's instances and case specs from the database. `bundle` writes into a new
-directory, for each group with cases to record, `<group>/<group>` (the guest program, linked at the image base its
-caller gives), `<group>/<group>.inputs` and `<group>/libinstructionhost.so` (the native driver); the self-test the
-same way in `self-test/`, with `expected.json`; `record.py` with the `instructions` modules it imports; and
-`groups.json`, which gives the `/proc/cpuinfo` flags each group needs (`CPU_FLAGS`). The inputs leave out the cases
-`cases.expectation_written` names and keep the other cases' indices, so a group with no other case is not bundled.
+`generate(decoder)` builds every test group's instances and case specs from the database: the set's forms, and the
+first form of each definition outside the set. `bundle` writes into a new directory, for each group with cases to
+record (`recordable_groups`), `<group>/<group>` (the guest program, linked at the image base its caller gives),
+`<group>/<group>.inputs` and `<group>/libinstructionhost.so` (the native driver); the self-test the same way in
+`self-test/`, with `expected.json`; `record.py` with the `instructions` modules it imports; and `groups.json`, which
+gives the `/proc/cpuinfo` flags each group needs (`CPU_FLAGS`). The inputs leave out the cases
+`cases.expectation_written` names and keep the other cases' indices, so a group with no other case, such as every
+group outside the set, is not bundled.
 `recording_header` gives the fingerprints of a group's assembly and of the input records its recording ran.
 
 `import_bundle` checks the results in the bundle's `results/` against the bundle: each group's results carry its inputs'
@@ -92,9 +94,12 @@ class SuiteError(Exception):
 
 
 def generate(decoder):
-    forms = [form for form in database.forms(database.load()) if database.classify(form.definition) is Group.SET]
+    definitions = database.load()
+    forms = [form for form in database.forms(definitions) if database.classify(form.definition) is Group.SET]
+    outside = [database.forms([definition])[0] for definition in definitions
+               if database.classify(definition) is not Group.SET]
     by_group = defaultdict(list)
-    for instance in cases.instances(forms, decoder):
+    for instance in cases.instances(forms + outside, decoder):
         by_group[database.test_group(instance.form)].append(instance)
     specs = {group: cases.case_specs(members) for group, members in by_group.items()}
     return forms, dict(by_group), specs
@@ -108,7 +113,7 @@ def recording_header(assembly, inputs):
     return records.Header(*program.fingerprints(assembly, records.pack_input_records(inputs)))
 
 
-def _recordable(instances):
+def recordable_groups(instances):
     return sorted(
         group for group, members in instances.items()
         if not all(cases.expectation_written(instance.form) for instance in members)
@@ -116,14 +121,14 @@ def _recordable(instances):
 
 
 def _selected(groups, instances):
-    recordable = _recordable(instances)
+    recordable = recordable_groups(instances)
     if not groups:
         return recordable
     for group in groups:
         if group not in instances:
             raise SuiteError(f"there is no test group {group}; the groups are {', '.join(sorted(instances))}")
         if group not in recordable:
-            raise SuiteError(f"{group} has no case to record: its expectations are written from AMD's manual")
+            raise SuiteError(f"{group} has no case to record: its expectations are written, not recorded")
     return list(dict.fromkeys(groups))
 
 

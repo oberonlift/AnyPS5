@@ -45,7 +45,7 @@ std::uint64_t PageSize() {
 
 std::atomic<Ps5LiftStopHandler> StopHandler{nullptr};
 
-void DefaultStopHandler(Ps5LiftState* state, const std::uint32_t kind, const std::uint64_t address, const std::uint64_t detail, const char* mnemonic) {
+void DefaultStopHandler(Ps5LiftState* state, const std::uint32_t kind, const std::uint64_t address, const std::uint64_t, const char* mnemonic) {
     switch (kind) {
     case PS5LIFT_STOP_DIVIDE_ERROR:
         ps5lift_fail("divide error at 0x%" PRIx64 ": the divisor is zero or the quotient does not fit", address);
@@ -58,10 +58,12 @@ void DefaultStopHandler(Ps5LiftState* state, const std::uint32_t kind, const std
     case PS5LIFT_STOP_CONSOLE_KERNEL: {
         std::uint32_t code = 0;
         std::memcpy(&code, reinterpret_cast<const void*>(state->FsBase + 0x28), sizeof(code));
-        ps5lift_fail("guest interrupt 0x%" PRIx64 " at 0x%" PRIx64 ", with 0x%08x at %%fs:0x28", detail, address, code);
+        ps5lift_fail("%s at 0x%" PRIx64 " enters the console's kernel, which PS5 code reaches only through libkernel, with 0x%08x at %%fs:0x28", mnemonic, address, code);
     }
     case PS5LIFT_STOP_MISSING_TRANSLATION:
         ps5lift_fail("reached unsupported instruction %s at 0x%" PRIx64, mnemonic, address);
+    case PS5LIFT_STOP_SEGMENT_TABLES:
+        ps5lift_fail("%s at 0x%" PRIx64 " depends on the console's segment descriptor tables, which are unknown", mnemonic, address);
     default:
         ps5lift_fail("unknown stop kind %" PRIu32 " at 0x%" PRIx64, kind, address);
     }

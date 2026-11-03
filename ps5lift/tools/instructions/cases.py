@@ -31,15 +31,21 @@ the case's inputs patch. `x87` is the FXSAVE image up to the XMM registers, with
 `projected_recording_bytes` turns into the size of its result in a recording. Every random value derives from `SEED`,
 the form's key, the instance's place among its form's instances and the case's place in its schedule.
 
-`expectation_written` names the forms of the PS5 set whose expectations are written from AMD's manual instead of
-recorded on Intel hardware, because Intel runs their bytes as other instructions: SSE4A, which Intel lacks, and the
-16-bit near relative branches of AMD's branch mode (`jmp`, `call` and `jcc` rel16), which Intel runs as 64-bit ones.
-Their cases are left out of the recording.
+`expectation_written` names the forms whose expectations are written instead of recorded on Intel hardware: every form
+outside the set, whose cases expect the console's stop, and the forms of the set that Intel runs as other instructions,
+whose expectations come from AMD's manual: SSE4A, which Intel lacks, and the 16-bit near relative branches of AMD's
+branch mode (`jmp`, `call` and `jcc` rel16), which Intel runs as 64-bit ones. Their cases are left out of the
+recording.
 
 `xrstor` loads MXCSR from its image with SSE or AVX in the standard format, and with SSE alone in the compacted one,
 where an image whose XSTATE_BV leaves SSE out sets it to 0x1f80; `loads_mxcsr` says so. Each `xrstor` form adds a case
 that loads MXCSR with its misaligned-SSE bit (MM) in the standard format with every component, which Zen 2 accepts and
-Intel refuses."""
+Intel refuses.
+
+Outside the set, each definition has one instance, its first form's `default_operands`, and one case, whose state
+holds no input: every GPR but rsp points at the block's memory and rsp at its stack. An instance with a branch target
+(`xbegin`, KNC's `jkzd` and `jknzd`) takes a branch's shape, which gives the target its label. Its expectation is the
+console's stop, so it is written, not recorded."""
 import re
 import struct
 from dataclasses import dataclass, replace
@@ -54,6 +60,7 @@ from .encoding import (
     Mem,
     Reg,
     Target,
+    default_operands,
     encode,
     mandatory_candidate,
     register_candidates,
@@ -88,6 +95,7 @@ from .values import (
     integer_values,
     random_bits,
     random_float80,
+    text_key,
 )
 from .verification import verify_all
 
@@ -201,7 +209,9 @@ _REP_COUNTS = (0, 1, 2, 7, 64)
 _REP_LIMIT = 64
 _WRITTEN_GROUPS = frozenset({"sse4a"})
 _SHORT_BRANCH_SIZE = 16
-_BASE, _RANDOM, _MEMORY_CASE, _X87_CASE, _EXTRA_CASE, _VARIANT, _STATE = range(1, 8)
+_BASE, _RANDOM, _MEMORY_CASE, _X87_CASE, _EXTRA_CASE, _VARIANT, _STATE, _OUTSIDE = range(1, 9)
+_OUTSIDE_ROLE = "outside"
+_RSP = records.GPR_NAMES.index("rsp")
 
 
 @dataclass(frozen=True)
@@ -253,7 +263,7 @@ def expression_offset(expression):
 def expectation_written(form):
     definition = form.definition
     if classify(definition) is not Group.SET:
-        return False
+        return True
     if test_group(form) in _WRITTEN_GROUPS:
         return True
     relative = any(operand["operand_type"] == "rel" for operand in definition.operands)
@@ -549,12 +559,25 @@ def _plans(model):
             yield role, operands, prefixes
 
 
+def _outside_plan(form):
+    operands = tuple(default_operands(form))
+    shape = Shape.BRANCH if any(isinstance(choice, Target) for choice in operands) else Shape.STRAIGHT
+    return shape, [(_OUTSIDE_ROLE, operands, ())]
+
+
+def _instance_plans(form):
+    if classify(form.definition) is not Group.SET:
+        return _outside_plan(form)
+    model = form_model(form)
+    return model.shape, _plans(model)
+
+
 def instances(forms, decoder):
     planned = []
     for form in forms:
-        model = form_model(form)
-        for role, operands, prefixes in _plans(model):
-            planned.append((form, model.shape, role, operands, prefixes, tuple(encode(form, operands, prefixes))))
+        shape, plans = _instance_plans(form)
+        for role, operands, prefixes in plans:
+            planned.append((form, shape, role, operands, prefixes, tuple(encode(form, operands, prefixes))))
     batch = [(form, operands, prefixes, encoded) for form, _, _, operands, prefixes, encoded in planned]
     decoded = verify_all(decoder, batch)
     counts = {}
@@ -996,6 +1019,30 @@ def _form_specs(model, members, first_index):
     return specs
 
 
+def _outside_specs(members, first_index):
+    gprs = [BlockOffset(_MEMORY)] * len(records.GPR_NAMES)
+    gprs[_RSP] = BlockOffset(_STACK)
+    return [
+        CaseSpec(
+            index=first_index + number,
+            instance=instance.index,
+            gprs=tuple(gprs),
+            vectors=(bytes(records.YMM_STRIDE),) * records.YMM_COUNT,
+            flags=_FLAG_DICTS[0],
+            mxcsr=CONSOLE_MXCSR,
+            x87=DEFAULT_X87_IMAGE,
+            patches=(),
+            fixups=(),
+            fill_seed=Random(SEED, text_key(instance.form.key), _OUTSIDE).word(),
+            twin=None,
+            loads_mxcsr=None,
+            console_defined=False,
+            changeable_words=0,
+        )
+        for number, instance in enumerate(members)
+    ]
+
+
 def case_specs(group_instances):
     groups = {test_group(instance.form) for instance in group_instances}
     if len(groups) > 1:
@@ -1010,7 +1057,11 @@ def case_specs(group_instances):
         end = start
         while end < len(group_instances) and group_instances[end].form.key == form.key:
             end += 1
-        specs += _form_specs(form_model(form), group_instances[start:end], len(specs))
+        members = group_instances[start:end]
+        if classify(form.definition) is Group.SET:
+            specs += _form_specs(form_model(form), members, len(specs))
+        else:
+            specs += _outside_specs(members, len(specs))
         start = end
     return specs
 

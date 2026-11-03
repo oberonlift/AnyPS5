@@ -16,7 +16,6 @@ bool FunctionLifter::Lockable(const ZydisMnemonic mnemonic) {
 
 void FunctionLifter::EmitSemantics(const ZydisMnemonic mnemonic) {
     if (Locked() && !(Lockable(mnemonic) && Operand(0).type == ZYDIS_OPERAND_TYPE_MEMORY)) throw UnsupportedInstruction("lock prefix");
-    if (_instruction->Info.meta.branch_type == ZYDIS_BRANCH_TYPE_FAR) throw UnsupportedInstruction("far branch");
     if (UsesMmx()) EnterMmx();
     using K = VectorKind;
     using F = FloatKind;
@@ -61,12 +60,22 @@ case ZYDIS_MNEMONIC_##prefix##231##suffix: return FloatArithmetic({F::Fma, Eleme
     case ZYDIS_MNEMONIC_RET: return Return();
     case ZYDIS_MNEMONIC_UD2: return Stop(PS5LIFT_STOP_INVALID_OPCODE, 0, "ud2");
     case ZYDIS_MNEMONIC_INT3: return Stop(PS5LIFT_STOP_BREAKPOINT, 0, "int3");
-    case ZYDIS_MNEMONIC_HLT: return Stop(PS5LIFT_STOP_GENERAL_PROTECTION, 0, "hlt");
-    case ZYDIS_MNEMONIC_INT: return Stop(PS5LIFT_STOP_CONSOLE_KERNEL, static_cast<std::uint32_t>(Immediate(0)), "int");
 
-    case ZYDIS_MNEMONIC_NOP: case ZYDIS_MNEMONIC_ENDBR64: case ZYDIS_MNEMONIC_PAUSE: case ZYDIS_MNEMONIC_PREFETCH: case ZYDIS_MNEMONIC_PREFETCHT0:
-    case ZYDIS_MNEMONIC_PREFETCHT1: case ZYDIS_MNEMONIC_PREFETCHT2: case ZYDIS_MNEMONIC_PREFETCHNTA: case ZYDIS_MNEMONIC_PREFETCHW:
-    case ZYDIS_MNEMONIC_MONITORX: case ZYDIS_MNEMONIC_MWAITX:
+    case ZYDIS_MNEMONIC_SYSENTER: return NotOnPs5();
+    case ZYDIS_MNEMONIC_IN: case ZYDIS_MNEMONIC_OUT: case ZYDIS_MNEMONIC_INSB: case ZYDIS_MNEMONIC_INSW: case ZYDIS_MNEMONIC_INSD: case ZYDIS_MNEMONIC_OUTSB:
+    case ZYDIS_MNEMONIC_OUTSW: case ZYDIS_MNEMONIC_OUTSD: case ZYDIS_MNEMONIC_CLI: case ZYDIS_MNEMONIC_STI: case ZYDIS_MNEMONIC_RDPMC: case ZYDIS_MNEMONIC_LGDT:
+        return Privileged();
+    case ZYDIS_MNEMONIC_LAR: case ZYDIS_MNEMONIC_LSL: case ZYDIS_MNEMONIC_VERR: case ZYDIS_MNEMONIC_VERW: case ZYDIS_MNEMONIC_SGDT: case ZYDIS_MNEMONIC_SIDT:
+    case ZYDIS_MNEMONIC_SLDT: case ZYDIS_MNEMONIC_SMSW: case ZYDIS_MNEMONIC_STR: case ZYDIS_MNEMONIC_IRET: case ZYDIS_MNEMONIC_IRETD: case ZYDIS_MNEMONIC_IRETQ:
+    case ZYDIS_MNEMONIC_LFS: case ZYDIS_MNEMONIC_LGS: case ZYDIS_MNEMONIC_LSS:
+        return SegmentTables();
+    case ZYDIS_MNEMONIC_SYSCALL: case ZYDIS_MNEMONIC_INT: case ZYDIS_MNEMONIC_INT1: return ConsoleKernel();
+
+    case ZYDIS_MNEMONIC_NOP: case ZYDIS_MNEMONIC_PAUSE: case ZYDIS_MNEMONIC_ENDBR32: case ZYDIS_MNEMONIC_ENDBR64: case ZYDIS_MNEMONIC_RDSSPD: case ZYDIS_MNEMONIC_RDSSPQ:
+    case ZYDIS_MNEMONIC_BNDCL: case ZYDIS_MNEMONIC_BNDCU: case ZYDIS_MNEMONIC_BNDCN: case ZYDIS_MNEMONIC_BNDMOV: case ZYDIS_MNEMONIC_BNDLDX: case ZYDIS_MNEMONIC_BNDSTX:
+    case ZYDIS_MNEMONIC_BNDMK: case ZYDIS_MNEMONIC_CLDEMOTE: case ZYDIS_MNEMONIC_PREFETCH: case ZYDIS_MNEMONIC_PREFETCHW: case ZYDIS_MNEMONIC_PREFETCHWT1:
+    case ZYDIS_MNEMONIC_PREFETCHT0: case ZYDIS_MNEMONIC_PREFETCHT1: case ZYDIS_MNEMONIC_PREFETCHT2: case ZYDIS_MNEMONIC_PREFETCHNTA: case ZYDIS_MNEMONIC_PREFETCHIT0:
+    case ZYDIS_MNEMONIC_PREFETCHIT1:
         return;
     case ZYDIS_MNEMONIC_MFENCE: _builder.CreateFence(llvm::AtomicOrdering::SequentiallyConsistent); return;
     case ZYDIS_MNEMONIC_LFENCE: case ZYDIS_MNEMONIC_SFENCE: _builder.CreateFence(llvm::AtomicOrdering::AcquireRelease); return;

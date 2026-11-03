@@ -7,6 +7,7 @@ add_executable(ps5lift
         src/GuestImage.cpp
         src/Discovery.cpp
         src/FunctionLifter.cpp
+        src/InstructionSet.cpp
         src/ModuleLifter.cpp
         src/TableLifter.cpp
         src/instructions/Control.cpp

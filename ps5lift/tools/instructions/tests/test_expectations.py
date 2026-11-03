@@ -186,7 +186,7 @@ class Sse4aTest(unittest.TestCase):
 
     def test_written_case_with_a_recording_refused(self):
         case = _sse4a("extrq", [0x1B, 0x4E])
-        with self.assertRaisesRegex(ExpectationError, "written from AMD's manual"):
+        with self.assertRaisesRegex(ExpectationError, "has a recording, but its form's expectations are written"):
             expected_result(case, completed(case))
 
 
