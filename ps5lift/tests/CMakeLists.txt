@@ -2,7 +2,8 @@ find_package(Python3 REQUIRED COMPONENTS Interpreter)
 
 option(PS5LIFT_QEMU_TESTS "On an x86-64 host, also lift the fixtures for aarch64 and run them under qemu-aarch64" OFF)
 
-set(PS5LIFT_FIXTURES basic vector float threads callbacks x87 setjmp cpu mmx modules strings sse41 avx stop)
+set(PS5LIFT_FIXTURES basic vector float threads callbacks x87 setjmp cpu mmx modules strings sse41 avx stop stop_not_on_ps5 stop_privileged
+        stop_segment_tables stop_console_kernel)
 
 add_executable(ps5lift_decode instructions/Decode.cpp)
 target_link_libraries(ps5lift_decode PRIVATE ps5lift_decoder)

@@ -47,7 +47,7 @@ GUEST_FLAGS = [
 ]
 
 GUEST_BASE = 0xFC00000000
-CONSOLE_OUTPUT = {"cpu"}
+CONSOLE_ONLY = {"cpu", "stop_not_on_ps5", "stop_privileged", "stop_segment_tables", "stop_console_kernel"}
 SSE4A_FIXTURES = {"basic"}
 PROGRAM_TIMEOUT = 300
 GUEST_MODULES = {"modules": ("guestmodule", "module.c")}
@@ -90,6 +90,10 @@ def host_has_sse4a():
     return False
 
 
+def native_run_matches_console(fixture):
+    return fixture not in CONSOLE_ONLY and (fixture not in SSE4A_FIXTURES or host_has_sse4a())
+
+
 def lifted_cpu(runner, cpu):
     return "native" if cpu is None and not runner else cpu
 
@@ -115,18 +119,18 @@ def stop_matches(result, stop, native):
         return result.returncode == 0
     if native:
         return result.returncode < 0
-    return result.returncode in (70, -signal.SIGABRT) and stop in result.stderr
+    return result.returncode in (70, -signal.SIGABRT) and all(line in result.stderr for line in stop)
 
 
 def stop_expectation(stop, native):
     if stop is None:
         return "exit code 0"
-    return "death by a signal" if native else f"exit code 70 or SIGABRT with {stop!r} in stderr"
+    return "death by a signal" if native else f"exit code 70 or SIGABRT with {' and '.join(map(repr, stop))} in stderr"
 
 
 def read_stop(fixture):
     stop_file = FIXTURES / f"{fixture}.stop"
-    return stop_file.read_text().strip() if stop_file.exists() else None
+    return tuple(stop_file.read_text().strip().splitlines()) if stop_file.exists() else None
 
 
 def configured_compilers(build):
@@ -1052,7 +1056,7 @@ def fixture_command(args):
         for optimization in optimizations:
             expected = expected_for(optimization)
             guest = build_guest(args.clang, work, args.fixture, optimization, ["-DPS5LIFT_EMULATED"] if runner else [], sysroot=args.guest_sysroot)
-            if not args.lift_only and platform.machine() == "x86_64" and args.fixture not in CONSOLE_OUTPUT and (args.fixture not in SSE4A_FIXTURES or host_has_sse4a()):
+            if not args.lift_only and platform.machine() == "x86_64" and native_run_matches_console(args.fixture):
                 native = subprocess.run([guest], env={**os.environ, "LD_LIBRARY_PATH": str(work)}, capture_output=True, text=True)
                 ended = stop_matches(native, stop, True)
                 if not ended:
