@@ -12,9 +12,10 @@ be what `records.fill_block` gives.
 each case's result holds, as JSON-ready dicts: the outcome, address and data, slot words that the result must hold (`slot`), and
 its memory words exactly (`memory`). A fault records no words at all."""
 from . import records
-from .cases import CONSOLE_MXCSR, DEFAULT_X87_IMAGE, SEED, BlockOffset, CaseSpec, Instance
+from .cases import DEFAULT_X87_IMAGE, SEED, BlockOffset, CaseSpec, Instance
 from .database import test_group
 from .encoding import Mem, Reg, encode
+from .machine import CONSOLE_MXCSR
 from .model import Shape
 from .values import MASK64
 from .verification import verify_all

@@ -4,7 +4,7 @@ An instance is a form plus one operand choice for each of its definition's opera
 implicit and hidden operands follow from the definition. `Reg` names a register by its Zydis name. `Mem` is a memory
 operand: `base` may be "rip", `displacement` an int or an assembler expression, and `displacement_size` is in bits (0, 8
 or 32, or the address size for an absolute `moffs`). `Imm` is an immediate and `Target` the label a relative branch
-reaches.
+reaches; `immediate_values` gives the values of an instance's immediates in order.
 
 An encoding is a list of byte strings and `Field`s. A field is `size` bytes that the assembler computes from
 `expression`, less the address of the instruction's end when it is relative, so branch targets, RIP-relative
@@ -834,6 +834,10 @@ def _default_memory(form, operand, address_size, used, candidate):
     vsib_kind = _VSIB_INDEX_KINDS.get(operand["operand_type"])
     index = _first_register(form, vsib_kind, {}, used, candidate).name if vsib_kind else None
     return Mem(REGISTER_FILES[f"gpr{address_size}"][number], index, displacement_size=8 if number == 5 else 0)
+
+
+def immediate_values(operands):
+    return tuple(choice.value for choice in operands if isinstance(choice, Imm))
 
 
 def mandatory_candidate(form, prefixes=()):

@@ -43,7 +43,7 @@ from typing import Optional
 from . import records, tolerance
 from .cases import form_model
 from .database import in_set
-from .encoding import Imm, Mem, Reg
+from .encoding import Mem, Reg, immediate_values
 from .expectations import undefined_bits
 from .model import COMPARISON_PREDICATES, FLOAT_BITS, IMPLICIT_BASES, LOCATIONS, Shape
 from .records import Outcome
@@ -256,7 +256,7 @@ def _dot_product_control(instance, base, sources):
         return None
     if len(sources) != 2:
         raise CompareError(f"{instance.form.key}: a dot product reads two floating-point sources, not {len(sources)}")
-    (control,) = (choice.value for choice in instance.operands if isinstance(choice, Imm))
+    (control,) = immediate_values(instance.operands)
     return control
 
 

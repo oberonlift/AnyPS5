@@ -13,7 +13,7 @@ batched decode, and numbers the instances of each test group from 0.
 Cases. The primary's base cases number E, the longest edge list among its inputs (`model`). In case i, input k
 takes edge (i + k) mod n_k, and lane j of a vector input takes edge (i + k + j) mod n. Four seeded random cases follow.
 SSE and AVX floating-point instances, and those that read MXCSR, run their base cases under each of the 13
-`MXCSR_STATES`, and an FTZ-only or DAZ-only case names the console-state case with the same inputs as its twin. x87
+`machine.MXCSR_STATES`, and an FTZ-only or DAZ-only case names the console-state case with the same inputs as its twin. x87
 instances cycle TOP, the tags, precision and rounding, the exception masks and pending exceptions through their base
 cases, of which they have at least as many as the longest of those cycles, and add an all-empty, an all-valid and a
 pending-unmasked case. A form that accesses memory adds, for each memory operand, a case misaligned by one, one that
@@ -63,8 +63,30 @@ from .encoding import (
     Target,
     default_operands,
     encode,
+    immediate_values,
     mandatory_candidate,
     register_candidates,
+)
+from .machine import (
+    CONSOLE_MXCSR,
+    DAZ_ALONE,
+    DESTINATION,
+    ENTER_FRAME,
+    FTZ_ALONE,
+    GATHER_BASE,
+    LEAVE_FRAME,
+    MEMORY,
+    MMX_EXPONENT,
+    MXCSR_STATES,
+    SOURCE,
+    STACK,
+    X87_CONTROLS,
+    X87_IMAGE_SIZE,
+    X87_LOW_HALF,
+    X87_MASKS,
+    X87_PENDING,
+    abridged_tags,
+    x87_control_word,
 )
 from .model import (
     BIT_TESTS,
@@ -105,16 +127,6 @@ BLOCK = "ps5lift_instruction_block"
 TARGET = "target"
 RETURN_ADDRESS_SIZE = 8
 
-CONSOLE_MXCSR = 0x9FC0
-_FTZ_ALONE = CONSOLE_MXCSR & ~records.MXCSR_DAZ
-_DAZ_ALONE = CONSOLE_MXCSR & ~records.MXCSR_FTZ
-MXCSR_STATES = (
-    CONSOLE_MXCSR,
-    *(0x1F80 | rounding << 13 for rounding in range(4)),
-    _FTZ_ALONE,
-    _DAZ_ALONE,
-    *(0x1F80 & ~(1 << 7 + exception) for exception in range(6)),
-)
 _RESERVED_MXCSR = 1 << 31
 _MISALIGNED_SSE_LOAD = CONSOLE_MXCSR | records.MXCSR_MISALIGNED_SSE
 _MXCSR_LOADS = MXCSR_STATES + (CONSOLE_MXCSR | 0x3F, _MISALIGNED_SSE_LOAD, 0x1F80 | _RESERVED_MXCSR)
@@ -122,35 +134,20 @@ _MXCSR_INITIAL = 0x1F80
 
 _RANDOM_CASES = 4
 
-_MEMORY = 1024
-_GATHER_BASE = 1536
-_SOURCE = 1536
-_DESTINATION = 2560
-_STACK = 3072
-_LEAVE_FRAME = _STACK + 64
-_ENTER_FRAME = _STACK + 256
-
 _GATHER_SPACING = 8
 _GATHER_LANES = 8
 _GATHER_SLOTS = 16
-_BIT_OFFSET_REACH = (records.BLOCK_SIZE - _MEMORY) * 8
+_BIT_OFFSET_REACH = (records.BLOCK_SIZE - MEMORY) * 8
 _FAR_BIT_OFFSETS = (8 * 1000 + 3, -8 * 1000 + 5)
 _XSAVE_FULL = records.XSAVE_AVX + records.XSAVE_AVX_SIZE
 _XSAVE_MXCSR_COMPONENTS = records.XSTATE_SSE | records.XSTATE_AVX
 
-_X87_IMAGE_SIZE = records.FX_XMM
-_X87_RESERVED_CONTROL = 0x40
-_X87_CONTROLS = tuple((precision, rounding) for precision in (0, 2, 3) for rounding in range(4))
-_X87_MASKS = (0x3F, *(0x3F & ~(1 << exception) for exception in range(6)))
-_X87_PENDING = (0, 0x20, 0x30, 0x01, 0x02)
 _X87_SUMMARY = 0x80 | 0x8000
 _X87_INVALID = 0x01
 _X87_CONDITION_BITS = (8, 9, 10, 14)
-_X87_LOW_HALF = 0x0F
 _X87_OVERRIDES = ("empty", "full", "pending")
-_X87_CYCLE = max(8, len(_X87_CONTROLS), len(_X87_MASKS), len(_X87_PENDING))
+_X87_CYCLE = max(8, len(X87_CONTROLS), len(X87_MASKS), len(X87_PENDING))
 _REQUIRES_ALIGNMENT = "REQUIRES_ALIGNMENT"
-_MMX_EXPONENT = 0xFFFF << 64
 _ALL_LANES = bytes([0xFF]) * 32
 
 _FLAG_DICTS = tuple({name: mask >> bit & 1 for name, bit in FLAG_BITS.items()} for mask in range(1 << len(FLAG_BITS)))
@@ -338,7 +335,7 @@ def _pick_address(model, operand, used, candidate, options, high):
     if address.base == "rip":
         if operand.spec["operand_type"] in _NO_RIP_TYPES or rm is not None:
             return None
-        return Mem("rip", displacement=_block_expression(_MEMORY), displacement_size=32)
+        return Mem("rip", displacement=_block_expression(MEMORY), displacement_size=32)
     if isinstance(address.base, int):
         base = address.base
         if ("gpr", base) in used and not (base == 4 and model.stack):
@@ -395,7 +392,7 @@ def _assign(model, forced, immediates, options):
         elif category == "memory":
             choice = _pick_address(model, operand, used, candidate, options, high)
         elif category == "moffs":
-            choice = Mem(None, displacement=_block_expression(_MEMORY), displacement_size=model.address_size)
+            choice = Mem(None, displacement=_block_expression(MEMORY), displacement_size=model.address_size)
         elif category == "immediate":
             choice = Imm(next(values))
         elif category == "branch":
@@ -523,7 +520,7 @@ def _moffs_plans(model, primary):
     if not moffs or not model.accesses_memory:
         return
     for role, offset in _memory_specials(model.memory_width(moffs[0]), _requires_alignment(model, moffs[0])):
-        address = Mem(None, displacement=_block_expression(_MEMORY + 1 if offset is None else offset),
+        address = Mem(None, displacement=_block_expression(MEMORY + 1 if offset is None else offset),
                       displacement_size=model.address_size)
         operands = tuple(address if op.category == "moffs" else choice for op, choice in zip(model.explicit, primary))
         yield role, operands, ()
@@ -603,7 +600,7 @@ class _Layout:
         gprs, self.vectors, self.st = base_state
         self.gprs = list(gprs)
         if 4 in self.pins or 4 not in self._data_registers():
-            self.gprs[4] = BlockOffset(_STACK)
+            self.gprs[4] = BlockOffset(STACK)
         self.stack_operands = {
             position for position, location in self.locations.items()
             if model.stack and location is not None and location[:2] == ("gpr", 4)
@@ -638,14 +635,14 @@ class _Layout:
         self.locations[position] = ("memory", position)
         self.widths[position] = width
         if base == "sp" and operand.writes:
-            self.accesses[position], self.targets[position] = "push", _STACK - width
+            self.accesses[position], self.targets[position] = "push", STACK - width
         elif base == "sp":
-            self.accesses[position], self.targets[position] = "pop", _STACK
+            self.accesses[position], self.targets[position] = "pop", STACK
         elif base == "bx":
-            self.accesses[position], self.targets[position] = "xlat", _MEMORY
+            self.accesses[position], self.targets[position] = "xlat", MEMORY
         else:
             self.accesses[position] = "register"
-            self.targets[position] = {"si": _SOURCE, "di": _DESTINATION, "bp": _LEAVE_FRAME}[base]
+            self.targets[position] = {"si": SOURCE, "di": DESTINATION, "bp": LEAVE_FRAME}[base]
 
     def _locate_memory(self, operand, memory):
         model = self.model
@@ -657,10 +654,10 @@ class _Layout:
         if memory.base in ("rip", None):
             self.accesses[position], self.targets[position] = "fixed", expression_offset(memory.displacement)
         elif operand_type in VSIB_KINDS:
-            self.accesses[position], self.targets[position] = "vsib", _GATHER_BASE
+            self.accesses[position], self.targets[position] = "vsib", GATHER_BASE
         else:
             self.accesses[position] = "explicit"
-            self.targets[position] = _STACK if memory.base == "rsp" and model.stack else _MEMORY
+            self.targets[position] = STACK if memory.base == "rsp" and model.stack else MEMORY
         for name in _address_registers(memory):
             if LOCATIONS[name][0] == "gpr":
                 self.pins.add(LOCATIONS[name][1])
@@ -764,7 +761,7 @@ class _Case:
         elif kind == "vector":
             self.vectors[location[1]] = value.to_bytes(32, "little")
         elif kind == "mmx":
-            self.st[location[1]] = _MMX_EXPONENT | value
+            self.st[location[1]] = MMX_EXPONENT | value
         elif kind == "st":
             self.st[location[1]] = value
         elif kind == "memory":
@@ -825,11 +822,6 @@ def _place(case):
             case.set_address(IMPLICIT_BASES[operand.spec["mem_base"]], target)
 
 
-def _x87_control_word(number):
-    precision, rounding = _X87_CONTROLS[number % len(_X87_CONTROLS)]
-    return _X87_RESERVED_CONTROL | _X87_MASKS[number % len(_X87_MASKS)] | precision << 8 | rounding << 10
-
-
 def _x87_state(case, state, override):
     model = case.model
     if model.mmx:
@@ -837,9 +829,9 @@ def _x87_state(case, state, override):
         return
     if not model.x87:
         return
-    masks = _X87_MASKS[state % len(_X87_MASKS)]
-    pending = _X87_PENDING[state % len(_X87_PENDING)] & masks
-    valid = 0xFF if state % 2 == 0 else case.layout.st_used | _X87_LOW_HALF
+    masks = X87_MASKS[state % len(X87_MASKS)]
+    pending = X87_PENDING[state % len(X87_PENDING)] & masks
+    valid = 0xFF if state % 2 == 0 else case.layout.st_used | X87_LOW_HALF
     if model.pushes:
         valid &= 0x7F
     if override == "empty":
@@ -851,19 +843,15 @@ def _x87_state(case, state, override):
     condition = sum((state >> bit & 1) << position for bit, position in enumerate(_X87_CONDITION_BITS))
     case.top = state % 8
     case.valid = valid
-    case.fcw = _x87_control_word(state) & ~0x3F | masks
+    case.fcw = x87_control_word(state) & ~0x3F | masks
     case.fsw = case.top << 11 | pending | condition
-
-
-def _abridged_tags(top, valid):
-    return sum(1 << (top + number) % 8 for number in range(8) if valid >> number & 1)
 
 
 def _x87_image(case):
     if not case.model.x87 and not case.model.mmx:
         return DEFAULT_X87_IMAGE
-    image = bytearray(_X87_IMAGE_SIZE)
-    struct.pack_into("<HHB", image, records.FX_FCW, case.fcw, case.fsw, _abridged_tags(case.top, case.valid))
+    image = bytearray(X87_IMAGE_SIZE)
+    struct.pack_into("<HHB", image, records.FX_FCW, case.fcw, case.fsw, abridged_tags(case.top, case.valid))
     for number, value in enumerate(case.st):
         offset = records.fx_st_offset(number)
         image[offset:offset + 10] = value.to_bytes(10, "little")
@@ -871,7 +859,7 @@ def _x87_image(case):
 
 
 def _default_x87_image():
-    image = bytearray(_X87_IMAGE_SIZE)
+    image = bytearray(X87_IMAGE_SIZE)
     struct.pack_into("<H", image, records.FX_FCW, records.FX_DEFAULT_FCW)
     return bytes(image)
 
@@ -960,21 +948,17 @@ def _base_state(model):
     gprs = [random.word() for _ in records.GPR_NAMES]
     vectors = [random.bits(256).to_bytes(32, "little") for _ in range(records.YMM_COUNT)]
     if model.mmx:
-        st = [_MMX_EXPONENT | random.word() for _ in range(8)]
+        st = [MMX_EXPONENT | random.word() for _ in range(8)]
     else:
         st = [random_float80(random) for _ in range(8)]
     return gprs, vectors, st
-
-
-def _immediates_of(instance):
-    return tuple(choice.value for choice in instance.operands if isinstance(choice, Imm))
 
 
 def _form_specs(model, members, first_index):
     base_state = _base_state(model)
     layouts = [_Layout(model, instance, ordinal, base_state) for ordinal, instance in enumerate(members)]
     primaries = [layout for layout in layouts if layout.instance.role == "primary"]
-    by_immediates = {_immediates_of(layout.instance): layout for layout in primaries}
+    by_immediates = {immediate_values(layout.instance.operands): layout for layout in primaries}
     first = by_immediates[model.immediates_for(0)]
     specs = []
 
@@ -987,7 +971,7 @@ def _form_specs(model, members, first_index):
     for mxcsr in MXCSR_STATES if model.floating else (CONSOLE_MXCSR,):
         for case in range(count):
             layout = by_immediates[model.immediates_for(case)]
-            twin = console[case] if mxcsr in (_FTZ_ALONE, _DAZ_ALONE) else None
+            twin = console[case] if mxcsr in (FTZ_ALONE, DAZ_ALONE) else None
             index = add(_build(layout, (_BASE, case), base=case, mxcsr=mxcsr, state=case), twin)
             if mxcsr == CONSOLE_MXCSR:
                 console[case] = index
@@ -1018,8 +1002,8 @@ def _form_specs(model, members, first_index):
 
 
 def _outside_specs(members, first_index):
-    gprs = [BlockOffset(_MEMORY)] * len(records.GPR_NAMES)
-    gprs[_RSP] = BlockOffset(_STACK)
+    gprs = [BlockOffset(MEMORY)] * len(records.GPR_NAMES)
+    gprs[_RSP] = BlockOffset(STACK)
     return [
         CaseSpec(
             index=first_index + number,
@@ -1145,7 +1129,7 @@ def _xlat_inputs(model, inputs):
 def _xlat_case(case):
     position = next(iter(case.layout.accesses))
     index = case.gprs[0] & 0xFF
-    table = case.targets[position] - index if case.special is not None else _MEMORY
+    table = case.targets[position] - index if case.special is not None else MEMORY
     case.set_address(IMPLICIT_BASES["bx"], table)
     edges = integer_edges(8)
     start = case.base if case.base is not None else case.random.below(len(edges))
@@ -1153,8 +1137,8 @@ def _xlat_case(case):
 
 
 def _enter_case(case):
-    case.set_address(IMPLICIT_BASES["bp"], _ENTER_FRAME)
-    level = _immediates_of(case.instance)[1] % 32
+    case.set_address(IMPLICIT_BASES["bp"], ENTER_FRAME)
+    level = immediate_values(case.instance.operands)[1] % 32
     position = next(iter(case.layout.accesses))
     width = case.layout.widths[position]
     pushes = 1 + max(level - 1, 0) + (1 if level else 0)
@@ -1291,21 +1275,21 @@ def _float80_slots(number):
 
 
 def _x87_valid(number):
-    return 0xFF if number % 2 == 0 else _X87_LOW_HALF
+    return 0xFF if number % 2 == 0 else X87_LOW_HALF
 
 
 def _fxsave_image(number):
     image = bytearray(records.FX_SIZE)
     top = number % 8
-    tags = _abridged_tags(top, _x87_valid(number))
-    struct.pack_into("<HHB", image, records.FX_FCW, _x87_control_word(number), top << 11, tags)
+    tags = abridged_tags(top, _x87_valid(number))
+    struct.pack_into("<HHB", image, records.FX_FCW, x87_control_word(number), top << 11, tags)
     struct.pack_into("<I", image, records.FX_MXCSR, _MXCSR_LOADS[number])
     for slot, value in enumerate(_float80_slots(number)):
         offset = records.fx_st_offset(slot)
         image[offset:offset + 10] = value.to_bytes(10, "little")
     lanes = integer_edges(64)
     for word in range(2 * records.YMM_COUNT):
-        struct.pack_into("<Q", image, _X87_IMAGE_SIZE + 8 * word, lanes[(number + word) % len(lanes)])
+        struct.pack_into("<Q", image, X87_IMAGE_SIZE + 8 * word, lanes[(number + word) % len(lanes)])
     return bytes(image)
 
 
@@ -1369,8 +1353,8 @@ def _environment(number, wide):
     for physical in range(8):
         slot = (physical - top) % 8
         tags |= (_tag(slots[slot]) if valid >> slot & 1 else 3) << 2 * physical
-    status = top << 11 | _X87_PENDING[number % len(_X87_PENDING)] & _X87_MASKS[number % len(_X87_MASKS)]
-    control = _x87_control_word(number)
+    status = top << 11 | X87_PENDING[number % len(X87_PENDING)] & X87_MASKS[number % len(X87_MASKS)]
+    control = x87_control_word(number)
     if wide:
         return struct.pack("<HxxHxxHxxIIIxxxx", control, status, tags, 0, 0, 0), slots
     return struct.pack("<HHHHHHH", control, status, tags, 0, 0, 0, 0), slots
@@ -1385,11 +1369,11 @@ def _environment_inputs(model, inputs):
             environment += b"".join(slot.to_bytes(10, "little") for slot in slots)
         case.store(case.targets[position], environment)
 
-    return inputs + [Input("environment", choice_values(range(len(_X87_CONTROLS))), apply, True)]
+    return inputs + [Input("environment", choice_values(range(len(X87_CONTROLS))), apply, True)]
 
 
 def _control_word_inputs(model, inputs):
-    values = choice_values(_x87_control_word(number) for number in range(len(_X87_CONTROLS)))
+    values = choice_values(x87_control_word(number) for number in range(len(X87_CONTROLS)))
     return inputs + [Input("control word", values, set_operand(model.position(0)), True)]
 
 
@@ -1467,7 +1451,7 @@ def _masked_store_case(case):
     if case.special is not None:
         location = LOCATIONS[case.instance.operands[1].name]
         if location[0] == "mmx":
-            case.st[location[1]] = _MMX_EXPONENT | MASK64
+            case.st[location[1]] = MMX_EXPONENT | MASK64
         else:
             case.vectors[location[1]] = _ALL_LANES
 

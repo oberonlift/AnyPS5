@@ -40,7 +40,7 @@ from dataclasses import replace
 from . import records
 from .cases import TARGET, expectation_written, form_model
 from .database import Group, classify, in_set
-from .encoding import Imm, Reg
+from .encoding import Reg, immediate_values
 from .model import LOCATIONS, Shape
 from .records import Outcome, Result
 from .state import State, apply_words, changed_words, initial_block, operand_address, register_value
@@ -159,7 +159,7 @@ def _mask(length):
 
 
 def _sse4a_field(case):
-    immediates = [choice.value for choice in case.instance.operands if isinstance(choice, Imm)]
+    immediates = immediate_values(case.instance.operands)
     if immediates:
         length, index = immediates
     else:
@@ -234,7 +234,7 @@ _SSE4A = {
 
 
 def _kernel_vector(case):
-    immediates = [choice.value for choice in case.instance.operands if isinstance(choice, Imm)]
+    immediates = immediate_values(case.instance.operands)
     if len(immediates) > 1:
         raise ExpectationError(f"{_key(case)} enters the console kernel with {len(immediates)} immediates, not one")
     return immediates[0] if immediates else 0

@@ -6,7 +6,8 @@ import unittest
 from pathlib import Path
 
 from instructions import compare, lifted, records, suite
-from instructions.cases import CONSOLE_MXCSR, BlockOffset
+from instructions.cases import BlockOffset
+from instructions.machine import CONSOLE_MXCSR
 from instructions.model import LOCATIONS, Shape
 from instructions.records import Header, Outcome, Result
 from instructions.tests.support import (

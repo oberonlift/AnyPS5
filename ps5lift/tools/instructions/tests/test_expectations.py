@@ -7,9 +7,10 @@ import unittest
 from pathlib import Path
 
 from instructions import expectations, records
-from instructions.cases import CONSOLE_MXCSR, BlockOffset, form_model
+from instructions.cases import BlockOffset, form_model
 from instructions.encoding import Imm, Mem, Reg
 from instructions.expectations import ExpectationError, NoExpectation, expected_result
+from instructions.machine import CONSOLE_MXCSR
 from instructions.model import LOCATIONS
 from instructions.records import Outcome
 from instructions.state import State, changed_words, initial_block, operand_address
