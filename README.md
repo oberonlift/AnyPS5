@@ -1,5 +1,7 @@
 **English** | [Português (Brasil)](docs/user/README.pt-BR.md) | [Español](docs/user/README.es.md) | [Català](docs/user/README.ca.md) | [Italiano](docs/user/README.it.md) | [简体中文](docs/user/README.zh-CN.md) | [Русский](docs/user/README.ru.md) | [Bahasa Indonesia](docs/user/README.id.md)
 
+> **This is the `ps5lift-preview` branch.** It adds ps5lift, which runs PS5 games natively on arm64 Linux, ahead of its pull requests to AnyPS5. Start with [PS5LIFT_PREVIEW.md](PS5LIFT_PREVIEW.md).
+
 # About
 
 Tool for automatic executables porting to Linux and Windows.
