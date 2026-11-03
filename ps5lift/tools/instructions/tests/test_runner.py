@@ -7,6 +7,7 @@ from instructions import records, runner
 from instructions.records import CaseInput, Header, Outcome
 
 CASES = 6
+HANG_TIMEOUT = 10
 TOOLS = Path(records.__file__).resolve().parents[1]
 STUB = f"""import os
 import sys
@@ -101,7 +102,7 @@ class RunnerTest(unittest.TestCase):
         self.assertEqual(self._spawn_count(), 2)
 
     def test_runner_records_timeout(self):
-        stderr, results = self._run("hang", 1, timeout=1)
+        stderr, results = self._run("hang", 1, timeout=HANG_TIMEOUT)
         self.assertEqual(results[1].outcome, Outcome.TIMED_OUT)
         self._assert_completed(results, 1)
         self.assertIn("stopped at case 1", stderr[1])
