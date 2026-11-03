@@ -700,7 +700,7 @@ std::set<std::uint32_t> ValidateShaders(std::span<const CompiledShader> shaders,
     const std::array<Stage, 3> meshComputeStages{Stage::Compute, Stage::Vertex, Stage::Fragment};
     static_cast<void>(AssemblePushConstants(shaders));
     std::vector<std::uint32_t> primitiveLocations;
-    if (mesh && !shaders.empty() && shaders.back().program != nullptr && shaders.back().program->barycentricEmulation.active) {
+    if (mesh && !meshCompute && !shaders.empty() && shaders.back().program != nullptr && shaders.back().program->barycentricEmulation.active) {
         const auto& last = *shaders.back().program;
         const auto layout = ShaderRecompiler::LayoutBarycentricEmulation(last.fragmentParameters, last.barycentricEmulation, true);
         if (layout.positionsLocation != ShaderRecompiler::BarycentricEmulationLayout::NoLocation) {

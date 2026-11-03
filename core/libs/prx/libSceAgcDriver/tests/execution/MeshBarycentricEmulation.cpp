@@ -7,6 +7,7 @@
 #include <cmath>
 #include <cstdio>
 #include <iostream>
+#include <optional>
 #include <span>
 #include <string>
 #include <string_view>
@@ -155,21 +156,26 @@ ShaderRecompiler::RecompileResult Draw(AgcDriver::VulkanDevice& device, std::spa
     fragment.useCache = false;
     auto pixelResult = ShaderRecompiler::Recompile(fragment);
     Require(pixelResult.barycentricEmulation.active, "the pixel shader did not emulate barycentrics");
-    mesh.graphics->meshBarycentrics = ShaderRecompiler::MeshBarycentricLayoutOf(pixelResult);
-    const auto pairedMesh = ShaderRecompiler::Recompile(mesh);
-    if (pixelCode.data() == BarycentricPixelCode.data()) {
-        auto last = mesh;
-        last.graphics->mesh->provokingVertex = 1u;
-        ExpectRejected([&] { static_cast<void>(ShaderRecompiler::Recompile(last)); }, "first provoking vertex");
-        auto wide = mesh;
-        wide.graphics->mesh->maxVertices = target.mesh->maxSharedMemoryBytes / 16u + 1u;
-        ExpectRejected([&] { static_cast<void>(ShaderRecompiler::Recompile(wide)); }, "mesh shared memory");
+    std::optional<ShaderRecompiler::RecompileResult> pairedMesh;
+    if (target.meshAsCompute) {
+        Require(DecorationWord(pixelResult, spv::DecorationPerPrimitiveEXT) == 0u, "the pixel shader of a mesh draw run as compute reads per-primitive inputs");
+    } else {
+        mesh.graphics->meshBarycentrics = ShaderRecompiler::MeshBarycentricLayoutOf(pixelResult);
+        pairedMesh = ShaderRecompiler::Recompile(mesh);
+        if (pixelCode.data() == BarycentricPixelCode.data()) {
+            auto last = mesh;
+            last.graphics->mesh->provokingVertex = 1u;
+            ExpectRejected([&] { static_cast<void>(ShaderRecompiler::Recompile(last)); }, "first provoking vertex");
+            auto wide = mesh;
+            wide.graphics->mesh->maxVertices = target.mesh->maxSharedMemoryBytes / 16u + 1u;
+            ExpectRejected([&] { static_cast<void>(ShaderRecompiler::Recompile(wide)); }, "mesh shared memory");
+        }
+        Require(pairedMesh->meshBarycentrics == mesh.graphics->meshBarycentrics, "the paired mesh does not record the layout it was compiled for");
+        Require(pairedMesh->pushConstants.size() == meshPush && pairedMesh->parameterExports == meshResult.parameterExports, "the paired mesh changed the push constants or exports the pixel shader was built for");
     }
-    Require(pairedMesh.meshBarycentrics == mesh.graphics->meshBarycentrics, "the paired mesh does not record the layout it was compiled for");
-    Require(pairedMesh.pushConstants.size() == meshPush && pairedMesh.parameterExports == meshResult.parameterExports, "the paired mesh changed the push constants or exports the pixel shader was built for");
 
     const std::array<AgcDriver::Graphics::CompiledShader, 2> shaders{{
-        {ShaderStage::Mesh, &pairedMesh, 0},
+        {ShaderStage::Mesh, pairedMesh ? &*pairedMesh : &meshResult, 0},
         {ShaderStage::Fragment, &pixelResult, PixelPushOffset(meshPush, target)}
     }};
 
@@ -188,7 +194,7 @@ ShaderRecompiler::RecompileResult Draw(AgcDriver::VulkanDevice& device, std::spa
     state.blend.colorWriteMask = 15;
     state.blends = {state.blend};
     state.blendConstants = {};
-    if (pixelCode.data() == BarycentricPixelCode.data()) CheckValidator(device, draw, state, pairedMesh, pixelResult, PixelPushOffset(meshPush, target));
+    if (pairedMesh && pixelCode.data() == BarycentricPixelCode.data()) CheckValidator(device, draw, state, *pairedMesh, pixelResult, PixelPushOffset(meshPush, target));
     device.Draw(state, draw, shaders);
     device.WaitIdle();
     return pixelResult;
@@ -275,10 +281,6 @@ int main() {
     try {
         const auto device = OpenVulkanTestDevice();
         if (!device) return VulkanTestSkipped;
-        if (!device->Target().mesh.has_value()) {
-            std::puts("skipped, the device has no VK_EXT_mesh_shader");
-            return VulkanTestSkipped;
-        }
         if (device->DeviceName().starts_with("llvmpipe")) {
             std::puts("skipped, the device has no mesh shader compiler that handles these programs (llvmpipe)");
             return VulkanTestSkipped;
@@ -300,7 +302,7 @@ int main() {
         result = Draw(*device, VertexValuePixelCode, perspective);
         Require(result.barycentricEmulation.active && result.fragmentParameters.size() == 1 && result.fragmentParameters[0].perVertex, "v_interp_mov of P10 and P20 did not emulate per-vertex parameters");
         const auto vertexValues = CheckVertexValues();
-        std::printf("mesh barycentric emulation tests passed: %u perspective and %u linear I/J pixels, %u raw vertex value pixels\n", smooth, noPerspective, vertexValues);
+        std::printf("mesh barycentric emulation tests passed%s: %u perspective and %u linear I/J pixels, %u raw vertex value pixels\n", device->Target().meshAsCompute ? " through the compute pass" : "", smooth, noPerspective, vertexValues);
         return 0;
     } catch (const std::exception& error) {
         std::cerr << error.what() << '\n';

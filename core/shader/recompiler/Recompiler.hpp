@@ -934,7 +934,7 @@ struct BarycentricTessellationShaders {
 };
 
 [[nodiscard]] BarycentricTessellationShaders BuildBarycentricTessellationShaders(const RecompileResult& vertex, const RecompileResult& fragment, const SpirvTarget& target, std::uint32_t maxFragmentInputComponents, std::uint32_t provokingVertex);
-[[nodiscard]] RecompileResult BuildMeshReadbackVertexShader(const RecompileResult& mesh, std::uint32_t vulkanVersion);
+[[nodiscard]] RecompileResult BuildMeshReadbackVertexShader(const RecompileResult& mesh, const RecompileResult& fragment, std::uint32_t vulkanVersion);
 
 }
 

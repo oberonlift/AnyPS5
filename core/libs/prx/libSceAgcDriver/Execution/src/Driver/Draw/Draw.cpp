@@ -1051,20 +1051,21 @@ DrawVerdict Driver::finishDraw(DrawTail& tail, PerformanceTimer& timing) {
         stages.insert(std::next(evaluation), Graphics::CompiledShader{Stage::Geometry, &results.back(), 0});
     }
     if (!programs.empty() && programResults.back() != nullptr && programResults.back()->barycentricEmulation.active && graphics.stages.path == Graphics::ShaderPath::Geometry) {
-        require(localDevice->Target().mesh.has_value(), "a pixel shader on the mesh path reads barycentrics, and this device has neither VK_KHR_fragment_shader_barycentric nor mesh shaders (VK_EXT_mesh_shader), so they cannot be provided or emulated");
         require(!graphics.rectList && graphics.stages.mesh && programs.size() == 2 && programResults[0] != nullptr && programResults[1] != nullptr && stages.size() == 2, "a pixel shader that reads barycentrics needs exactly one mesh program before it to emulate them");
-        meshBarycentrics = ShaderRecompiler::MeshBarycentricLayoutOf(*programResults[1]);
-        if (programResults[0]->meshBarycentrics != meshBarycentrics) {
-            const auto pushBytes = programResults[0]->pushConstants.size();
-            const auto exports = programResults[0]->parameterExports;
-            compiledStages.push_back(materializeDrawStage(0, pushOffsets[0], queue, submission, packetOffset, traceToken, programs, graphics, pixel, vertexInfos, memory, linked, drawParameters, localDevice, *shaderMemory, stageCaptures, recompiled, drawHit, matched, matchedRegions, profile, dumpTarget, dumpSlot1, captures, phaseTiming, phaseMs, rejected, meshBarycentrics));
-            if (!rejected.empty()) return DrawVerdict::Rejected;
-            programResults[0] = compiledStages.back().get();
-            stages[0].program = programResults[0];
-            stages[0].registeredImageViews = stageCaptures[0].registeredViews.get();
-            require(programResults[0]->pushConstants.size() == pushBytes && programResults[0]->parameterExports == exports, "pairing the mesh program with its pixel shader changed the push constants or the parameter exports the pixel shader was built for");
+        if (!localDevice->Target().meshAsCompute) {
+            meshBarycentrics = ShaderRecompiler::MeshBarycentricLayoutOf(*programResults[1]);
+            if (programResults[0]->meshBarycentrics != meshBarycentrics) {
+                const auto pushBytes = programResults[0]->pushConstants.size();
+                const auto exports = programResults[0]->parameterExports;
+                compiledStages.push_back(materializeDrawStage(0, pushOffsets[0], queue, submission, packetOffset, traceToken, programs, graphics, pixel, vertexInfos, memory, linked, drawParameters, localDevice, *shaderMemory, stageCaptures, recompiled, drawHit, matched, matchedRegions, profile, dumpTarget, dumpSlot1, captures, phaseTiming, phaseMs, rejected, meshBarycentrics));
+                if (!rejected.empty()) return DrawVerdict::Rejected;
+                programResults[0] = compiledStages.back().get();
+                stages[0].program = programResults[0];
+                stages[0].registeredImageViews = stageCaptures[0].registeredViews.get();
+                require(programResults[0]->pushConstants.size() == pushBytes && programResults[0]->parameterExports == exports, "pairing the mesh program with its pixel shader changed the push constants or the parameter exports the pixel shader was built for");
+            }
+            require(programResults[0]->meshBarycentrics == meshBarycentrics, "the mesh program was compiled for a different barycentric layout than its pixel shader");
         }
-        require(programResults[0]->meshBarycentrics == meshBarycentrics, "the mesh program was compiled for a different barycentric layout than its pixel shader");
     } else if (!graphics.rectList && !programs.empty() && programResults.back() != nullptr && programResults.back()->barycentricEmulation.active) {
         require(graphics.stages.path == Graphics::ShaderPath::Vertex && programs.size() == 2 && programResults[0] != nullptr && stages.size() == 2, "a pixel shader that reads barycentrics without VK_KHR_fragment_shader_barycentric needs a vertex shader before it");
         const auto geometryLimits = localDevice->GeometryLimits();

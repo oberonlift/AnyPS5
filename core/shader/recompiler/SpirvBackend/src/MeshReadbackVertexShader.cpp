@@ -4,6 +4,9 @@
 #include "SpirvBackend/SpirvOptimizer.hpp"
 #endif
 #include <algorithm>
+#include <array>
+#include <bit>
+#include <optional>
 #include <stdexcept>
 #include <string>
 
@@ -20,18 +23,27 @@ class MeshReadbackEmitter {
 public:
     explicit MeshReadbackEmitter(std::uint32_t version) : builder(version), listsAllGlobals(version >= 0x00010400u) {
         voidType = builder.Type(spv::OpTypeVoid);
+        boolType = builder.Type(spv::OpTypeBool);
         uintType = builder.Type(spv::OpTypeInt, 32u, 0u);
         intType = builder.Type(spv::OpTypeInt, 32u, 1u);
         ulongType = builder.Type(spv::OpTypeInt, 64u, 0u);
         floatType = builder.Type(spv::OpTypeFloat, 32u);
+        vec3FloatType = builder.Type(spv::OpTypeVector, floatType, 3u);
         vec4FloatType = builder.Type(spv::OpTypeVector, floatType, 4u);
         functionType = builder.Type(spv::OpTypeFunction, voidType);
     }
 
-    std::vector<std::uint32_t> Emit(const std::vector<std::uint32_t>& parameters, std::uint32_t layout) {
+    std::vector<std::uint32_t> Emit(const std::vector<std::uint32_t>& exports, std::uint32_t layout, const EmulatedInterface* emulated) {
         const auto clipDistances = MeshRecordClipDistances(layout);
         const auto cullDistances = MeshRecordCullDistances(layout);
         const bool layer = MeshRecordLayer(layout);
+        const auto size = MeshRecordPrimitiveSize(layout);
+        require(emulated == nullptr || size == 3u, "emulated barycentrics need triangle primitives");
+        const auto slot = [&](std::uint32_t location) {
+            const auto found = std::find(exports.begin(), exports.end(), location);
+            require(found != exports.end(), "fragment parameter " + std::to_string(location) + " is not exported by the mesh program");
+            return static_cast<std::uint32_t>(found - exports.begin());
+        };
         builder.EmitCapability(spv::CapabilityShader);
         if (clipDistances != 0u) builder.EmitCapability(spv::CapabilityClipDistance);
         if (cullDistances != 0u) builder.EmitCapability(spv::CapabilityCullDistance);
@@ -53,10 +65,31 @@ public:
         builder.AddAnnotation(spv::OpDecorate, vertexIndex, spv::DecorationBuiltIn, spv::BuiltInVertexIndex);
         const auto position = addInterface(spv::StorageClassOutput, vec4FloatType);
         builder.AddAnnotation(spv::OpDecorate, position, spv::DecorationBuiltIn, spv::BuiltInPosition);
+        const auto& passed = emulated != nullptr ? emulated->passed : exports;
         std::vector<std::uint32_t> outputs;
-        for (const auto location : parameters) {
+        for (const auto location : passed) {
             outputs.push_back(addInterface(spv::StorageClassOutput, vec4FloatType));
             builder.AddAnnotation(spv::OpDecorate, outputs.back(), spv::DecorationLocation, location);
+        }
+        const BarycentricEmulationLayout unemulated;
+        const auto& emulation = emulated != nullptr ? emulated->layout : unemulated;
+        const auto barycentricOutput = [&](std::uint32_t location) {
+            if (location == BarycentricEmulationLayout::NoLocation) return 0u;
+            const auto variable = addInterface(spv::StorageClassOutput, vec3FloatType);
+            builder.AddAnnotation(spv::OpDecorate, variable, spv::DecorationLocation, location);
+            return variable;
+        };
+        const auto smooth = barycentricOutput(emulation.smoothLocation);
+        const auto linear = barycentricOutput(emulation.linearLocation);
+        const auto reciprocalW = barycentricOutput(emulation.reciprocalWLocation);
+        if (reciprocalW != 0u) builder.AddAnnotation(spv::OpDecorate, reciprocalW, spv::DecorationNoPerspective);
+        const auto cornerArrayType = builder.Type(spv::OpTypeArray, vec4FloatType, constant(uintType, 3u));
+        std::vector<std::uint32_t> perVertexOutputs;
+        if (emulated != nullptr) {
+            for (const auto& parameter : emulated->perVertex) {
+                perVertexOutputs.push_back(addInterface(spv::StorageClassOutput, cornerArrayType));
+                builder.AddAnnotation(spv::OpDecorate, perVertexOutputs.back(), spv::DecorationLocation, parameter.location);
+            }
         }
         const auto distanceOutput = [&](std::uint32_t count, spv::BuiltIn builtin) {
             if (count == 0u) return 0u;
@@ -79,22 +112,50 @@ public:
         const auto corners = widen(loadAt(uintType, output));
         const auto records = result(spv::OpIAdd, ulongType, triangles, result(spv::OpShiftLeftLogical, ulongType, corners, constant(uintType, 2u)));
         const auto corner = widen(result(spv::OpBitcast, uintType, load(intType, vertexIndex)));
-        const auto vertex = widen(loadAt(uintType, result(spv::OpIAdd, ulongType, triangles, result(spv::OpShiftLeftLogical, ulongType, corner, constant(uintType, 2u)))));
-        const auto parameterCount = static_cast<std::uint32_t>(parameters.size());
+        const auto parameterCount = static_cast<std::uint32_t>(exports.size());
         const auto stride = constant64(MeshRecordBytes(parameterCount, layout));
-        const auto record = result(spv::OpIAdd, ulongType, records, result(spv::OpIMul, ulongType, vertex, stride));
-        store(position, loadAt(vec4FloatType, record));
-        for (std::size_t i = 0; i < outputs.size(); ++i) store(outputs[i], loadAt(vec4FloatType, offset(record, 16ull * (1u + i))));
+        const auto recordOf = [&](std::uint32_t cornerIndex) {
+            const auto vertex = widen(loadAt(uintType, result(spv::OpIAdd, ulongType, triangles, result(spv::OpShiftLeftLogical, ulongType, cornerIndex, constant(uintType, 2u)))));
+            return result(spv::OpIAdd, ulongType, records, result(spv::OpIMul, ulongType, vertex, stride));
+        };
+        const auto record = recordOf(corner);
+        const auto clipPosition = loadAt(vec4FloatType, record);
+        store(position, clipPosition);
+        for (std::size_t i = 0; i < outputs.size(); ++i) store(outputs[i], loadAt(vec4FloatType, offset(record, 16ull * (1u + slot(passed[i])))));
+        if (emulated != nullptr) {
+            const auto inPrimitive = result(spv::OpUMod, ulongType, corner, constant64(size));
+            const auto first = result(spv::OpISub, ulongType, corner, inPrimitive);
+            const auto zero = constant(floatType, 0u);
+            const auto weights = [&](std::uint32_t value) {
+                std::array<std::uint32_t, 3> components{};
+                for (std::uint32_t k = 0; k < 3u; ++k) components[k] = result(spv::OpSelect, floatType, result(spv::OpIEqual, boolType, inPrimitive, constant64(k)), value, zero);
+                return result(spv::OpCompositeConstruct, vec3FloatType, components[0], components[1], components[2]);
+            };
+            const auto one = constant(floatType, std::bit_cast<std::uint32_t>(1.0f));
+            if (smooth != 0u || linear != 0u) {
+                const auto unit = weights(one);
+                if (smooth != 0u) store(smooth, unit);
+                if (linear != 0u) store(linear, unit);
+            }
+            if (reciprocalW != 0u) store(reciprocalW, weights(result(spv::OpFDiv, floatType, one, result(spv::OpCompositeExtract, floatType, clipPosition, 3u))));
+            if (!perVertexOutputs.empty()) {
+                std::array<std::uint32_t, 3> cornerRecords{};
+                for (std::uint32_t k = 0; k < 3u; ++k) cornerRecords[k] = recordOf(result(spv::OpIAdd, ulongType, first, constant64(k)));
+                const auto outputVec4Pointer = builder.Type(spv::OpTypePointer, spv::StorageClassOutput, vec4FloatType);
+                for (std::size_t i = 0; i < perVertexOutputs.size(); ++i) {
+                    const auto source = 16ull * (1u + slot(emulated->perVertex[i].sourceLocation));
+                    for (std::uint32_t k = 0; k < 3u; ++k) store(result(spv::OpAccessChain, outputVec4Pointer, perVertexOutputs[i], constant(intType, k)), loadAt(vec4FloatType, offset(cornerRecords[k], source)));
+                }
+            }
+        }
         const auto extras = MeshRecordExtraOffset(parameterCount);
         const auto outputPointer = builder.Type(spv::OpTypePointer, spv::StorageClassOutput, floatType);
         for (std::uint32_t i = 0; i < clipDistances; ++i) store(result(spv::OpAccessChain, outputPointer, clip, constant(intType, i)), loadAt(floatType, offset(record, extras + 4ull * i)));
         for (std::uint32_t i = 0; i < cullDistances; ++i) store(result(spv::OpAccessChain, outputPointer, cull, constant(intType, i)), loadAt(floatType, offset(record, extras + 4ull * (clipDistances + i))));
         if (layer) {
-            const auto size = MeshRecordPrimitiveSize(layout);
             const auto primitive = result(spv::OpUDiv, ulongType, corner, constant64(size));
             const auto provokingCorner = result(spv::OpIAdd, ulongType, result(spv::OpIMul, ulongType, primitive, constant64(size)), constant64(std::min(MeshRecordProvokingVertex(layout), size - 1u)));
-            const auto provoking = widen(loadAt(uintType, result(spv::OpIAdd, ulongType, triangles, result(spv::OpShiftLeftLogical, ulongType, provokingCorner, constant(uintType, 2u)))));
-            const auto provokingRecord = result(spv::OpIAdd, ulongType, records, result(spv::OpIMul, ulongType, provoking, stride));
+            const auto provokingRecord = recordOf(provokingCorner);
             store(layerOutput, result(spv::OpBitcast, intType, loadAt(uintType, offset(provokingRecord, extras + 4ull * (clipDistances + cullDistances)))));
         }
         builder.AddFunction(spv::OpReturn);
@@ -108,10 +169,12 @@ private:
     std::vector<std::uint32_t> interfaces;
     std::uint32_t main = 0;
     std::uint32_t voidType = 0;
+    std::uint32_t boolType = 0;
     std::uint32_t uintType = 0;
     std::uint32_t intType = 0;
     std::uint32_t ulongType = 0;
     std::uint32_t floatType = 0;
+    std::uint32_t vec3FloatType = 0;
     std::uint32_t vec4FloatType = 0;
     std::uint32_t functionType = 0;
 
@@ -150,14 +213,16 @@ private:
 
 }
 
-RecompileResult BuildMeshReadbackVertexShader(const RecompileResult& mesh, std::uint32_t vulkanVersion) {
+RecompileResult BuildMeshReadbackVertexShader(const RecompileResult& mesh, const RecompileResult& fragment, std::uint32_t vulkanVersion) {
     const auto& words = mesh.spirv.Words();
     require(words.size() >= 5u && words[1] >= 0x00010300u && words[1] <= 0x00010500u, "unsupported SPIR-V version of the mesh program");
+    std::optional<EmulatedInterface> emulated;
+    if (fragment.barycentricEmulation.active) emulated = DescribeEmulatedInterface(fragment.fragmentParameters, fragment.barycentricEmulation);
     MeshReadbackEmitter emitter(words[1]);
     RecompileResult result;
     result.variantId = mesh.variantId;
     result.runtimeAbiVersion = mesh.runtimeAbiVersion;
-    result.spirv = emitter.Emit(mesh.parameterExports, mesh.meshRecordLayout);
+    result.spirv = emitter.Emit(mesh.parameterExports, mesh.meshRecordLayout, emulated ? &*emulated : nullptr);
 #if ANYPS5_ENABLE_SPIRV_TOOLS
     result.spirv = ValidateAndOptimizeSpirv(result.spirv, vulkanVersion, words[1]);
 #else

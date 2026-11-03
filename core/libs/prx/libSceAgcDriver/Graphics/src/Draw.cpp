@@ -1280,8 +1280,9 @@ std::vector<CompiledShader> MeshComputeStages(const Context& context, const Stat
     if (!MeshDrawRunsAsCompute(context, state) || shaders.empty() || shaders.front().stage != Stage::Mesh) return {};
     Require(shaders.size() == 2u && shaders.front().program != nullptr && shaders.front().program->variantId != 0, "a mesh program run as compute needs one fragment stage and a variant id");
     static std::mutex mutex;
-    static std::map<std::uint64_t, std::unique_ptr<const ShaderRecompiler::RecompileResult>> readbacks;
+    static std::map<std::pair<std::uint64_t, std::uint64_t>, std::unique_ptr<const ShaderRecompiler::RecompileResult>> readbacks;
     const auto& mesh = *shaders.front().program;
+    const auto& fragment = *shaders.back().program;
     Require(mesh.meshRecordLayout != 0, "a mesh-path draw run as compute has a mesh program compiled for the mesh stage");
     const auto host = mesh.hostSubgroupSize;
     const auto lanes = context.computeWave32 && (host == 32u || host > context.maxComputeSubgroupSize) ? std::min(host, context.maxComputeSubgroupSize) : context.subgroup.subgroupSize;
@@ -1289,8 +1290,8 @@ std::vector<CompiledShader> MeshComputeStages(const Context& context, const Stat
     const ShaderRecompiler::RecompileResult* readback = nullptr;
     {
         std::lock_guard lock(mutex);
-        auto& entry = readbacks[mesh.variantId];
-        if (entry == nullptr) entry = std::make_unique<const ShaderRecompiler::RecompileResult>(ShaderRecompiler::BuildMeshReadbackVertexShader(mesh, VK_API_VERSION_1_1));
+        auto& entry = readbacks[{mesh.variantId, fragment.barycentricEmulation.active ? fragment.variantId : 0u}];
+        if (entry == nullptr) entry = std::make_unique<const ShaderRecompiler::RecompileResult>(ShaderRecompiler::BuildMeshReadbackVertexShader(mesh, fragment, VK_API_VERSION_1_1));
         readback = entry.get();
     }
     return {{Stage::Compute, &mesh, shaders.front().pushConstantOffset}, {Stage::Vertex, readback, shaders.front().pushConstantOffset}, shaders.back()};
