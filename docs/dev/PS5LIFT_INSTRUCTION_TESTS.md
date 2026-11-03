@@ -28,7 +28,7 @@ The PS5's CPU is an AMD Zen 2 (family 17h, model 47h), as [Cpuid.cpp](../../ps5l
 The set follows Zen 2's behaviour where Zydis's labels do not:
 
 - The lifter and the generator decode with Zydis's AMD branch mode (`ZYDIS_DECODER_MODE_AMD_BRANCHES`), so a 66-prefixed near branch is the 16-bit branch Zen 2 executes, not the 64-bit one Intel does.
-- Encodings in the hint space that Zen 2 executes as NOPs or prefetches belong to the set with that behaviour, whatever extension Zydis gives them: `endbr32` and `endbr64`, `bnd`-prefixed branches (an ordinary branch), `cldemote`, `prefetchit0` and `prefetchit1` (NOPs), and the `0F 0D` prefetch encodings, including the one Zydis names `prefetchwt1`. This short list is the only exception to classifying by extension.
+- The hint space, the legacy opcodes `0F 0D` and `0F 18` to `0F 1F`, belongs to the set whatever extension Zydis gives an encoding there, with the behaviour Zen 2 gives it, a prefetch or a NOP: among them `endbr32` and `endbr64`, `cldemote`, `prefetchit0` and `prefetchit1`, the MPX instructions and `rdssp`, which are NOPs, and the `0F 0D` prefetch encodings, including the one Zydis names `prefetchwt1`. This opcode range is the only exception to classifying by extension. A `bnd`-prefixed branch is an ordinary branch.
 - The APX REX2 rows that the database files under in-set extensions are not in the set: their prefix is invalid on Zen 2. Instructions in the set that fault by definition, such as `ud2`, `ud0`, `ud1` and `rsm`, keep their cases: the expected result is the fault.
 
 Zen 2 also implements CLZERO, MCOMMIT, RDPRU, MONITORX/MWAITX and FSGSBASE, which the PS5 CPUID that ps5lift reports leaves out. MONITORX/MWAITX and CLZERO belong to the set all the same, because PS5 executables use them: AnyPS5's relinker lowers them where it finds them in a PS5 executable ([Amd64OnlyInstructionMatcher.cpp](../../core/relinker/codegen/src/x86/Amd64OnlyInstructionMatcher.cpp)). The set gives them Zen 2's user-mode behaviour: `monitorx` does nothing, `mwaitx` returns at once, like `pause`, with no architectural state changed, and `clzero` zeroes the 64-byte cache line that holds the address in rax. MCOMMIT, RDPRU and FSGSBASE are treated as instructions outside the set (an invalid-opcode stop) until a console measurement says otherwise.
@@ -39,7 +39,7 @@ The generator reads the database, not a list in the source, so a newer Zydis bri
 
 A case is one instruction instance with an initial machine state.
 
-- **Instance:** the bytes Zydis's encoder produces for one form with chosen operands. Register operands are chosen to cover the special cases of the encoding rather than every combination: the low and high registers (`rax`, `r15`), `rsp` and `rbp` where an encoding treats them specially, the high byte registers (`ah` to `bh`) and the REX forms that exclude them, the same register as source and destination, and `xmm8` to `xmm15` and `ymm` forms. Memory operands cover each addressing form: base only, base and index with each scale, displacement sizes, RIP-relative, and `rsp`/`rbp`/`r12`/`r13` as base.
+- **Instance:** the bytes the suite's own encoder produces for one form with chosen operands, verified by decoding them with Zydis as the lifter does. Register operands are chosen to cover the special cases of the encoding rather than every combination: the low and high registers (`rax`, `r15`), `rsp` and `rbp` where an encoding treats them specially, the high byte registers (`ah` to `bh`) and the REX forms that exclude them, the same register as source and destination, and `xmm8` to `xmm15` and `ymm` forms. Memory operands cover each addressing form: base only, base and index with each scale, displacement sizes, RIP-relative, and `rsp`/`rbp`/`r12`/`r13` as base.
 - **Initial state:** the sixteen GPRs, RFLAGS (CF, PF, AF, ZF, SF, OF and DF; TF and AC clear), MXCSR, the x87 control word, status word, tag word and the eight registers, `ymm0` to `ymm15`, and a memory block that holds every memory operand, with the stack inside it.
 - **Inputs:** seeded random values plus edge values for each operand type. Integers: 0, 1, -1, the minimum and maximum of each width, values either side of a sign or carry boundary, and shift and rotate counts of 0, 1, width - 1, width, width + 1 and at least 255. Floating point (each width, packed and scalar): positive and negative zero, the smallest and largest denormal and normal, infinities, quiet and signaling NaNs with payloads, and values on either side of a rounding boundary. MXCSR: each rounding mode, FTZ and DAZ alone and together, and each exception unmasked; an input that runs with only one of FTZ and DAZ set also runs with both, which fast mode's comparison needs. x87: each precision and rounding control. Memory: aligned and misaligned operands, and operands that end at the block's end.
 
@@ -84,11 +84,11 @@ ps5lift lifts SSE and AVX floating point in one of two modes, chosen the way a c
 
 `--float fast` gives up exactness in a fixed list of ways, and fast-mode results are compared with these differences allowed and no others:
 
-- A NaN result may be any NaN, with the host's payload and sign.
+- A NaN result of an instruction that computes floating-point values (one whose exception class can raise SIMD floating-point exceptions, compares excepted, `rcp*` and `rsqrt*`, and the F16C conversions) may be any NaN, with the host's payload and sign.
 - Under DAZ, `min` and `max` may return a denormal operand where x86 returns a signed zero.
 - MXCSR's exception flags are the host's and are not compared.
 - FTZ and DAZ act together: a case with only one of them set is compared with the recording of the same inputs with both set.
-- A flushed result is judged tiny before rounding, so a result that x86 rounds to the smallest normal may be a zero of the same sign.
+- A flushed result is judged tiny before rounding, so a result of such an instruction that x86 rounds to the smallest normal may be a zero of the same sign.
 - SIMD exceptions are not raised. An instruction that unmasks one (`ldmxcsr`, `vldmxcsr`, `fxrstor` or an `xrstor` form) stops with a message that names it and says the program needs `--float exact`, and its cases expect that stop.
 
 A program that keeps the console's MXCSR (`0x9fc0`: FTZ and DAZ set, every exception masked) meets neither of the last two.
@@ -105,9 +105,9 @@ Some inputs fault on the hardware: a divide by zero or an overflowing quotient, 
 
 Every other instruction gets cases too, which check that the lifted program stops as the console would:
 
-- **Not on the PS5 CPU:** extensions Zen 2 lacks (AVX-512 in all its forms, XOP, FMA4, TBM, 3DNow! except its prefetches, VAES, VPCLMULQDQ, GFNI, AMX, PadLock and the rest) and the Zen 2 extras the PS5 CPUID leaves out other than MONITORX/MWAITX and CLZERO (MCOMMIT, RDPRU and FSGSBASE). Zydis gives each decoded instruction's extension, so the lifter classifies them by extension, with the hint-space list above as the only exception. On the console they raise an invalid-opcode exception.
+- **Not on the PS5 CPU:** extensions Zen 2 lacks (AVX-512 in all its forms, XOP, FMA4, TBM, 3DNow! except its prefetches, VAES, VPCLMULQDQ, GFNI, AMX, PadLock and the rest) and the Zen 2 extras the PS5 CPUID leaves out other than MONITORX/MWAITX and CLZERO (MCOMMIT, RDPRU and FSGSBASE). Zydis gives each decoded instruction's extension, so the lifter classifies them by extension, with the hint space above as the only exception. On the console they raise an invalid-opcode exception.
 - **Privileged or I/O:** definitions the database marks as CPL 0 (20 mnemonics, among them `hlt`, `wrmsr`, `swapgs`, `xsaves`, and `mov` to or from a control or debug register; the pinned database leaves `lgdt` unmarked, and the suite names it explicitly), which Zydis reports as privileged, and the I/O and IOPL-dependent instructions (`in`, `out`, `ins*`, `outs*`, `cli`, `sti`, and `rdpmc`, which no measurement shows the console enabling for user code), which a PS5 program is never allowed to use. On the console they raise a general-protection exception.
-- **Dependent on the console's segment tables:** `mov` to a segment register, `lar`, `lsl`, `verr`, `verw`, `sgdt`, `sidt`, `sldt`, `smsw`, `str`, far `ret`, far `call`, far `jmp`, `iret` in each size, and `lfs`, `lgs`, `lss`. Their results depend on descriptor tables that cannot be measured without a PS5, so they stop with a message that names the instruction and why. They appear only where discovery takes data for code.
+- **Dependent on the console's segment tables:** `mov` to or from a segment register, `push` and `pop` of `fs` and `gs`, `lar`, `lsl`, `verr`, `verw`, `sgdt`, `sidt`, `sldt`, `smsw`, `str`, far `ret`, far `call`, far `jmp`, `iret` in each size, and `lfs`, `lgs`, `lss`. Their results depend on descriptor tables that cannot be measured without a PS5, so they stop with a message that names the instruction and why. They appear only where discovery takes data for code.
 - **Dependent on the console's kernel:** `syscall`, `int n` and `int1`. What they do is the kernel's, not the CPU's (Linux, where the recordings are made, answers `int 0x80` as a system call), so they stop with a named message too. Retail code reaches the kernel through libkernel, which AnyPS5 replaces.
 
 The lift report counts these four groups and the instructions the lifter is missing separately, and the runtime's stop names the group.
@@ -137,7 +137,7 @@ These were settled without a decision from the project's owner and can be revisi
 - A case that faults is compared by its exception and addresses, not its registers and memory, until lifted code delivers guest exceptions.
 - Approximation instructions (`rcp*`, `rsqrt*`) and x87 transcendentals are compared within a tolerance, the only exceptions to exact comparison besides `rdrand` and `rdseed`.
 - AMD's documented behaviour wins over the Intel recording where the vendors differ.
-- Decoding follows Zen 2: AMD branch mode, and the hint-space list.
+- Decoding follows Zen 2: AMD branch mode, and the hint space.
 - Faults on misaligned operands are reproduced: a check before each access that requires alignment.
 - Zen 2 instructions the PS5 CPUID leaves out stop as invalid opcodes, except MONITORX/MWAITX and CLZERO, which PS5 executables use.
 - `syscall` and `int n` stop with a named message, as do the instructions that depend on segment tables.
