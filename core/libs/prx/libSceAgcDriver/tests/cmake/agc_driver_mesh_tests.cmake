@@ -5,7 +5,7 @@ target_include_directories(agc_driver_mesh_tests PRIVATE
         ${ANYPS5_VULKAN_HEADERS_INCLUDE_DIR}
         ${ANYPS5_SPIRV_HEADERS_INCLUDE_DIR}
 )
-target_link_libraries(agc_driver_mesh_tests PRIVATE libSceAgcDriver SDL2-static libc)
+target_link_libraries(agc_driver_mesh_tests PRIVATE libSceAgcDriver SDL2-static libc libkernel)
 set_target_properties(agc_driver_mesh_tests PROPERTIES CXX_EXTENSIONS OFF)
 configure_windows_unwind(agc_driver_mesh_tests)
 

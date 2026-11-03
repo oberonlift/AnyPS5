@@ -22,7 +22,7 @@ using ShaderRecompiler::ShaderStage;
 constexpr std::uint32_t Width = 64;
 constexpr std::uint32_t Height = 48;
 constexpr float Unwritten = -7.0f;
-alignas(256) std::array<float, Width * Height * 4> Pixels{};
+std::span<float> Pixels;
 
 alignas(256) constexpr std::array<std::uint32_t, 104> MeshCode{
     0x8f6a9003, 0x94fe6ac1, 0xbf88000b, 0xd7650006, 0x000100c1, 0xd7660006, 0x00020cc1, 0x93ebff03,
@@ -63,10 +63,10 @@ constexpr std::array<float, 3> VertexValues{0.25f, -3.5f, 7.75f};
 
 constexpr std::array<Corner, 3> Corners{{{-0.8f, -0.8f, 1.0f}, {0.9f, -0.6f, 2.5f}, {-0.5f, 0.85f, 0.5f}}};
 
-alignas(256) std::array<Vertex, 3> Vertices{};
+std::span<Vertex> Vertices;
 
 std::array<std::uint32_t, 4> VertexBufferDescriptor(const void* vertices, std::uint32_t count) {
-    const auto address = reinterpret_cast<std::uintptr_t>(vertices);
+    const auto address = GuestTestAddress(vertices);
     return {static_cast<std::uint32_t>(address), static_cast<std::uint32_t>((address >> 32u) & 0xffffu) | (32u << 16u), count, 0x01016facu};
 }
 
@@ -112,7 +112,7 @@ void CheckValidator(AgcDriver::VulkanDevice& device, const AgcDriver::Pm4::DrawP
 }
 
 ShaderRecompiler::RecompileResult Draw(AgcDriver::VulkanDevice& device, std::span<const std::uint32_t> pixelCode, std::uint32_t inputs) {
-    Pixels.fill(Unwritten);
+    std::ranges::fill(Pixels, Unwritten);
     auto target = device.Target();
     target.fragmentShaderBarycentricEnabled = false;
     target.fragmentBarycentricBuiltins = false;
@@ -175,7 +175,7 @@ ShaderRecompiler::RecompileResult Draw(AgcDriver::VulkanDevice& device, std::spa
 
     AgcDriver::Graphics::State state{};
     state.stages = {AgcDriver::Graphics::ShaderPath::Geometry, 0x20u, 64u, 64u, SmallSubgroup, std::nullopt};
-    state.color = {reinterpret_cast<std::uintptr_t>(Pixels.data()), {Width, Height}, VK_FORMAT_R32G32B32A32_SFLOAT, sizeof(Pixels), 0xe4u, AgcDriver::Graphics::ColorTileMode::Linear, 16u};
+    state.color = {GuestTestAddress(Pixels.data()), {Width, Height}, VK_FORMAT_R32G32B32A32_SFLOAT, Pixels.size_bytes(), 0xe4u, AgcDriver::Graphics::ColorTileMode::Linear, 16u};
     state.colors = {state.color};
     state.hasColorTarget = true;
     state.renderExtent = {Width, Height};
@@ -283,6 +283,8 @@ int main() {
             std::puts("skipped, the device has no mesh shader compiler that handles these programs (llvmpipe)");
             return VulkanTestSkipped;
         }
+        Pixels = GuestTestArray<float>(Width * Height * 4);
+        Vertices = GuestTestArray<Vertex>(Corners.size());
         for (std::size_t i = 0; i < Corners.size(); ++i) {
             const auto& corner = Corners[i];
             Vertices[i] = {{corner.x * corner.w, corner.y * corner.w, 0.5f * corner.w, corner.w}, {VertexValues[i], 0.0f, 0.0f, 1.0f}};
