@@ -1,4 +1,3 @@
-import dataclasses
 import shutil
 import tempfile
 import unittest
@@ -53,10 +52,13 @@ class OutsideCasesTest(unittest.TestCase):
 
     def test_int_expects_its_vector(self):
         case = find_case("outside-console-kernel", _instance_of("int"))
-        self.assertEqual(case.instance.operands, (Imm(0),))
-        vector = dataclasses.replace(case, instance=dataclasses.replace(case.instance, operands=(Imm(VECTOR),)))
-        expected = expectations.expected_result(vector, None)
-        self.assertEqual((expected.outcome, expected.detail), (Outcome.CONSOLE_KERNEL, VECTOR))
+        self.assertEqual(case.instance.operands, (Imm(VECTOR),))
+        self.assertIn("0x29", case.instance.text)
+        expected = expectations.expected_result(case, None)
+        self.assertEqual((expected.outcome, expected.address, expected.detail),
+                         (Outcome.CONSOLE_KERNEL, case.address, VECTOR))
+        without_vector = fault(case, Outcome.CONSOLE_KERNEL, case.address)
+        self.assertEqual([mismatch.field for mismatch in judge(case, expected, without_vector)], ["detail"])
 
     def test_one_default_instance_and_case_per_definition(self):
         _, instances, specs = generated()
@@ -68,7 +70,10 @@ class OutsideCasesTest(unittest.TestCase):
                 self.assertEqual([instance.form.definition.index for instance in members], expected)
                 for instance in members:
                     self.assertEqual(instance.form, database.forms([instance.form.definition])[0])
-                    self.assertEqual(instance.operands, tuple(encoding.default_operands(instance.form)))
+                    defaults = encoding.default_operands(instance.form)
+                    if outside is Group.CONSOLE_KERNEL:
+                        defaults = [Imm(VECTOR) if isinstance(choice, Imm) else choice for choice in defaults]
+                    self.assertEqual(instance.operands, tuple(defaults))
                     self.assertEqual(instance.prefixes, ())
                 self.assertEqual([spec.instance for spec in specs[name]], list(range(len(members))))
                 self.assertEqual([spec.index for spec in specs[name]], list(range(len(members))))

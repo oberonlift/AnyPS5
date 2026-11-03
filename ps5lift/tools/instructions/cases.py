@@ -42,10 +42,11 @@ where an image whose XSTATE_BV leaves SSE out sets it to 0x1f80; `loads_mxcsr` s
 that loads MXCSR with its misaligned-SSE bit (MM) in the standard format with every component, which Zen 2 accepts and
 Intel refuses.
 
-Outside the set, each definition has one instance, its first form's `default_operands`, and one case, whose state
-holds no input: every GPR but rsp points at the block's memory and rsp at its stack. An instance with a branch target
-(`xbegin`, KNC's `jkzd` and `jknzd`) takes a branch's shape, which gives the target its label. Its expectation is the
-console's stop, so it is written, not recorded."""
+Outside the set, each definition has one instance, its first form's `default_operands` with the vector
+`KERNEL_VECTOR` for the immediate of a console-kernel instruction (`int`), which its stop reports, and one case, whose
+state holds no input: every GPR but rsp points at the block's memory and rsp at its stack. An instance with a branch
+target (`xbegin`, KNC's `jkzd` and `jknzd`) takes a branch's shape, which gives the target its label. Its expectation
+is the console's stop, so it is written, not recorded."""
 import re
 import struct
 from dataclasses import dataclass, replace
@@ -211,6 +212,7 @@ _WRITTEN_GROUPS = frozenset({"sse4a"})
 _SHORT_BRANCH_SIZE = 16
 _BASE, _RANDOM, _MEMORY_CASE, _X87_CASE, _EXTRA_CASE, _VARIANT, _STATE, _OUTSIDE = range(1, 9)
 _OUTSIDE_ROLE = "outside"
+KERNEL_VECTOR = 0x29
 _RSP = records.GPR_NAMES.index("rsp")
 
 
@@ -559,8 +561,15 @@ def _plans(model):
             yield role, operands, prefixes
 
 
+def _outside_operands(form):
+    operands = default_operands(form)
+    if classify(form.definition) is Group.CONSOLE_KERNEL:
+        operands = [Imm(KERNEL_VECTOR) if isinstance(choice, Imm) else choice for choice in operands]
+    return tuple(operands)
+
+
 def _outside_plan(form):
-    operands = tuple(default_operands(form))
+    operands = _outside_operands(form)
     shape = Shape.BRANCH if any(isinstance(choice, Target) for choice in operands) else Shape.STRAIGHT
     return shape, [(_OUTSIDE_ROLE, operands, ())]
 
