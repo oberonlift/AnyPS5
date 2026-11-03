@@ -31,6 +31,11 @@ NEAR_BRANCHES = frozenset(
     "jmp call ret jo jno jb jnb jz jnz jbe jnbe js jns jp jnp jl jnl jle jnle".split()
 )
 SSE4A_FORMS = 6
+MISALIGNED_SSE_LOAD = CONSOLE_MXCSR | 1 << 17
+MXCSR_INITIAL = 0x1F80
+COMPACTED = 1 << 63
+XSAVE_HEADER = 512
+XSAVE_IMAGE = 576
 
 
 def _ieee_edges(bits, exponent_bits):
@@ -57,6 +62,18 @@ def _integer_edges(bits):
         if narrower < bits:
             required |= {(1 << narrower) - 1, 1 << narrower - 1, (1 << narrower - 1) - 1}
     return required
+
+
+def _patched(spec, offset, size):
+    image = bytearray(size)
+    covered = set()
+    for start, data in spec.patches:
+        for position in range(max(start, offset), min(start + len(data), offset + size)):
+            image[position - offset] = data[position - start]
+            covered.add(position)
+    if len(covered) != size:
+        raise AssertionError(f"case {spec.index}'s patches leave {size - len(covered)} bytes at {offset} unset")
+    return bytes(image)
 
 
 def _lane(vector, lane, bits):
@@ -388,6 +405,47 @@ class CasesTest(unittest.TestCase):
         self.assertIn(self.form("jmp", 16, feature_amd="1").key, written)
         self.assertNotIn(self.form("jmp", 64, feature_amd="1").key, written)
         self.assertNotIn(self.form("ret", 64, opcode=0xC3).key, written)
+
+    def _xrstor_images(self):
+        _, instances, specs = generated()
+        for spec in specs["xsave"]:
+            instance = instances["xsave"][spec.instance]
+            if instance.form.definition.mnemonic not in ("xrstor", "xrstor64"):
+                continue
+            start = _access_ranges(instance, spec)[0][0]
+            if start + XSAVE_IMAGE <= records.BLOCK_SIZE:
+                yield instance, spec, _patched(spec, start, XSAVE_IMAGE)
+
+    def test_xrstor_loads_misaligned_sse_in_the_standard_format(self):
+        loads = defaultdict(list)
+        for instance, spec, image in self._xrstor_images():
+            if spec.loads_mxcsr == MISALIGNED_SSE_LOAD:
+                loads[instance.form.key].append((spec, image))
+        self.assertEqual(len(loads), 2, sorted(loads))
+        for key, found in loads.items():
+            self.assertEqual(len(found), 1, key)
+            ((spec, image),) = found
+            self.assertEqual(spec.gprs[0] & 0xFFFFFFFF, 7, key)
+            self.assertEqual(spec.gprs[2] & 0xFFFFFFFF, 0, key)
+            self.assertEqual(struct.unpack_from("<I", image, records.FX_MXCSR)[0], MISALIGNED_SSE_LOAD, key)
+            self.assertEqual(struct.unpack_from("<QQ", image, XSAVE_HEADER), (7, 0), key)
+
+    def test_xrstor_loads_mxcsr_by_format(self):
+        seen = set()
+        for _, spec, image in self._xrstor_images():
+            requested = spec.gprs[0] & 7
+            present, compaction = struct.unpack_from("<QQ", image, XSAVE_HEADER)
+            mxcsr = struct.unpack_from("<I", image, records.FX_MXCSR)[0]
+            if not compaction & COMPACTED:
+                expected = mxcsr if requested & 6 else None
+            elif requested & 2:
+                expected = mxcsr if present & 2 else MXCSR_INITIAL
+            else:
+                expected = None
+            self.assertEqual(spec.loads_mxcsr, expected, f"case {spec.index}")
+            seen.add((bool(compaction & COMPACTED), expected is None, expected == MXCSR_INITIAL))
+        self.assertLessEqual({(False, False, False), (False, True, False), (True, True, False), (True, False, True),
+                              (True, False, False)}, seen)
 
 
 if __name__ == "__main__":

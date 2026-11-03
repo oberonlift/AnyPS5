@@ -33,7 +33,12 @@ the form's key, the instance's place among its form's instances and the case's p
 
 `expectation_written` names the forms whose expectations are written from AMD's manual instead of recorded on Intel
 hardware, because Intel runs their bytes as other instructions: SSE4A, which Intel lacks, and the 16-bit near branches
-of AMD's branch mode, which Intel runs as 64-bit ones. Their cases are left out of the recording."""
+of AMD's branch mode, which Intel runs as 64-bit ones. Their cases are left out of the recording.
+
+`xrstor` loads MXCSR from its image with SSE or AVX in the standard format, and with SSE alone in the compacted one,
+where an image whose XSTATE_BV leaves SSE out sets it to 0x1f80; `loads_mxcsr` says so. Each `xrstor` form adds a case
+that loads MXCSR with its misaligned-SSE bit (MM) in the standard format with every component, which Zen 2 accepts and
+Intel refuses."""
 import re
 import struct
 from dataclasses import dataclass, replace
@@ -104,7 +109,9 @@ MXCSR_STATES = (
 )
 _MISALIGNED_SSE = 1 << 17
 _RESERVED_MXCSR = 1 << 31
-_MXCSR_LOADS = MXCSR_STATES + (CONSOLE_MXCSR | 0x3F, CONSOLE_MXCSR | _MISALIGNED_SSE, 0x1F80 | _RESERVED_MXCSR)
+_MISALIGNED_SSE_LOAD = CONSOLE_MXCSR | _MISALIGNED_SSE
+_MXCSR_LOADS = MXCSR_STATES + (CONSOLE_MXCSR | 0x3F, _MISALIGNED_SSE_LOAD, 0x1F80 | _RESERVED_MXCSR)
+_MXCSR_INITIAL = 0x1F80
 
 _RANDOM_CASES = 4
 
@@ -126,6 +133,7 @@ _XSAVE_HEADER = 64
 _XSAVE_AVX = 256
 _XSAVE_FULL = _XSAVE_LEGACY + _XSAVE_HEADER + _XSAVE_AVX
 _XSAVE_COMPONENTS = 7
+_XSAVE_SSE_COMPONENT = 2
 _XSAVE_AVX_COMPONENT = 4
 _XSAVE_MXCSR_COMPONENTS = 6
 _COMPACTED = 1 << 63
@@ -1256,16 +1264,37 @@ def _fxrstor_inputs(model, inputs):
     return inputs + [Input("image", choice_values(range(len(_MXCSR_LOADS))), apply, True)]
 
 
+def _xrstor_mxcsr(components, stored, compacted, loaded):
+    if not compacted:
+        return loaded if components & _XSAVE_MXCSR_COMPONENTS else None
+    if not components & _XSAVE_SSE_COMPONENT:
+        return None
+    return loaded if stored & _XSAVE_SSE_COMPONENT else _MXCSR_INITIAL
+
+
+def _store_xrstor_image(case, number, stored, compacted):
+    lanes = integer_edges(64)
+    compaction = _COMPACTED | _XSAVE_COMPONENTS if compacted else 0
+    image = _fxsave_image(number) + struct.pack("<QQ", stored, compaction) + bytes(_XSAVE_HEADER - 16)
+    image += b"".join(struct.pack("<Q", lanes[(number + lane) % len(lanes)]) for lane in range(_XSAVE_AVX // 8))
+    case.store(case.targets[case.model.position(0)], image)
+    case.loads_mxcsr = _xrstor_mxcsr(case.scratch["components"], stored, compacted, _MXCSR_LOADS[number])
+
+
 def _xrstor_image(case, value):
     number = _XSAVE_COMPONENTS if case.special is not None else value
     stored = _XSAVE_COMPONENTS if case.special is not None else number % (_XSAVE_COMPONENTS + 1)
-    compacted = _COMPACTED | _XSAVE_COMPONENTS if number > _XSAVE_COMPONENTS else 0
-    lanes = integer_edges(64)
-    image = _fxsave_image(number) + struct.pack("<QQ", stored, compacted) + bytes(_XSAVE_HEADER - 16)
-    image += b"".join(struct.pack("<Q", lanes[(number + lane) % len(lanes)]) for lane in range(_XSAVE_AVX // 8))
-    case.store(case.targets[case.model.position(0)], image)
-    if case.scratch["components"] & _XSAVE_MXCSR_COMPONENTS:
-        case.loads_mxcsr = _MXCSR_LOADS[number]
+    _store_xrstor_image(case, number, stored, number > _XSAVE_COMPONENTS)
+
+
+def _xrstor_misaligned_sse(case):
+    case.scratch["components"] = _XSAVE_COMPONENTS
+    case.set_gpr(0, 0, 32, _XSAVE_COMPONENTS)
+    _store_xrstor_image(case, _MXCSR_LOADS.index(_MISALIGNED_SSE_LOAD), _XSAVE_COMPONENTS, False)
+
+
+def _xrstor_extras(model):
+    return ((0, _xrstor_misaligned_sse),)
 
 
 def _tag(value):
@@ -1399,6 +1428,7 @@ _NO_RULE = Rule()
 _STRING_RULE = Rule(inputs=_string_inputs, case=_string_case)
 _COUNTER_RULE = Rule(inputs=_counter_inputs)
 _DIVISION_RULE = Rule(inputs=_division_inputs, case=_division_case, extras=_division_extras)
+_XSAVE_RULE = Rule(inputs=_xsave_inputs, case=_xsave_case, access_width=_XSAVE_FULL)
 _RULES = {
     "xlat": Rule(pins=(IMPLICIT_BASES["bx"],), inputs=_xlat_inputs, case=_xlat_case),
     "enter": Rule(pins=(IMPLICIT_BASES["bp"],), case=_enter_case),
@@ -1410,7 +1440,8 @@ _RULES = {
     **{mnemonic: Rule(extras=_exchange_extras) for mnemonic in ("cmpxchg", "cmpxchg8b", "cmpxchg16b")},
     "cpuid": Rule(inputs=_cpuid_inputs),
     "xgetbv": Rule(inputs=_xgetbv_inputs),
-    **{mnemonic: Rule(inputs=_xsave_inputs, case=_xsave_case, access_width=_XSAVE_FULL) for mnemonic in _XSAVE_FAMILY},
+    **{mnemonic: _XSAVE_RULE for mnemonic in _XSAVE_FAMILY - _XRSTOR},
+    **{mnemonic: replace(_XSAVE_RULE, extras=_xrstor_extras) for mnemonic in _XRSTOR},
     "fxrstor": Rule(inputs=_fxrstor_inputs),
     "fxrstor64": Rule(inputs=_fxrstor_inputs),
     "fldenv": Rule(inputs=_environment_inputs),
