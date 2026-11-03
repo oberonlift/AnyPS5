@@ -4,9 +4,11 @@ recording or where there is none, or outside the set the console's stop.
 `expected_result(case, recorded)` gives the result a case is judged against. The forms `cases.expectation_written`
 names have no recording, and their results are written:
 - Outside the set, the stop the console makes at the instance, with no state compared: an invalid opcode for an
-  instruction the PS5's CPU lacks, a general-protection fault for a privileged or I/O instruction, the segment-table
-  stop for one whose result depends on the console's descriptor tables, and the console-kernel stop for one whose
-  effect is the console kernel's, with `int`'s vector as its detail (0 for `syscall` and `int1`).
+  instruction the PS5's CPU lacks, with the detail State.h's `PS5LIFT_INVALID_OPCODE_NOT_ON_PS5` gives it (an
+  instruction invalid by definition, such as `ud2`, has detail 0), a general-protection fault for a privileged or I/O
+  instruction, the segment-table stop for one whose result depends on the console's descriptor tables, and the
+  console-kernel stop for one whose effect is the console kernel's, with `int`'s vector as its detail (0 for `syscall`
+  and `int1`).
 - SSE4A (APM volume 4). `extrq` and `insertq` take a field's length from bits 5:0 of their first immediate, or of the
   control quadword (the low quadword of `extrq`'s source register, the high one of `insertq`'s), and its index from
   bits 5:0 of their second immediate or bits 13:8 of that quadword; a length of 0 is 64. `extrq` writes the field of
@@ -84,6 +86,7 @@ _OUTSIDE_STOPS = {
     Group.SEGMENT_TABLES: Outcome.SEGMENT_TABLES,
     Group.CONSOLE_KERNEL: Outcome.CONSOLE_KERNEL,
 }
+_NOT_ON_PS5 = 1
 _STATE_SAVES = frozenset("fxsave fxsave64 fnstenv fnsave xsave xsave64 xsaveopt xsaveopt64 xsavec xsavec64".split())
 _ENVIRONMENT_SAVES = frozenset({"fnstenv", "fnsave"})
 
@@ -243,9 +246,14 @@ def _kernel_vector(case):
     return immediates[0] if immediates else 0
 
 
+def _outside_detail(case, group):
+    if group is Group.CONSOLE_KERNEL:
+        return _kernel_vector(case)
+    return _NOT_ON_PS5 if group is Group.NOT_ON_PS5 else 0
+
+
 def _outside(case, group):
-    detail = _kernel_vector(case) if group is Group.CONSOLE_KERNEL else 0
-    return Result(case.spec.index, _OUTSIDE_STOPS[group], detail, case.address, 0, {}, {}, None)
+    return Result(case.spec.index, _OUTSIDE_STOPS[group], _outside_detail(case, group), case.address, 0, {}, {}, None)
 
 
 def _written(case):

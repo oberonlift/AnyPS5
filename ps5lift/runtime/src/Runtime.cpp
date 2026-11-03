@@ -45,14 +45,25 @@ std::uint64_t PageSize() {
 
 std::atomic<Ps5LiftStopHandler> StopHandler{nullptr};
 
-void DefaultStopHandler(Ps5LiftState* state, const std::uint32_t kind, const std::uint64_t address, const std::uint64_t, const char* mnemonic) {
+[[noreturn]] void InvalidOpcode(const std::uint64_t address, const std::uint64_t detail, const char* mnemonic) {
+    switch (detail) {
+    case PS5LIFT_INVALID_OPCODE_BY_DEFINITION:
+        ps5lift_fail("invalid opcode %s at 0x%" PRIx64, mnemonic, address);
+    case PS5LIFT_INVALID_OPCODE_NOT_ON_PS5:
+        ps5lift_fail("invalid opcode: %s at 0x%" PRIx64 " is not on the PS5's CPU", mnemonic, address);
+    default:
+        ps5lift_fail("invalid opcode %s at 0x%" PRIx64 " with unknown detail %" PRIu64, mnemonic, address, detail);
+    }
+}
+
+void DefaultStopHandler(Ps5LiftState* state, const std::uint32_t kind, const std::uint64_t address, const std::uint64_t detail, const char* mnemonic) {
     switch (kind) {
     case PS5LIFT_STOP_DIVIDE_ERROR:
         ps5lift_fail("divide error at 0x%" PRIx64 ": the divisor is zero or the quotient does not fit", address);
     case PS5LIFT_STOP_BREAKPOINT:
         ps5lift_fail("breakpoint at 0x%" PRIx64, address);
     case PS5LIFT_STOP_INVALID_OPCODE:
-        ps5lift_fail("invalid opcode %s at 0x%" PRIx64, mnemonic, address);
+        InvalidOpcode(address, detail, mnemonic);
     case PS5LIFT_STOP_GENERAL_PROTECTION:
         ps5lift_fail("general-protection fault: %s at 0x%" PRIx64 " is privileged on the PS5", mnemonic, address);
     case PS5LIFT_STOP_CONSOLE_KERNEL: {

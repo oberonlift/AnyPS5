@@ -151,10 +151,10 @@ private:
     void Unsupported(const std::string& what);
     void Stop(const Ps5LiftStopKind kind, const std::uint64_t detail, const std::string& mnemonic);
     void StopOutside(const Ps5LiftStopKind kind, MnemonicCounts& counts, const std::uint64_t detail, const std::string& text);
-    void NotOnPs5();
-    void Privileged();
-    void SegmentTables();
-    void ConsoleKernel();
+    void StopNotOnPs5();
+    void StopPrivileged();
+    void StopSegmentTables();
+    void StopConsoleKernel();
     void StringOp(const Ps5LiftStringOperation operation, const unsigned width);
     void ReadString(const StringRead kind, const unsigned width);
     bool Locked() const;

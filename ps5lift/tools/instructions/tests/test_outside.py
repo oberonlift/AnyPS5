@@ -1,3 +1,4 @@
+import re
 import shutil
 import tempfile
 import unittest
@@ -18,7 +19,15 @@ GROUPS = {
     Group.SEGMENT_TABLES: "outside-segment-tables",
     Group.CONSOLE_KERNEL: "outside-console-kernel",
 }
+OUTCOMES = {
+    Group.NOT_ON_PS5: Outcome.INVALID_OPCODE,
+    Group.PRIVILEGED: Outcome.GENERAL_PROTECTION,
+    Group.SEGMENT_TABLES: Outcome.SEGMENT_TABLES,
+    Group.CONSOLE_KERNEL: Outcome.CONSOLE_KERNEL,
+}
 VECTOR = 0x29
+NOT_ON_PS5 = 1
+STATE_HEADER = Path(__file__).resolve().parents[3] / "runtime" / "include" / "ps5lift" / "State.h"
 
 
 def _instance_of(mnemonic, **filters):
@@ -33,17 +42,41 @@ def _instance_of(mnemonic, **filters):
 class OutsideCasesTest(unittest.TestCase):
     def test_outside_expectations(self):
         examples = (
-            ("outside-not-on-ps5", _instance_of("vaddps", encoding="evex"), Outcome.INVALID_OPCODE),
-            ("outside-privileged", _instance_of("wrmsr"), Outcome.GENERAL_PROTECTION),
-            ("outside-segment-tables", _instance_of("lar"), Outcome.SEGMENT_TABLES),
-            ("outside-console-kernel", _instance_of("syscall"), Outcome.CONSOLE_KERNEL),
+            ("outside-not-on-ps5", _instance_of("vaddps", encoding="evex"), Outcome.INVALID_OPCODE, NOT_ON_PS5),
+            ("outside-privileged", _instance_of("wrmsr"), Outcome.GENERAL_PROTECTION, 0),
+            ("outside-segment-tables", _instance_of("lar"), Outcome.SEGMENT_TABLES, 0),
+            ("outside-console-kernel", _instance_of("syscall"), Outcome.CONSOLE_KERNEL, 0),
         )
-        for name, choose, outcome in examples:
+        for name, choose, outcome, detail in examples:
             with self.subTest(group=name, outcome=outcome.name):
                 case = find_case(name, choose)
                 expected = expectations.expected_result(case, None)
-                self.assertEqual((expected.outcome, expected.address, expected.detail), (outcome, case.address, 0))
+                self.assertEqual((expected.outcome, expected.address, expected.detail),
+                                 (outcome, case.address, detail))
                 self.assertEqual((expected.slot_words, expected.memory_words), ({}, {}))
+
+    def test_every_outside_case_expects_its_group_stop(self):
+        for outside, name in GROUPS.items():
+            _, specs, _ = group(name)
+            details = {NOT_ON_PS5} if outside is Group.NOT_ON_PS5 else {0}
+            with self.subTest(group=name):
+                found = set()
+                for spec in specs:
+                    case = case_of(name, spec)
+                    expected = expectations.expected_result(case, None)
+                    self.assertEqual((expected.outcome, expected.address), (OUTCOMES[outside], case.address))
+                    found.add(expected.detail)
+                self.assertEqual(found, {VECTOR, 0} if outside is Group.CONSOLE_KERNEL else details)
+
+    def test_not_on_ps5_detail_is_the_runtimes(self):
+        declared = re.search(r"PS5LIFT_INVALID_OPCODE_NOT_ON_PS5 = (\d+)", STATE_HEADER.read_text())
+        self.assertIsNotNone(declared, f"{STATE_HEADER} declares no PS5LIFT_INVALID_OPCODE_NOT_ON_PS5")
+        self.assertEqual(int(declared.group(1)), NOT_ON_PS5)
+        case = find_case("outside-not-on-ps5", _instance_of("vaddps", encoding="evex"))
+        expected = expectations.expected_result(case, None)
+        self.assertEqual(expected.detail, int(declared.group(1)))
+        by_definition = fault(case, Outcome.INVALID_OPCODE, case.address)
+        self.assertEqual([mismatch.field for mismatch in judge(case, expected, by_definition)], ["detail"])
 
     def test_outside_case_with_a_recording_refused(self):
         case = find_case("outside-privileged", _instance_of("wrmsr"))

@@ -696,19 +696,19 @@ void FunctionLifter::StopOutside(const Ps5LiftStopKind kind, MnemonicCounts& cou
     Stop(kind, detail, text);
 }
 
-void FunctionLifter::NotOnPs5() {
-    StopOutside(PS5LIFT_STOP_INVALID_OPCODE, _module.Report().NotOnPs5, 0, Mnemonic());
+void FunctionLifter::StopNotOnPs5() {
+    StopOutside(PS5LIFT_STOP_INVALID_OPCODE, _module.Report().NotOnPs5, PS5LIFT_INVALID_OPCODE_NOT_ON_PS5, Mnemonic());
 }
 
-void FunctionLifter::Privileged() {
+void FunctionLifter::StopPrivileged() {
     StopOutside(PS5LIFT_STOP_GENERAL_PROTECTION, _module.Report().Privileged, 0, Mnemonic());
 }
 
-void FunctionLifter::SegmentTables() {
+void FunctionLifter::StopSegmentTables() {
     StopOutside(PS5LIFT_STOP_SEGMENT_TABLES, _module.Report().SegmentTables, 0, Mnemonic());
 }
 
-void FunctionLifter::ConsoleKernel() {
+void FunctionLifter::StopConsoleKernel() {
     if (_instruction->Info.operand_count_visible == 0) return StopOutside(PS5LIFT_STOP_CONSOLE_KERNEL, _module.Report().ConsoleKernel, 0, Mnemonic());
     const auto vector = Immediate(0);
     StopOutside(PS5LIFT_STOP_CONSOLE_KERNEL, _module.Report().ConsoleKernel, vector, Mnemonic() + " 0x" + Hex(vector));
@@ -751,11 +751,11 @@ void FunctionLifter::EmitInstruction(const Instruction& instruction) {
     case InstructionGroup::Set:
         break;
     case InstructionGroup::NotOnPs5:
-        return NotOnPs5();
+        return StopNotOnPs5();
     case InstructionGroup::Privileged:
-        return Privileged();
+        return StopPrivileged();
     case InstructionGroup::SegmentTables:
-        return SegmentTables();
+        return StopSegmentTables();
     }
     try {
         EmitSemantics(instruction.Info.mnemonic);

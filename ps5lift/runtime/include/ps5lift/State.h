@@ -153,6 +153,11 @@ enum Ps5LiftStopKind {
     PS5LIFT_STOP_SEGMENT_TABLES = 6
 };
 
+enum Ps5LiftInvalidOpcode {
+    PS5LIFT_INVALID_OPCODE_BY_DEFINITION = 0,
+    PS5LIFT_INVALID_OPCODE_NOT_ON_PS5 = 1
+};
+
 typedef void (*Ps5LiftFunction)(Ps5LiftState*);
 typedef void (*Ps5LiftStopHandler)(Ps5LiftState*, uint32_t kind, uint64_t address, uint64_t detail, const char* mnemonic);
 
