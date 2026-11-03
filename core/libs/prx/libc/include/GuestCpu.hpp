@@ -17,6 +17,8 @@ void GuestCpuSetX87Status_nid_no_patch(std::uint16_t value);
 void GuestCpuX87Wait_nid_no_patch(void);
 std::uint32_t GuestCpuMxcsrMask_nid_no_patch(void);
 std::uint64_t GuestCpuReadTsc_nid_no_patch(void);
+void GuestCpuCpuid_nid_no_patch(std::uint32_t leaf, std::uint32_t subleaf, std::uint32_t* registers);
+std::uint64_t GuestCpuXgetbv_nid_no_patch(std::uint32_t index);
 }
 
 namespace GuestCpu {
@@ -31,6 +33,14 @@ inline void X87ClearExceptions() { SetX87Status(static_cast<std::uint16_t>(X87St
 inline void X87Wait() { GuestCpuX87Wait_nid_no_patch(); }
 inline std::uint32_t MxcsrMask() { return GuestCpuMxcsrMask_nid_no_patch(); }
 inline std::uint64_t ReadTsc() { return GuestCpuReadTsc_nid_no_patch(); }
+
+inline std::array<std::uint32_t, 4> Cpuid(const std::uint32_t leaf, const std::uint32_t subleaf) {
+    std::array<std::uint32_t, 4> registers;
+    GuestCpuCpuid_nid_no_patch(leaf, subleaf, registers.data());
+    return registers;
+}
+
+inline std::uint64_t Xgetbv(const std::uint32_t index) { return GuestCpuXgetbv_nid_no_patch(index); }
 
 inline std::array<std::uint32_t, 7> X87Environment() {
     return {0xffff0000u | X87Control(), 0xffff0000u | X87Status(), 0xffffffffu, 0, 0, 0, 0xffff0000u};
@@ -57,6 +67,22 @@ inline void RaiseInvalidForSignalingNan(const float value) {
 namespace GuestCpu {
 
 inline std::uint64_t ReadTsc() { return __rdtsc(); }
+
+inline std::array<std::uint32_t, 4> Cpuid(const std::uint32_t leaf, const std::uint32_t subleaf) {
+    std::uint32_t eax;
+    std::uint32_t ebx;
+    std::uint32_t ecx;
+    std::uint32_t edx;
+    asm volatile("cpuid" : "=a"(eax), "=b"(ebx), "=c"(ecx), "=d"(edx) : "0"(leaf), "2"(subleaf));
+    return {eax, ebx, ecx, edx};
+}
+
+inline std::uint64_t Xgetbv(const std::uint32_t index) {
+    std::uint32_t low;
+    std::uint32_t high;
+    asm volatile("xgetbv" : "=a"(low), "=d"(high) : "c"(index));
+    return (static_cast<std::uint64_t>(high) << 32) | low;
+}
 
 inline std::uint32_t Mxcsr() { return _mm_getcsr(); }
 inline void SetMxcsr(const std::uint32_t value) { _mm_setcsr(value); }
