@@ -54,7 +54,6 @@ class Decoder:
         self.executable = executable
 
     def decode(self, encodings):
-        """Decodes each encoding; the result lists them in order. An encoding Zydis rejects raises RejectedEncoding."""
         lines = [encoding.hex(" ") for encoding in encodings]
         stdin = "".join(line + "\n" for line in lines)
         completed = subprocess.run([self.executable], input=stdin, capture_output=True, text=True, check=True)
