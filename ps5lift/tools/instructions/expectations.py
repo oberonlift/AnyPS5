@@ -15,6 +15,9 @@ names have no recording, and their results are written:
   its destination's low quadword, zero-extended, to that quadword; `insertq` writes the low `length` bits of its
   source's low quadword into its destination's at the index and keeps the other bits. `movntsd` and `movntss` store
   their source's low quadword or doubleword, and fault as any store does when it reaches the guard.
+- MONITORX and CLZERO (APM volume 3), as Zen 2 runs them in user mode: `monitorx` and `mwaitx`, which returns at once,
+  change no architectural state; `clzero` zeroes the 64-byte cache line that holds the address in rax, and faults as a
+  store does when that line is in the guard.
 - 16-bit near branches (APM volume 3), `jmp`, `call` and `jcc` with a 66 prefix: the target is (end + rel16) & 0xffff,
   where nothing is mapped, so a taken branch faults on fetching it, with that address as the faulting address and as
   the page fault's data address. A `jcc` that is not taken completes with PATH `PATH_NOT_TAKEN`.
@@ -55,6 +58,7 @@ _QUADWORD_BITS = 64
 _QUADWORD_BYTES = 8
 _XMM_BYTES = 16
 _SHORT_TARGET = 0xFFFF
+_CACHE_LINE = 64
 _REL16 = range(-0x8000, 0x8000)
 _CONDITIONS = {
     "o": lambda flags: flags["OF"],
@@ -225,11 +229,28 @@ def _near_branch16(case):
     return _page_fault(case, target, target)
 
 
-_SSE4A = {
+def _unchanged(case):
+    return _Final.completed(case).result()
+
+
+def _clear_line(case):
+    line = register_value(case.input.slot, "rax") & ~(_CACHE_LINE - 1)
+    if line + _CACHE_LINE > case.layout.guard:
+        return _page_fault(case, case.address, max(line, case.layout.guard))
+    final = _Final.completed(case)
+    start = final.offset(line, _CACHE_LINE)
+    final.block[start:start + _CACHE_LINE] = bytes(_CACHE_LINE)
+    return final.result()
+
+
+_AMD_ONLY = {
     "extrq": _bit_field,
     "insertq": _bit_field,
     "movntsd": lambda case: _store_low(case, 8),
     "movntss": lambda case: _store_low(case, 4),
+    "monitorx": _unchanged,
+    "mwaitx": _unchanged,
+    "clzero": _clear_line,
 }
 
 
@@ -256,9 +277,9 @@ def _written(case):
         return _outside(case, classify(definition))
     if case.instance.shape in (Shape.BRANCH, Shape.CALL):
         return _near_branch16(case)
-    if _mnemonic(case) not in _SSE4A:
+    if _mnemonic(case) not in _AMD_ONLY:
         raise ExpectationError(f"{_key(case)}: no expectation is written for {_mnemonic(case)}")
-    return _SSE4A[_mnemonic(case)](case)
+    return _AMD_ONLY[_mnemonic(case)](case)
 
 
 def _source_value(case, final):

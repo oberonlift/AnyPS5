@@ -31,6 +31,8 @@ NEAR_BRANCHES = frozenset(
     "jmp call ret jo jno jb jnb jz jnz jbe jnbe js jns jp jnp jl jnl jle jnle".split()
 )
 SSE4A_FORMS = 6
+AMD_ONLY_GROUPS = ("sse4a", "monitorx", "clzero")
+CACHE_LINE = 64
 MISALIGNED_SSE_LOAD = CONSOLE_MXCSR | 1 << 17
 MXCSR_INITIAL = 0x1F80
 COMPACTED = 1 << 63
@@ -413,12 +415,14 @@ class CasesTest(unittest.TestCase):
         forms = generated()[0]
         written = {form.key for form in forms if cases.expectation_written(form)}
         sse4a = {form.key for form in forms if database.test_group(form) == "sse4a"}
+        amd_only = {form.key for form in forms if database.test_group(form) in AMD_ONLY_GROUPS}
         branches = {
             form.key for form in forms
             if form.definition.mnemonic in NEAR_BRANCHES and form.operand_size == 16
         }
-        self.assertEqual(written, sse4a | branches)
+        self.assertEqual(written, amd_only | branches)
         self.assertEqual(len(sse4a), SSE4A_FORMS)
+        self.assertEqual({key.split(".")[0] for key in amd_only - sse4a}, {"monitorx", "mwaitx", "clzero"})
         self.assertTrue({"jmp", "call", "jz"} <= {key.split(".")[0] for key in branches}, sorted(branches))
         self.assertIn(self.form("jmp", 16, feature_amd="1").key, written)
         self.assertNotIn(self.form("jmp", 64, feature_amd="1").key, written)
@@ -429,6 +433,17 @@ class CasesTest(unittest.TestCase):
         outside = [form for form in every if database.classify(form.definition) is not database.Group.SET]
         self.assertLessEqual({"vaddps", "wrmsr", "lar", "syscall"}, {form.definition.mnemonic for form in outside})
         self.assertEqual([form.key for form in outside if not cases.expectation_written(form)], [])
+
+    def test_clzero_points_rax_into_the_block(self):
+        specs = self.specs_of(self.form("clzero"))
+        offsets = [spec.gprs[records.GPR_NAMES.index("rax")] for spec in specs]
+        self.assertTrue(all(isinstance(offset, BlockOffset) for offset in offsets), offsets)
+        inside = [offset.offset for offset in offsets if offset.offset < records.BLOCK_SIZE]
+        self.assertEqual([offset.offset for offset in offsets if offset.offset >= records.BLOCK_SIZE],
+                         [records.BLOCK_SIZE])
+        self.assertTrue(all(0 <= offset for offset in inside))
+        self.assertTrue(any(offset % CACHE_LINE for offset in inside))
+        self.assertIn(records.BLOCK_SIZE - CACHE_LINE, {offset - offset % CACHE_LINE for offset in inside})
 
     def _xrstor_images(self):
         _, instances, specs = generated()

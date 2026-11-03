@@ -32,9 +32,9 @@ class DatabaseTest(unittest.TestCase):
     def test_counts(self):
         in_set = [definition for definition in self.definitions if database.classify(definition) is Group.SET]
         self.assertEqual(len(self.definitions), 7704)
-        self.assertEqual(len(in_set), 2860)
-        self.assertEqual(len({definition.mnemonic for definition in in_set}), 922)
-        self.assertEqual(len(database.forms(in_set)), 3522)
+        self.assertEqual(len(in_set), 2863)
+        self.assertEqual(len({definition.mnemonic for definition in in_set}), 925)
+        self.assertEqual(len(database.forms(in_set)), 3525)
 
     def test_decoder_modes_match_ps5lift_decode(self):
         probes = {
@@ -94,10 +94,15 @@ class DatabaseTest(unittest.TestCase):
             (Group.SET, "prefetchwt1", {}),
             (Group.SET, "int3", {}),
             (Group.SET, "ud2", {}),
+            (Group.SET, "monitorx", {}),
+            (Group.SET, "mwaitx", {}),
+            (Group.SET, "clzero", {}),
             (Group.NOT_ON_PS5, "vaddps", {"encoding": "evex", "vector_length": "128", "modrm_mod": "3"}),
             (Group.NOT_ON_PS5, "monitor", {}),
-            (Group.NOT_ON_PS5, "clzero", {}),
+            (Group.NOT_ON_PS5, "rdpru", {}),
+            (Group.NOT_ON_PS5, "mcommit", {}),
             (Group.NOT_ON_PS5, "rdfsbase", {}),
+            (Group.NOT_ON_PS5, "wrgsbase", {}),
             (Group.NOT_ON_PS5, "sysenter", {}),
             (Group.PRIVILEGED, "hlt", {}),
             (Group.PRIVILEGED, "wrmsr", {}),
@@ -209,6 +214,8 @@ class DatabaseTest(unittest.TestCase):
         self.assertEqual(groups("add", opcode=0x01, modrm_mod="3"), {"base"})
         self.assertEqual(groups("endbr64"), {"hint"})
         self.assertEqual(groups("prefetchwt1"), {"hint"})
+        self.assertEqual(groups("monitorx") | groups("mwaitx"), {"monitorx"})
+        self.assertEqual(groups("clzero"), {"clzero"})
         self.assertEqual(groups("vaddps", encoding="evex", vector_length="128", modrm_mod="3"), {"outside-not-on-ps5"})
         self.assertEqual(groups("hlt"), {"outside-privileged"})
         self.assertEqual(groups("lar", modrm_mod="3"), {"outside-segment-tables"})

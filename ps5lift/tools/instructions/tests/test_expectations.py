@@ -47,6 +47,7 @@ FLAGS_WORD = records.LOAD_AH & ~7
 ES_PENDING = 0x8081
 SAVE_GROUPS = {"fxsave": "sse", "fxsave64": "sse", "fnstenv": "x87", "fnsave": "x87", "xsave": "xsave"}
 LOADS = frozenset({"ldmxcsr", "vldmxcsr", "fxrstor", "fxrstor64", "xrstor", "xrstor64"})
+CACHE_LINE = 64
 
 
 def _immediates(instance):
@@ -189,6 +190,35 @@ class Sse4aTest(unittest.TestCase):
         case = _sse4a("extrq", [0x1B, 0x4E])
         with self.assertRaisesRegex(ExpectationError, "has a recording, but its form's expectations are written"):
             expected_result(case, completed(case))
+
+
+class MonitorxClzeroTest(unittest.TestCase):
+    def test_monitorx_and_mwaitx_change_nothing(self):
+        for mnemonic in ("monitorx", "mwaitx"):
+            with self.subTest(mnemonic=mnemonic):
+                case = find_case("monitorx", primary(mnemonic))
+                result = expected_result(case, None)
+                self.assertIs(result.outcome, Outcome.COMPLETED)
+                slot = _final_slot(case, result)
+                self.assertEqual(set(changed_words(case.input.slot, slot)), {FLAGS_WORD})
+                self.assertEqual(_captured_flags(slot), _flag_bytes(**case.spec.flags))
+                self.assertEqual(result.memory_words, {})
+                self.assertEqual(judge(case, result, completed(case, flags(**case.spec.flags))), [])
+
+    def test_clzero_zeroes_the_line_that_holds_rax(self):
+        case = find_case("clzero", primary("clzero"), lambda spec: isinstance(spec.gprs[0], BlockOffset)
+                         and spec.gprs[0].offset < records.BLOCK_SIZE and spec.gprs[0].offset % CACHE_LINE)
+        line = case.spec.gprs[0].offset - case.spec.gprs[0].offset % CACHE_LINE
+        result = expected_result(case, None)
+        self.assertIs(result.outcome, Outcome.COMPLETED)
+        zeroed = bytearray(initial_block(case.input))
+        zeroed[line:line + CACHE_LINE] = bytes(CACHE_LINE)
+        self.assertEqual(_final_block(case, result), bytes(zeroed))
+        self.assertEqual(set(changed_words(case.input.slot, _final_slot(case, result))), {FLAGS_WORD})
+
+    def test_clzero_in_the_guard_faults(self):
+        case = find_case("clzero", primary("clzero"), lambda spec: spec.gprs[0] == BlockOffset(records.BLOCK_SIZE))
+        self.assertEqual(expected_result(case, None), fault(case, Outcome.PAGE_FAULT, case.address, GUARD))
 
 
 class BitScanTest(unittest.TestCase):

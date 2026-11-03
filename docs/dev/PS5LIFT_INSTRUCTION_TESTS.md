@@ -31,7 +31,7 @@ The set follows Zen 2's behaviour where Zydis's labels do not:
 - Encodings in the hint space that Zen 2 executes as NOPs or prefetches belong to the set with that behaviour, whatever extension Zydis gives them: `endbr32` and `endbr64`, `bnd`-prefixed branches (an ordinary branch), `cldemote`, `prefetchit0` and `prefetchit1` (NOPs), and the `0F 0D` prefetch encodings, including the one Zydis names `prefetchwt1`. This short list is the only exception to classifying by extension.
 - The APX REX2 rows that the database files under in-set extensions are not in the set: their prefix is invalid on Zen 2. Instructions in the set that fault by definition, such as `ud2`, `ud0`, `ud1` and `rsm`, keep their cases: the expected result is the fault.
 
-Zen 2 also implements CLZERO, MCOMMIT, RDPRU, MONITORX/MWAITX and FSGSBASE, but the PS5 CPUID that ps5lift reports leaves them out, so a program that checks CPUID does not use them. They are treated as instructions outside the set (an invalid-opcode stop) until a console measurement says otherwise.
+Zen 2 also implements CLZERO, MCOMMIT, RDPRU, MONITORX/MWAITX and FSGSBASE, which the PS5 CPUID that ps5lift reports leaves out. MONITORX/MWAITX and CLZERO belong to the set all the same, because PS5 executables use them: AnyPS5's relinker lowers them where it finds them in a PS5 executable ([Amd64OnlyInstructionMatcher.cpp](../../core/relinker/codegen/src/x86/Amd64OnlyInstructionMatcher.cpp)). The set gives them Zen 2's user-mode behaviour: `monitorx` does nothing, `mwaitx` returns at once, like `pause`, with no architectural state changed, and `clzero` zeroes the 64-byte cache line that holds the address in rax. MCOMMIT, RDPRU and FSGSBASE are treated as instructions outside the set (an invalid-opcode stop) until a console measurement says otherwise.
 
 The generator reads the database, not a list in the source, so a newer Zydis brings its definitions with it.
 
@@ -62,7 +62,7 @@ The expected results are recorded by running the guest program natively on an In
 
 ### Instructions without an Intel reference
 
-SSE4A (`extrq`, `insertq`, `movntsd`, `movntss`) exists only on AMD. Its expectations are written from AMD's manual (APM volume 4), not recorded. The bits the manual leaves undefined are not compared: the high quadword of an `extrq` or `insertq` destination, and its low quadword too when the field's index and length add up to more than 64, or its length is 0 and its index is not.
+SSE4A (`extrq`, `insertq`, `movntsd`, `movntss`) exists only on AMD. Its expectations are written from AMD's manual (APM volume 4), not recorded. So are those of MONITORX/MWAITX and CLZERO (APM volume 3), which exist only on AMD too. The bits the manual leaves undefined are not compared: the high quadword of an `extrq` or `insertq` destination, and its low quadword too when the field's index and length add up to more than 64, or its length is 0 and its index is not.
 
 ### Tolerances
 
@@ -105,7 +105,7 @@ Some inputs fault on the hardware: a divide by zero or an overflowing quotient, 
 
 Every other instruction gets cases too, which check that the lifted program stops as the console would:
 
-- **Not on the PS5 CPU:** extensions Zen 2 lacks (AVX-512 in all its forms, XOP, FMA4, TBM, 3DNow! except its prefetches, VAES, VPCLMULQDQ, GFNI, AMX, PadLock and the rest) and the Zen 2 extras the PS5 CPUID leaves out. Zydis gives each decoded instruction's extension, so the lifter classifies them by extension, with the hint-space list above as the only exception. On the console they raise an invalid-opcode exception.
+- **Not on the PS5 CPU:** extensions Zen 2 lacks (AVX-512 in all its forms, XOP, FMA4, TBM, 3DNow! except its prefetches, VAES, VPCLMULQDQ, GFNI, AMX, PadLock and the rest) and the Zen 2 extras the PS5 CPUID leaves out other than MONITORX/MWAITX and CLZERO (MCOMMIT, RDPRU and FSGSBASE). Zydis gives each decoded instruction's extension, so the lifter classifies them by extension, with the hint-space list above as the only exception. On the console they raise an invalid-opcode exception.
 - **Privileged or I/O:** definitions the database marks as CPL 0 (20 mnemonics, among them `hlt`, `wrmsr`, `swapgs`, `xsaves`, and `mov` to or from a control or debug register; the pinned database leaves `lgdt` unmarked, and the suite names it explicitly), which Zydis reports as privileged, and the I/O and IOPL-dependent instructions (`in`, `out`, `ins*`, `outs*`, `cli`, `sti`, and `rdpmc`, which no measurement shows the console enabling for user code), which a PS5 program is never allowed to use. On the console they raise a general-protection exception.
 - **Dependent on the console's segment tables:** `mov` to a segment register, `lar`, `lsl`, `verr`, `verw`, `sgdt`, `sidt`, `sldt`, `smsw`, `str`, far `ret`, far `call`, far `jmp`, `iret` in each size, and `lfs`, `lgs`, `lss`. Their results depend on descriptor tables that cannot be measured without a PS5, so they stop with a message that names the instruction and why. They appear only where discovery takes data for code.
 - **Dependent on the console's kernel:** `syscall`, `int n` and `int1`. What they do is the kernel's, not the CPU's (Linux, where the recordings are made, answers `int 0x80` as a system call), so they stop with a named message too. Retail code reaches the kernel through libkernel, which AnyPS5 replaces.
@@ -139,7 +139,7 @@ These were settled without a decision from the project's owner and can be revisi
 - AMD's documented behaviour wins over the Intel recording where the vendors differ.
 - Decoding follows Zen 2: AMD branch mode, and the hint-space list.
 - Faults on misaligned operands are reproduced: a check before each access that requires alignment.
-- Zen 2 instructions the PS5 CPUID leaves out stop as invalid opcodes.
+- Zen 2 instructions the PS5 CPUID leaves out stop as invalid opcodes, except MONITORX/MWAITX and CLZERO, which PS5 executables use.
 - `syscall` and `int n` stop with a named message, as do the instructions that depend on segment tables.
 - ctest registers an extension once it passes completely; a report command shows the rest.
 - Fast mode's contract is the list under "Floating-point modes": today's fast mode, with the floating-point environment as the host gives it, and a named stop where a program unmasks a SIMD exception instead of running on without it.

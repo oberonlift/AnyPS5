@@ -5,6 +5,9 @@ It keeps every row valid in 64-bit mode that the lifter's Zydis decoder modes se
 no prefix and W reach, or whose bytes Zydis gives to another row, is not a form of this one. It is the one source of
 the operand-size and address-size rules, which Zydis's tables for 64-bit mode define.
 
+The PS5 set's extensions are those the PS5's CPUID reports (`CPUID_EXTENSIONS`) and the two Zen 2 extensions it leaves
+out that PS5 executables use (`UNREPORTED_EXTENSIONS`, MONITORX and CLZERO).
+
 A row's `comment` holds, base64-encoded, the XED record it was generated from; `xed_attributes` is the set of XED
 attributes that record names (REQUIRES_ALIGNMENT among them), or None for a row without a record."""
 import base64
@@ -18,12 +21,14 @@ from typing import Optional
 
 DATABASE = Path(__file__).resolve().parents[3] / "3rdparty" / "zydis-db" / "Data" / "instructions.json"
 
-PS5_EXTENSIONS = frozenset({
+CPUID_EXTENSIONS = frozenset({
     "BASE", "X87", "MMX", "SSE", "SSE2", "SSE3", "SSSE3", "SSE4", "SSE4A", "AVX", "AVX2", "AVX2GATHER", "AVXAES", "FMA",
     "F16C", "AES", "PCLMULQDQ", "SHA", "BMI1", "BMI2", "LZCNT", "ADOX_ADCX", "MOVBE", "RDRAND", "RDSEED", "CLFSH",
     "CLFLUSHOPT", "CLWB", "XSAVE", "XSAVEOPT", "XSAVEC", "XSAVES", "RDPID", "RDTSCP", "PAUSE", "LONGMODE",
     "AMD3DNOW_PREFETCH",
 })
+UNREPORTED_EXTENSIONS = frozenset({"MONITORX", "CLZERO"})
+PS5_EXTENSIONS = CPUID_EXTENSIONS | UNREPORTED_EXTENSIONS
 
 DECODER_MODES = {
     "amd": True,

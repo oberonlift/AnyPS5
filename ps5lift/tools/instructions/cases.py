@@ -33,9 +33,9 @@ the form's key, the instance's place among its form's instances and the case's p
 
 `expectation_written` names the forms whose expectations are written instead of recorded on Intel hardware: every form
 outside the set, whose cases expect the console's stop, and the forms of the set that Intel runs as other instructions,
-whose expectations come from AMD's manual: SSE4A, which Intel lacks, and the 16-bit near relative branches of AMD's
-branch mode (`jmp`, `call` and `jcc` rel16), which Intel runs as 64-bit ones. Their cases are left out of the
-recording.
+whose expectations come from AMD's manual: SSE4A, MONITORX and CLZERO, which Intel lacks, and the 16-bit near relative
+branches of AMD's branch mode (`jmp`, `call` and `jcc` rel16), which Intel runs as 64-bit ones. Their cases are left out
+of the recording.
 
 Outside the set, each definition has one instance, its first form's `default_operands` with the vector
 `KERNEL_VECTOR` for the immediate of a console-kernel instruction (`int`), which its stop reports, and one case, whose
@@ -162,7 +162,7 @@ _MEMORY_SPECIAL_ROLES = ("misaligned", "block-end", "crossing")
 
 _MXCSR_LOADERS = frozenset({"ldmxcsr", "vldmxcsr", "fxrstor", "fxrstor64", *XRSTOR})
 _CONSOLE_DEFINED = frozenset({"cpuid", "xgetbv"})
-_WRITTEN_GROUPS = frozenset({"sse4a"})
+_WRITTEN_GROUPS = frozenset({"sse4a", "monitorx", "clzero"})
 _SHORT_BRANCH_SIZE = 16
 _BASE, _RANDOM, _MEMORY_CASE, _X87_CASE, _EXTRA_CASE, _VARIANT, _STATE, _OUTSIDE = range(1, 9)
 _OUTSIDE_ROLE = "outside"

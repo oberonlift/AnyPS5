@@ -6,7 +6,10 @@ string instructions share one, `_RULES` names the others' by mnemonic, and every
 `xrstor` loads MXCSR from its image with SSE or AVX in the standard format, and with SSE alone in the compacted one,
 where an image whose XSTATE_BV leaves SSE out sets it to 0x1f80; `loads_mxcsr` says so. Each `xrstor` form adds a case
 that loads MXCSR with its misaligned-SSE bit (MM) in the standard format with every component, which Zen 2 accepts and
-Intel refuses."""
+Intel refuses.
+
+`clzero` points rax into the block: at the start, inside and at the end of a cache line, and into the block's first and
+last lines. One more case points it at the guard's first byte, where the line it zeroes faults."""
 import struct
 from dataclasses import replace
 
@@ -59,6 +62,13 @@ _ALL_LANES = bytes([0xFF]) * 32
 
 _RFLAGS_BITS = {"CF": 0, "PF": 2, "AF": 4, "ZF": 6, "SF": 7, "DF": 10, "OF": 11}
 _RFLAGS_USER = 0x202
+
+_CACHE_LINE = 64
+_CLZERO_OFFSETS = (
+    MEMORY, MEMORY + 1, MEMORY + _CACHE_LINE - 1, MEMORY + _CACHE_LINE + 5, 0, records.BLOCK_SIZE - _CACHE_LINE,
+    records.BLOCK_SIZE - 1,
+)
+_RAX = records.GPR_NAMES.index("rax")
 
 _GATHERS = frozenset("vgatherdps vgatherdpd vgatherqps vgatherqpd vpgatherdd vpgatherdq vpgatherqd vpgatherqq".split())
 _XSAVE_FAMILY = frozenset("xsave xsave64 xsavec xsavec64 xsaveopt xsaveopt64 xrstor xrstor64".split())
@@ -474,6 +484,24 @@ def _gather_case(case):
     case.vectors[index[1]] = bytes(indexes)
 
 
+def _clzero_inputs(model, inputs):
+    def apply(case, offset):
+        case.set_address(_RAX, offset)
+        case.write(offset - offset % _CACHE_LINE, _CACHE_LINE)
+
+    values = Values(_CLZERO_OFFSETS, lambda random: random.below(records.BLOCK_SIZE))
+    return [Input("line", values, apply, True)] + inputs
+
+
+def _clzero_in_guard(case):
+    case.set_address(_RAX, records.BLOCK_SIZE)
+    case.writes = []
+
+
+def _clzero_extras(model):
+    return ((0, _clzero_in_guard),)
+
+
 def _masked_store_case(case):
     if case.special is not None:
         location = LOCATIONS[case.instance.operands[1].name]
@@ -518,6 +546,7 @@ _RULES = {
     **{mnemonic: Rule(inputs=_gather_inputs, case=_gather_case) for mnemonic in _GATHERS},
     **{mnemonic: Rule(case=_masked_store_case) for mnemonic in _MASKED_STORES},
     **{mnemonic: Rule(case=_masked_move_case) for mnemonic in _MASKED_MOVES},
+    "clzero": Rule(pins=(_RAX,), inputs=_clzero_inputs, extras=_clzero_extras),
 }
 
 
