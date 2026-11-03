@@ -12,7 +12,7 @@ from pathlib import Path
 import ps5lift
 from instructions import cases, decoder, program, records, suite
 from instructions.records import CaseInput, Header, Outcome, Result
-from instructions.tests.support import compiler, generated
+from instructions.tests.support import compiler, generated, sysroot
 
 ELF_EXECUTABLE = 2
 ELF_SHARED = 3
@@ -35,8 +35,8 @@ class BundleTest(unittest.TestCase):
         cls.compiler = compiler()
         cls.work = Path(tempfile.mkdtemp(prefix="ps5lift-bundle-"))
         cls.bundle = cls.work / "bundle"
-        suite.bundle(cls.bundle, cls.compiler, BUNDLED, generated(), decoder.from_environment(), ps5lift.GUEST_FLAGS,
-                     ps5lift.GUEST_BASE)
+        suite.bundle(cls.bundle, cls.compiler, sysroot(), BUNDLED, generated(), decoder.from_environment(),
+                     ps5lift.GUEST_FLAGS, ps5lift.GUEST_BASE)
 
     @classmethod
     def tearDownClass(cls):
@@ -96,14 +96,19 @@ class BundleTest(unittest.TestCase):
 
     def test_written_group_not_bundled(self):
         with self.assertRaisesRegex(suite.SuiteError, "sse4a"):
-            suite.bundle(self.work / "sse4a", self.compiler, ["sse4a"], generated(), decoder.from_environment(),
-                         ps5lift.GUEST_FLAGS, ps5lift.GUEST_BASE)
+            suite.bundle(self.work / "sse4a", self.compiler, sysroot(), ["sse4a"], generated(),
+                         decoder.from_environment(), ps5lift.GUEST_FLAGS, ps5lift.GUEST_BASE)
         self.assertFalse((self.work / "sse4a").exists())
 
     def test_unknown_group_refused(self):
         with self.assertRaisesRegex(suite.SuiteError, "nonexistent"):
-            suite.bundle(self.work / "unknown", self.compiler, ["nonexistent"], generated(),
+            suite.bundle(self.work / "unknown", self.compiler, sysroot(), ["nonexistent"], generated(),
                          decoder.from_environment(), ps5lift.GUEST_FLAGS, ps5lift.GUEST_BASE)
+
+    def test_native_driver_builds_against_the_sysroot(self):
+        missing = self.work / "no-sysroot"
+        with self.assertRaisesRegex(suite.SuiteError, f"--sysroot={missing}"):
+            suite.compile_native_driver(self.compiler, self.work, missing)
 
     def test_every_recorded_group_has_cpu_flags(self):
         _, instances, _ = generated()

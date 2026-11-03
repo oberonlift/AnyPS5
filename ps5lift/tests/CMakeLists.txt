@@ -5,19 +5,26 @@ option(PS5LIFT_QEMU_TESTS "On an x86-64 host, also lift the fixtures for aarch64
 set(PS5LIFT_FIXTURES basic vector float threads callbacks x87 setjmp cpu mmx modules strings sse41 avx stop stop_not_on_ps5 stop_privileged
         stop_segment_tables stop_console_kernel stop_syscall)
 
+if(NOT CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    set(PS5LIFT_X86_64_SYSROOT "" CACHE PATH "x86-64 Linux sysroot that the fixture guests and the instruction tests' native driver build against")
+    if(NOT IS_DIRECTORY "${PS5LIFT_X86_64_SYSROOT}/usr/x86_64-linux-gnu" OR NOT IS_DIRECTORY "${PS5LIFT_X86_64_SYSROOT}/usr/lib/gcc-cross/x86_64-linux-gnu")
+        message(FATAL_ERROR "The fixture guests and the instruction tests' native driver need an x86-64 Linux sysroot on ${CMAKE_SYSTEM_NAME}: set "
+                "PS5LIFT_X86_64_SYSROOT to a directory with usr/x86_64-linux-gnu and usr/lib/gcc-cross/x86_64-linux-gnu, as Ubuntu's "
+                "g++-x86-64-linux-gnu installs them, or configure with -DBUILD_TESTING=OFF.")
+    endif()
+endif()
+
 add_executable(ps5lift_decode instructions/Decode.cpp)
 target_link_libraries(ps5lift_decode PRIVATE ps5lift_decoder)
 add_test(NAME instructions_unit
         COMMAND ${Python3_EXECUTABLE} -m unittest discover -s ${CMAKE_SOURCE_DIR}/tools/instructions/tests -t ${CMAKE_SOURCE_DIR}/tools)
-set_tests_properties(instructions_unit PROPERTIES ENVIRONMENT "PS5LIFT_DECODE=$<TARGET_FILE:ps5lift_decode>;PS5LIFT_CLANG=${CMAKE_C_COMPILER}")
+set(PS5LIFT_INSTRUCTIONS_UNIT_ENVIRONMENT "PS5LIFT_DECODE=$<TARGET_FILE:ps5lift_decode>" "PS5LIFT_CLANG=${CMAKE_C_COMPILER}")
+if(PS5LIFT_X86_64_SYSROOT)
+    list(APPEND PS5LIFT_INSTRUCTIONS_UNIT_ENVIRONMENT "PS5LIFT_X86_64_SYSROOT=${PS5LIFT_X86_64_SYSROOT}")
+endif()
+set_tests_properties(instructions_unit PROPERTIES ENVIRONMENT "${PS5LIFT_INSTRUCTIONS_UNIT_ENVIRONMENT}")
 
 if(NOT CMAKE_SYSTEM_NAME STREQUAL "Linux")
-    set(PS5LIFT_X86_64_SYSROOT "" CACHE PATH "x86-64 Linux sysroot that the fixture guests build against")
-    if(NOT IS_DIRECTORY "${PS5LIFT_X86_64_SYSROOT}/usr/x86_64-linux-gnu" OR NOT IS_DIRECTORY "${PS5LIFT_X86_64_SYSROOT}/usr/lib/gcc-cross/x86_64-linux-gnu")
-        message(FATAL_ERROR "The fixture guests need an x86-64 Linux sysroot on ${CMAKE_SYSTEM_NAME}: set PS5LIFT_X86_64_SYSROOT to a directory "
-                "with usr/x86_64-linux-gnu and usr/lib/gcc-cross/x86_64-linux-gnu, as Ubuntu's g++-x86-64-linux-gnu installs them, "
-                "or configure with -DBUILD_TESTING=OFF.")
-    endif()
     foreach(triple aarch64-unknown-linux-gnu x86_64-unknown-linux-gnu)
         string(REGEX REPLACE "-.*" "" arch ${triple})
         foreach(fixture IN LISTS PS5LIFT_FIXTURES)

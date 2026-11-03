@@ -1487,7 +1487,7 @@ def instructions_command(args):
     runner = runner_for(args.triple)
     cpu = lifted_cpu(runner, None)
     toolchain = lifted.Toolchain(
-        ps5lift=Path(args.ps5lift), clang=args.clang, clangxx=args.clangxx, triple=args.triple, guest_flags=tuple(GUEST_FLAGS),
+        ps5lift=Path(args.ps5lift), clang=args.clang, guest_sysroot=args.guest_sysroot, clangxx=args.clangxx, triple=args.triple, guest_flags=tuple(GUEST_FLAGS),
         guest_base=GUEST_BASE, runner=tuple(runner), lift_flags=tuple(lifter_target(args.triple, runner, cpu)),
         runtime=tuple(runtime_link_arguments(args.ps5lift, args.triple, cpu, args.clang, args.clangxx)), lift=lift, link=link_lifted,
     )
@@ -1626,6 +1626,7 @@ def main():
     bundle = commands.add_parser("instructions-bundle", help="pack the instruction cases for a recording host", description="Generate every instruction test group, link its guest program and the native driver for x86-64, and write them with their inputs, the self-test, record.py and groups.json into OUTPUT, a new directory to copy to an x86-64 Linux host and run record.py there. ps5lift_decode comes from PS5LIFT_DECODE.")
     bundle.add_argument("--output", type=Path, required=True)
     bundle.add_argument("--clang", required=True)
+    bundle.add_argument("--guest-sysroot", help="x86-64 Linux sysroot to build the guest programs and the native driver against; the compiler's own by default")
     bundle.add_argument("--group", action="append", help="a test group to bundle; every group with cases to record by default")
     bundle.set_defaults(handler=lambda args: suite.bundle_command(args, GUEST_FLAGS, GUEST_BASE))
 
@@ -1637,6 +1638,7 @@ def main():
     instructions.add_argument("--ps5lift", required=True)
     instructions.add_argument("--clang", required=True)
     instructions.add_argument("--clangxx", required=True)
+    instructions.add_argument("--guest-sysroot", help="x86-64 Linux sysroot to build the guest programs and the native driver against; the compiler's own by default")
     instructions.add_argument("--triple", default=host_triple())
     instructions.add_argument("--group", action="append", help="a test group to run; every group by default")
     instructions.add_argument("--float", action="append", choices=FLOAT_MODES, help="a floating-point mode to lift with; both by default")

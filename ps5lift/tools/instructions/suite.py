@@ -144,10 +144,11 @@ def _cpu_flags(group):
     return list(CPU_FLAGS[group])
 
 
-def compile_native_driver(clang, work):
+def compile_native_driver(clang, work, sysroot):
     (work / "records.h").write_text(records.header_text())
     driver = work / DRIVER
-    command = [str(clang), *DRIVER_FLAGS, f"-I{work}", str(NATIVE_DRIVER), "-o", str(driver)]
+    cross = [f"--sysroot={sysroot}"] if sysroot else []
+    command = [str(clang), *DRIVER_FLAGS, *cross, f"-I{work}", str(NATIVE_DRIVER), "-o", str(driver)]
     completed = subprocess.run(command, capture_output=True, text=True)
     if completed.returncode != 0:
         raise SuiteError(f"compiling the native driver failed with exit code {completed.returncode}:\n"
@@ -155,27 +156,28 @@ def compile_native_driver(clang, work):
     return driver
 
 
-def _write_program(clang, work, driver, directory, name, group, instances, specs, guest_flags, guest_base):
+def _write_program(clang, sysroot, work, driver, directory, name, group, instances, specs, guest_flags, guest_base):
     directory.mkdir()
     shutil.copy(driver, directory / DRIVER)
-    linked = program.build(clang, work / f"{name}.s", directory, None, guest_flags, guest_base, group, instances, specs)
+    linked = program.build(clang, work / f"{name}.s", directory, sysroot, guest_flags, guest_base, group, instances,
+                           specs)
     inputs = recorded_inputs(instances, linked.inputs)
     records.write_inputs(directory / f"{name}.inputs", recording_header(linked.assembly, inputs), inputs)
     return linked.layout, len(inputs)
 
 
-def _write_bundle(output, clang, flags, generated, decode, guest_flags, guest_base):
+def _write_bundle(output, clang, sysroot, flags, generated, decode, guest_flags, guest_base):
     forms, instances, specs = generated
     counts = {}
     with tempfile.TemporaryDirectory(prefix="ps5lift-bundle-") as work:
         work = Path(work)
-        driver = compile_native_driver(clang, work)
+        driver = compile_native_driver(clang, work, sysroot)
         for group in flags:
-            _, counts[group] = _write_program(clang, work, driver, output / group, group, group, instances[group],
-                                              specs[group], guest_flags, guest_base)
+            _, counts[group] = _write_program(clang, sysroot, work, driver, output / group, group, group,
+                                              instances[group], specs[group], guest_flags, guest_base)
         test_instances, test_specs = selftest.program(forms, decode)
-        layout, _ = _write_program(clang, work, driver, output / SELF_TEST, SELF_TEST, selftest.GROUP, test_instances,
-                                   test_specs, guest_flags, guest_base)
+        layout, _ = _write_program(clang, sysroot, work, driver, output / SELF_TEST, SELF_TEST, selftest.GROUP,
+                                   test_instances, test_specs, guest_flags, guest_base)
     expected = selftest.expectations(layout, test_instances, test_specs)
     (output / SELF_TEST / EXPECTED).write_text(json.dumps(expected, indent=1) + "\n")
     shutil.copy(RECORDER, output / RECORDER.name)
@@ -187,14 +189,14 @@ def _write_bundle(output, clang, flags, generated, decode, guest_flags, guest_ba
     return counts
 
 
-def bundle(output, clang, groups, generated, decode, guest_flags, guest_base):
+def bundle(output, clang, sysroot, groups, generated, decode, guest_flags, guest_base):
     output = Path(output)
     flags = {group: _cpu_flags(group) for group in _bundled_groups(groups, generated[1])}
     if output.exists():
         raise SuiteError(f"{output} exists: a bundle goes into a new directory")
     output.mkdir(parents=True)
     try:
-        return _write_bundle(output, clang, flags, generated, decode, guest_flags, guest_base)
+        return _write_bundle(output, clang, sysroot, flags, generated, decode, guest_flags, guest_base)
     except BaseException:
         shutil.rmtree(output)
         raise
@@ -275,8 +277,8 @@ def read_recording(path, header):
 def bundle_command(args, guest_flags, guest_base):
     decode = decoder.from_environment()
     try:
-        counts = bundle(args.output, args.clang, args.group, generate(decode, args.group), decode, guest_flags,
-                        guest_base)
+        counts = bundle(args.output, args.clang, args.guest_sysroot, args.group, generate(decode, args.group), decode,
+                        guest_flags, guest_base)
     except SuiteError as error:
         raise SystemExit(str(error)) from error
     for group, count in counts.items():

@@ -11,7 +11,7 @@ from instructions.database import Group
 from instructions.encoding import Imm
 from instructions.records import Outcome
 from instructions.state import State
-from instructions.tests.support import case_of, compiler, completed, fault, find_case, generated, group, judge
+from instructions.tests.support import case_of, compiler, completed, fault, find_case, generated, group, judge, sysroot
 
 GROUPS = {
     Group.NOT_ON_PS5: "outside-not-on-ps5",
@@ -130,7 +130,7 @@ class OutsideCasesTest(unittest.TestCase):
         work = Path(tempfile.mkdtemp(prefix="ps5lift-outside-"))
         try:
             with self.assertRaisesRegex(suite.SuiteError, "outside-privileged has no case to record"):
-                suite.bundle(work / "bundle", compiler(), ["outside-privileged"], generated(),
+                suite.bundle(work / "bundle", compiler(), sysroot(), ["outside-privileged"], generated(),
                              decoder.from_environment(), ps5lift.GUEST_FLAGS, ps5lift.GUEST_BASE)
             self.assertFalse((work / "bundle").exists())
         finally:

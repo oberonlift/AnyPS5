@@ -17,7 +17,7 @@ import shutil
 import tempfile
 import time
 from dataclasses import dataclass
-from typing import Callable
+from typing import Callable, Optional
 from pathlib import Path
 
 from . import compare, decoder, expectations, program, records, runner, suite
@@ -39,6 +39,7 @@ class LiftError(Exception):
 class Toolchain:
     ps5lift: Path
     clang: str
+    guest_sysroot: Optional[str]
     clangxx: str
     triple: str
     guest_flags: tuple
@@ -73,9 +74,9 @@ class Judged:
 def _guest(toolchain, work, group, instances, specs):
     directory = work / group
     directory.mkdir()
-    suite.compile_native_driver(toolchain.clang, directory)
-    linked = program.build(toolchain.clang, directory / f"{group}.s", directory, None, toolchain.guest_flags,
-                           toolchain.guest_base, group, instances, specs)
+    suite.compile_native_driver(toolchain.clang, directory, toolchain.guest_sysroot)
+    linked = program.build(toolchain.clang, directory / f"{group}.s", directory, toolchain.guest_sysroot,
+                           toolchain.guest_flags, toolchain.guest_base, group, instances, specs)
     inputs_path = directory / f"{group}.inputs"
     records.write_inputs(inputs_path, suite.recording_header(linked.assembly, linked.inputs), linked.inputs)
     return Guest(group, instances, specs, linked.assembly, linked.elf, linked.layout, linked.inputs, inputs_path)

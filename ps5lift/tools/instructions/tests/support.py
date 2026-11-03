@@ -59,6 +59,10 @@ def compiler():
     return found
 
 
+def sysroot():
+    return os.environ.get("PS5LIFT_X86_64_SYSROOT")
+
+
 def fake_layout(instances):
     entries = []
     for instance in instances:
@@ -128,8 +132,8 @@ def linked_group(name, work):
     _, instances, specs = generated()
     directory = Path(work) / name
     directory.mkdir()
-    suite.compile_native_driver(compiler(), directory)
-    linked = program.build(compiler(), directory / f"{name}.s", directory, None, ps5lift.GUEST_FLAGS,
+    suite.compile_native_driver(compiler(), directory, sysroot())
+    linked = program.build(compiler(), directory / f"{name}.s", directory, sysroot(), ps5lift.GUEST_FLAGS,
                            ps5lift.GUEST_BASE, name, instances[name], specs[name])
     header = suite.recording_header(linked.assembly, suite.recorded_inputs(instances[name], linked.inputs))
     recorded = suite.read_recording(suite.RECORDINGS / f"{name}{suite.RECORDING_SUFFIX}", header)
