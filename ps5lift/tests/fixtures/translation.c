@@ -145,6 +145,9 @@ int main(void) {
     image.start = 0, image.end = 0;
     const int image_queried = guest_virtual_query((const char*)0xfbfff00000, 1, &image, sizeof(image));
     guest_printf("after mprotect %d, sceKernelVirtualQuery %d finds the program image next: starts at it %d\n", reprotected, image_queried, image.start == (char*)0xfc00000000);
+    const int executable = guest_mprotect(map, 0x4000, 0xc7);
+    const int executable_queried = guest_query_protection(map, &start, &stop, &protection);
+    guest_printf("mprotect to read, write and execute with GPU access %d, sceKernelQueryMemoryProtection %d reports 0x%x\n", executable, executable_queried, protection);
 
     void* pool = 0;
     const int pool_reserved = guest_pool_reserve(0, 0x400000, 0x200000, 0, &pool);

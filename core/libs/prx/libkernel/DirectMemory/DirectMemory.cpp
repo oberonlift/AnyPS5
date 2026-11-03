@@ -344,7 +344,11 @@ int LinuxProtFromSce(int prot) {
     int result = PROT_NONE;
     if (prot & 0x113) result |= PROT_READ;
     if (prot & 0x222) result |= PROT_READ | PROT_WRITE;
+#ifdef ANYPS5_GUEST_LIFTED
+    if (prot & 4) result |= PROT_READ;
+#else
     if (prot & 4) result |= PROT_READ | PROT_EXEC;
+#endif
     return result;
 }
 
