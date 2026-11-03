@@ -687,7 +687,7 @@ std::string FunctionLifter::Mnemonic() const {
 
 void FunctionLifter::Unsupported(const std::string& what) {
     const auto mnemonic = Mnemonic();
-    ++_module.Report().Unsupported[mnemonic + (what.empty() ? "" : " (" + what + ")")];
+    ++_module.Report().Missing[mnemonic + (what.empty() ? "" : " (" + what + ")")];
     Stop(PS5LIFT_STOP_MISSING_TRANSLATION, 0, mnemonic);
 }
 

@@ -40,7 +40,7 @@ using MnemonicCounts = std::map<std::string, std::size_t>;
 struct LiftReport {
     std::size_t Functions = 0;
     std::size_t Instructions = 0;
-    MnemonicCounts Unsupported;
+    MnemonicCounts Missing;
     MnemonicCounts NotOnPs5;
     MnemonicCounts Privileged;
     MnemonicCounts SegmentTables;
@@ -53,7 +53,7 @@ struct LiftReportGroup {
 };
 
 inline constexpr LiftReportGroup LiftReportGroups[] = {
-    {"missing", &LiftReport::Unsupported},
+    {"missing", &LiftReport::Missing},
     {"not on the PS5 CPU", &LiftReport::NotOnPs5},
     {"privileged", &LiftReport::Privileged},
     {"segment-table", &LiftReport::SegmentTables},
