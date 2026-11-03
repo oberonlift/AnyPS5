@@ -42,10 +42,9 @@ from typing import Optional
 
 from . import records, tolerance
 from .cases import form_model
-from .database import Group, classify
-from .encoding import Imm
+from .database import in_set
+from .encoding import Imm, Mem, Reg
 from .expectations import undefined_bits
-from .encoding import Mem, Reg
 from .model import COMPARISON_PREDICATES, FLOAT_BITS, IMPLICIT_BASES, LOCATIONS, Shape
 from .records import Outcome
 from .state import State, apply_words, initial_block, operand_address
@@ -87,8 +86,8 @@ _COUNTER_HALVES = ("rax", "rdx")
 _PROCESSOR_REGISTER = "rcx"
 _CONSOLE_REGISTERS = {"cpuid": ("rax", "rbx", "rcx", "rdx"), "xgetbv": ("rax", "rdx")}
 _CONSOLE_VALUE_COUNTS = {"cpuid": 4, "xgetbv": 1}
-_STATE_SAVES = frozenset("fxsave fxsave64 fxrstor fxrstor64 xsave xsave64 xsavec xsavec64 xsaveopt xsaveopt64 xrstor "
-                         "xrstor64".split())
+_STATE_IMAGE_ACCESSES = frozenset("fxsave fxsave64 fxrstor fxrstor64 xsave xsave64 xsavec xsavec64 xsaveopt "
+                                  "xsaveopt64 xrstor xrstor64".split())
 _MXCSR_STORES = {
     "stmxcsr": 0, "vstmxcsr": 0,
     **{mnemonic: records.FX_MXCSR for mnemonic in "fxsave fxsave64 xsave xsave64 xsavec xsavec64 xsaveopt "
@@ -105,9 +104,7 @@ _AX_FLAG_MASK = sum(1 << 8 + bit for bit in _AH_FLAG_BITS.values()) | 1
 _DF_MASK = 1
 _MXCSR_FLAGS = 0x3F
 _MXCSR_MASKS = 0x1F80
-_MXCSR_CONTROL = 0xFFC0 | 1 << 17
-_FTZ = 1 << 15
-_DAZ = 1 << 6
+_MXCSR_CONTROL = 0xFFC0 | records.MXCSR_MISALIGNED_SSE
 _ROUNDING_SHIFT = 13
 _ROUNDING_BITS = 3
 _DOT_PRODUCTS = frozenset({"dpps", "dppd"})
@@ -293,7 +290,7 @@ def _outside_rules(instance):
 
 
 def rules_for(instance):
-    if classify(instance.form.definition) is not Group.SET:
+    if not in_set(instance.form.definition):
         return _outside_rules(instance)
     model = form_model(instance.form)
     definition = model.definition
@@ -301,7 +298,7 @@ def rules_for(instance):
     x87_names = tuple(f"{'mm' if model.mmx else 'st'}{number}" for number in range(8))
     kind = _TOLERANCES.get(mnemonic, Tolerance.NONE)
     access = None
-    if mnemonic in _STATE_SAVES:
+    if mnemonic in _STATE_IMAGE_ACCESSES:
         memory = model.explicit[0]
         access = (memory.choice, model.memory_width(memory))
     stores = ((model.explicit[0].choice, _MXCSR_STORES[mnemonic]),) if mnemonic in _MXCSR_STORES else ()
@@ -529,7 +526,7 @@ class _Judgement:
                 return True
             expected_sign, expected_exponent, expected_fraction = _float_parts(expected, bits)
             actual_sign, actual_exponent, actual_fraction = _float_parts(actual, bits)
-            if self.own_mxcsr & (_FTZ | _DAZ) and expected_sign == actual_sign:
+            if self.own_mxcsr & (records.MXCSR_FTZ | records.MXCSR_DAZ) and expected_sign == actual_sign:
                 if (self.rules.min_max and expected_exponent == expected_fraction == 0 and actual_exponent == 0
                         and self.is_source_lane(actual, index, bits)):
                     return True

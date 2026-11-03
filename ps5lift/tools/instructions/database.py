@@ -315,6 +315,10 @@ def classify(definition):
     return Group.SET
 
 
+def in_set(definition):
+    return classify(definition) is Group.SET
+
+
 def _depends_on_operand_size(definition):
     return any(
         operand["operand_type"] in OPERAND_TYPE_SIZES
@@ -349,8 +353,7 @@ def forms(definitions):
 
 
 def test_group(form):
-    group = classify(form.definition)
-    if group is Group.SET:
-        extension = form.definition.extension
-        return extension.lower() if extension in PS5_EXTENSIONS else "hint"
-    return "outside-" + group.name.lower().replace("_", "-")
+    definition = form.definition
+    if in_set(definition):
+        return definition.extension.lower() if definition.extension in PS5_EXTENSIONS else "hint"
+    return "outside-" + classify(definition).name.lower().replace("_", "-")

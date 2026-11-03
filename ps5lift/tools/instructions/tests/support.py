@@ -129,16 +129,12 @@ def linked_group(name, work):
     directory = Path(work) / name
     directory.mkdir()
     suite.compile_native_driver(compiler(), directory)
-    assembly = program.emit(name, instances[name])
-    source = directory / f"{name}.s"
-    source.write_text(assembly)
-    elf = program.link(compiler(), source, directory, None, ps5lift.GUEST_FLAGS, ps5lift.GUEST_BASE)
-    layout = program.read_layout(elf)
-    inputs = program.case_inputs(layout, specs[name])
-    header = suite.recording_header(assembly, suite.recorded_inputs(instances[name], inputs))
+    linked = program.build(compiler(), directory / f"{name}.s", directory, None, ps5lift.GUEST_FLAGS,
+                           ps5lift.GUEST_BASE, name, instances[name], specs[name])
+    header = suite.recording_header(linked.assembly, suite.recorded_inputs(instances[name], linked.inputs))
     recorded = suite.read_recording(suite.RECORDINGS / f"{name}{suite.RECORDING_SUFFIX}", header)
-    found = [Case(spec, instances[name][spec.instance], case_input, layout)
-             for spec, case_input in zip(specs[name], inputs)]
+    found = [Case(spec, instances[name][spec.instance], case_input, linked.layout)
+             for spec, case_input in zip(specs[name], linked.inputs)]
     return found, recorded
 
 

@@ -74,16 +74,11 @@ def _guest(toolchain, work, group, instances, specs):
     directory = work / group
     directory.mkdir()
     suite.compile_native_driver(toolchain.clang, directory)
-    assembly = program.emit(group, instances)
-    source = directory / f"{group}.s"
-    source.write_text(assembly)
-    elf = program.link(toolchain.clang, source, directory, None, toolchain.guest_flags, toolchain.guest_base)
-    layout = program.read_layout(elf)
-    inputs = program.case_inputs(layout, specs)
+    linked = program.build(toolchain.clang, directory / f"{group}.s", directory, None, toolchain.guest_flags,
+                           toolchain.guest_base, group, instances, specs)
     inputs_path = directory / f"{group}.inputs"
-    header = records.Header(*program.fingerprints(assembly, records.pack_input_records(inputs)))
-    records.write_inputs(inputs_path, header, inputs)
-    return Guest(group, instances, specs, assembly, elf, layout, inputs, inputs_path)
+    records.write_inputs(inputs_path, suite.recording_header(linked.assembly, linked.inputs), linked.inputs)
+    return Guest(group, instances, specs, linked.assembly, linked.elf, linked.layout, linked.inputs, inputs_path)
 
 
 def _recording(guest):
@@ -205,20 +200,10 @@ def _report(group, mode, judged, by_form, stops, lift_report, elapsed):
     return verdicts[Verdict.PASS] == len(judged) and not by_form
 
 
-def _selected(groups, instances):
-    if not groups:
-        return sorted(instances)
-    unknown = [group for group in groups if group not in instances]
-    if unknown:
-        raise suite.SuiteError(f"there is no test group {', '.join(unknown)}; "
-                               f"the groups are {', '.join(sorted(instances))}")
-    return list(dict.fromkeys(groups))
-
-
 def run_groups(toolchain, groups, float_modes, unoptimized, work):
     _, instances, specs = suite.generate(decoder.from_environment())
     passed = True
-    for group in _selected(groups, instances):
+    for group in suite.selected_groups(groups, instances):
         guest = _guest(toolchain, work, group, instances[group], specs[group])
         recorded = _recording(guest)
         for float_mode in float_modes:

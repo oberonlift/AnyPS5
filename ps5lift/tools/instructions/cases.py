@@ -53,7 +53,7 @@ from dataclasses import dataclass, replace
 from typing import Optional, Union
 
 from . import records
-from .database import Form, Group, classify, operand_size_encoding, test_group
+from .database import Form, Group, classify, in_set, operand_size_encoding, test_group
 from .encoding import (
     HIGH_BYTE_REGISTERS,
     REGISTER_FILES,
@@ -106,10 +106,8 @@ TARGET = "target"
 RETURN_ADDRESS_SIZE = 8
 
 CONSOLE_MXCSR = 0x9FC0
-_FTZ = 1 << 15
-_DAZ = 1 << 6
-_FTZ_ALONE = CONSOLE_MXCSR & ~_DAZ
-_DAZ_ALONE = CONSOLE_MXCSR & ~_FTZ
+_FTZ_ALONE = CONSOLE_MXCSR & ~records.MXCSR_DAZ
+_DAZ_ALONE = CONSOLE_MXCSR & ~records.MXCSR_FTZ
 MXCSR_STATES = (
     CONSOLE_MXCSR,
     *(0x1F80 | rounding << 13 for rounding in range(4)),
@@ -117,9 +115,8 @@ MXCSR_STATES = (
     _DAZ_ALONE,
     *(0x1F80 & ~(1 << 7 + exception) for exception in range(6)),
 )
-_MISALIGNED_SSE = 1 << 17
 _RESERVED_MXCSR = 1 << 31
-_MISALIGNED_SSE_LOAD = CONSOLE_MXCSR | _MISALIGNED_SSE
+_MISALIGNED_SSE_LOAD = CONSOLE_MXCSR | records.MXCSR_MISALIGNED_SSE
 _MXCSR_LOADS = MXCSR_STATES + (CONSOLE_MXCSR | 0x3F, _MISALIGNED_SSE_LOAD, 0x1F80 | _RESERVED_MXCSR)
 _MXCSR_INITIAL = 0x1F80
 
@@ -138,18 +135,10 @@ _GATHER_LANES = 8
 _GATHER_SLOTS = 16
 _BIT_OFFSET_REACH = (records.BLOCK_SIZE - _MEMORY) * 8
 _FAR_BIT_OFFSETS = (8 * 1000 + 3, -8 * 1000 + 5)
-_XSAVE_LEGACY = 512
-_XSAVE_HEADER = 64
-_XSAVE_AVX = 256
-_XSAVE_FULL = _XSAVE_LEGACY + _XSAVE_HEADER + _XSAVE_AVX
-_XSAVE_COMPONENTS = 7
-_XSAVE_SSE_COMPONENT = 2
-_XSAVE_AVX_COMPONENT = 4
-_XSAVE_MXCSR_COMPONENTS = 6
-_COMPACTED = 1 << 63
+_XSAVE_FULL = records.XSAVE_AVX + records.XSAVE_AVX_SIZE
+_XSAVE_MXCSR_COMPONENTS = records.XSTATE_SSE | records.XSTATE_AVX
 
 _X87_IMAGE_SIZE = records.FX_XMM
-_X87_DEFAULT_CONTROL = 0x037F
 _X87_RESERVED_CONTROL = 0x40
 _X87_CONTROLS = tuple((precision, rounding) for precision in (0, 2, 3) for rounding in range(4))
 _X87_MASKS = (0x3F, *(0x3F & ~(1 << exception) for exception in range(6)))
@@ -264,7 +253,7 @@ def expression_offset(expression):
 
 def expectation_written(form):
     definition = form.definition
-    if classify(definition) is not Group.SET:
+    if not in_set(definition):
         return True
     if test_group(form) in _WRITTEN_GROUPS:
         return True
@@ -575,7 +564,7 @@ def _outside_plan(form):
 
 
 def _instance_plans(form):
-    if classify(form.definition) is not Group.SET:
+    if not in_set(form.definition):
         return _outside_plan(form)
     model = form_model(form)
     return model.shape, _plans(model)
@@ -734,7 +723,7 @@ class _Case:
         self.st = list(layout.st)
         self.flags = 0
         self.mxcsr = mxcsr
-        self.fcw = _X87_DEFAULT_CONTROL
+        self.fcw = records.FX_DEFAULT_FCW
         self.fsw = 0
         self.valid = 0
         self.top = 0
@@ -883,7 +872,7 @@ def _x87_image(case):
 
 def _default_x87_image():
     image = bytearray(_X87_IMAGE_SIZE)
-    struct.pack_into("<H", image, records.FX_FCW, _X87_DEFAULT_CONTROL)
+    struct.pack_into("<H", image, records.FX_FCW, records.FX_DEFAULT_FCW)
     return bytes(image)
 
 
@@ -1067,7 +1056,7 @@ def case_specs(group_instances):
         while end < len(group_instances) and group_instances[end].form.key == form.key:
             end += 1
         members = group_instances[start:end]
-        if classify(form.definition) is Group.SET:
+        if in_set(form.definition):
             specs += _form_specs(form_model(form), members, len(specs))
         else:
             specs += _outside_specs(members, len(specs))
@@ -1277,12 +1266,12 @@ def _xgetbv_inputs(model, inputs):
 
 def _xsave_inputs(model, inputs):
     def apply(case, value):
-        components = _XSAVE_COMPONENTS if case.special is not None else value
+        components = records.XSTATE_COMPONENTS if case.special is not None else value
         case.scratch["components"] = components
         case.set_gpr(0, 0, 32, components)
         case.set_gpr(2, 0, 32, 0)
 
-    kept = [Input("components", choice_values(range(_XSAVE_COMPONENTS + 1)), apply, True)]
+    kept = [Input("components", choice_values(range(records.XSTATE_COMPONENTS + 1)), apply, True)]
     kept += _without(inputs, {"eax", "edx"})
     if model.mnemonic in _XRSTOR:
         kept.append(Input("image", choice_values(range(len(_MXCSR_LOADS))), _xrstor_image, True))
@@ -1292,8 +1281,8 @@ def _xsave_inputs(model, inputs):
 def _xsave_case(case):
     case.writes = []
     if case.model.mnemonic not in _XRSTOR:
-        avx = _XSAVE_AVX if case.scratch["components"] & _XSAVE_AVX_COMPONENT else 0
-        case.write(case.targets[case.model.position(0)], _XSAVE_LEGACY + _XSAVE_HEADER + avx)
+        avx = records.XSAVE_AVX_SIZE if case.scratch["components"] & records.XSTATE_AVX else 0
+        case.write(case.targets[case.model.position(0)], records.XSAVE_AVX + avx)
 
 
 def _float80_slots(number):
@@ -1306,7 +1295,7 @@ def _x87_valid(number):
 
 
 def _fxsave_image(number):
-    image = bytearray(_XSAVE_LEGACY)
+    image = bytearray(records.FX_SIZE)
     top = number % 8
     tags = _abridged_tags(top, _x87_valid(number))
     struct.pack_into("<HHB", image, records.FX_FCW, _x87_control_word(number), top << 11, tags)
@@ -1331,30 +1320,31 @@ def _fxrstor_inputs(model, inputs):
 def _xrstor_mxcsr(components, stored, compacted, loaded):
     if not compacted:
         return loaded if components & _XSAVE_MXCSR_COMPONENTS else None
-    if not components & _XSAVE_SSE_COMPONENT:
+    if not components & records.XSTATE_SSE:
         return None
-    return loaded if stored & _XSAVE_SSE_COMPONENT else _MXCSR_INITIAL
+    return loaded if stored & records.XSTATE_SSE else _MXCSR_INITIAL
 
 
 def _store_xrstor_image(case, number, stored, compacted):
     lanes = integer_edges(64)
-    compaction = _COMPACTED | _XSAVE_COMPONENTS if compacted else 0
-    image = _fxsave_image(number) + struct.pack("<QQ", stored, compaction) + bytes(_XSAVE_HEADER - 16)
-    image += b"".join(struct.pack("<Q", lanes[(number + lane) % len(lanes)]) for lane in range(_XSAVE_AVX // 8))
+    compaction = records.XSAVE_COMPACTED | records.XSTATE_COMPONENTS if compacted else 0
+    image = _fxsave_image(number) + struct.pack("<QQ", stored, compaction) + bytes(records.XSAVE_HEADER_SIZE - 16)
+    image += b"".join(struct.pack("<Q", lanes[(number + lane) % len(lanes)])
+                      for lane in range(records.XSAVE_AVX_SIZE // 8))
     case.store(case.targets[case.model.position(0)], image)
     case.loads_mxcsr = _xrstor_mxcsr(case.scratch["components"], stored, compacted, _MXCSR_LOADS[number])
 
 
 def _xrstor_image(case, value):
-    number = _XSAVE_COMPONENTS if case.special is not None else value
-    stored = _XSAVE_COMPONENTS if case.special is not None else number % (_XSAVE_COMPONENTS + 1)
-    _store_xrstor_image(case, number, stored, number > _XSAVE_COMPONENTS)
+    number = records.XSTATE_COMPONENTS if case.special is not None else value
+    stored = records.XSTATE_COMPONENTS if case.special is not None else number % (records.XSTATE_COMPONENTS + 1)
+    _store_xrstor_image(case, number, stored, number > records.XSTATE_COMPONENTS)
 
 
 def _xrstor_misaligned_sse(case):
-    case.scratch["components"] = _XSAVE_COMPONENTS
-    case.set_gpr(0, 0, 32, _XSAVE_COMPONENTS)
-    _store_xrstor_image(case, _MXCSR_LOADS.index(_MISALIGNED_SSE_LOAD), _XSAVE_COMPONENTS, False)
+    case.scratch["components"] = records.XSTATE_COMPONENTS
+    case.set_gpr(0, 0, 32, records.XSTATE_COMPONENTS)
+    _store_xrstor_image(case, _MXCSR_LOADS.index(_MISALIGNED_SSE_LOAD), records.XSTATE_COMPONENTS, False)
 
 
 def _xrstor_extras(model):

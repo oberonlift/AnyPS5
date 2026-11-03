@@ -39,7 +39,7 @@ from dataclasses import replace
 
 from . import records
 from .cases import TARGET, expectation_written, form_model
-from .database import Group, classify
+from .database import Group, classify, in_set
 from .encoding import Imm, Reg
 from .model import LOCATIONS, Shape
 from .records import Outcome, Result
@@ -47,7 +47,6 @@ from .state import State, apply_words, changed_words, initial_block, operand_add
 
 NO_EXPECTATION = "no recording and no written expectation"
 AMD_MXCSR_MASK = 0x0002FFFF
-MISALIGNED_SSE = 1 << 17
 NO_UNDEFINED_BITS = bytes(records.SLOT_SIZE)
 
 _ES = 1 << 7
@@ -70,16 +69,9 @@ _CONDITIONS = {
 _LEGACY_POINTERS = {False: ((6, 8), (8, 14), (16, 22)), True: ((6, 8), (8, 16), (16, 24))}
 _ENVIRONMENT_POINTERS = {14: ((6, 14),), 28: ((12, 26),)}
 _FSAVE_REGISTERS = 80
-_LEGACY_IMAGE = records.FX_SIZE
 _MXCSR_MASK_FIELD = (records.FX_MXCSR_MASK, records.FX_MXCSR_MASK + 4)
 _X87_FIELDS = (records.FX_FCW, records.FX_FTW + 1)
 _X87_REGISTER_BYTES = 10
-_X87_INITIAL_CONTROL = 0x037F
-_X87, _SSE, _AVX = 1, 2, 4
-_COMPONENTS = _X87 | _SSE | _AVX
-_XSAVE_HEADER = _LEGACY_IMAGE
-_XSAVE_AVX = _LEGACY_IMAGE + 64
-_COMPACTED = 1 << 63
 _OUTSIDE_STOPS = {
     Group.NOT_ON_PS5: Outcome.INVALID_OPCODE,
     Group.PRIVILEGED: Outcome.GENERAL_PROTECTION,
@@ -87,7 +79,9 @@ _OUTSIDE_STOPS = {
     Group.CONSOLE_KERNEL: Outcome.CONSOLE_KERNEL,
 }
 _NOT_ON_PS5 = 1
-_STATE_SAVES = frozenset("fxsave fxsave64 fnstenv fnsave xsave xsave64 xsaveopt xsaveopt64 xsavec xsavec64".split())
+_STATE_IMAGE_STORES = frozenset(
+    "fxsave fxsave64 fnstenv fnsave xsave xsave64 xsaveopt xsaveopt64 xsavec xsavec64".split()
+)
 _ENVIRONMENT_SAVES = frozenset({"fnstenv", "fnsave"})
 
 
@@ -257,9 +251,9 @@ def _outside(case, group):
 
 
 def _written(case):
-    group = classify(case.instance.form.definition)
-    if group is not Group.SET:
-        return _outside(case, group)
+    definition = case.instance.form.definition
+    if not in_set(definition):
+        return _outside(case, classify(definition))
     if case.instance.shape in (Shape.BRANCH, Shape.CALL):
         return _near_branch16(case)
     if _mnemonic(case) not in _SSE4A:
@@ -323,7 +317,7 @@ def _load_x87(final, image):
 
 def _initial_x87(final):
     initial = bytearray(records.FX_XMM)
-    struct.pack_into("<H", initial, records.FX_FCW, _X87_INITIAL_CONTROL)
+    struct.pack_into("<H", initial, records.FX_FCW, records.FX_DEFAULT_FCW)
     _load_x87(final, initial)
 
 
@@ -354,7 +348,7 @@ def _ldmxcsr(case):
 
 def _fxrstor(case):
     final = _Final.completed(case)
-    image = final.image(_LEGACY_IMAGE)
+    image = final.image(records.FX_SIZE)
     _load_x87(final, image)
     _load_mxcsr(final)
     _load_xmm(final, image)
@@ -364,23 +358,24 @@ def _fxrstor(case):
 def _xrstor(case):
     final = _Final.completed(case)
     requested = register_value(case.input.slot, "edx") << 32 | register_value(case.input.slot, "eax")
-    if requested & ~_COMPONENTS:
+    if requested & ~records.XSTATE_COMPONENTS:
         raise ExpectationError(f"{_key(case)} restores components {requested:#x}, beyond x87, SSE and AVX")
-    image = final.image(_XSAVE_AVX + records.YMM_COUNT * _XMM_BYTES)
-    present, compaction = struct.unpack_from("<QQ", image, _XSAVE_HEADER)
-    if compaction & _COMPACTED and present & ~compaction:
+    image = final.image(records.XSAVE_AVX + records.XSAVE_AVX_SIZE)
+    present, compaction = struct.unpack_from("<QQ", image, records.XSAVE_HEADER)
+    if compaction & records.XSAVE_COMPACTED and present & ~compaction:
         raise ExpectationError(f"{_key(case)}: XSTATE_BV {present:#x} is not within XCOMP_BV {compaction:#x}, "
                                "which faults")
-    if requested & _X87 and present & _X87:
+    if requested & records.XSTATE_X87 and present & records.XSTATE_X87:
         _load_x87(final, image)
-    elif requested & _X87:
+    elif requested & records.XSTATE_X87:
         _initial_x87(final)
-    if requested & _SSE:
-        _load_xmm(final, image if present & _SSE else bytes(_LEGACY_IMAGE))
+    if requested & records.XSTATE_SSE:
+        _load_xmm(final, image if present & records.XSTATE_SSE else bytes(records.FX_SIZE))
     if case.spec.loads_mxcsr is not None:
         _load_mxcsr(final)
-    if requested & _AVX:
-        _load_upper_halves(final, image[_XSAVE_AVX:] if present & _AVX else bytes(records.YMM_COUNT * _XMM_BYTES))
+    if requested & records.XSTATE_AVX:
+        _load_upper_halves(final, image[records.XSAVE_AVX:] if present & records.XSTATE_AVX
+                           else bytes(records.XSAVE_AVX_SIZE))
     return final
 
 
@@ -397,7 +392,7 @@ def loaded_state(case):
 
 def _mxcsr_load(case, recorded):
     loaded = case.spec.loads_mxcsr
-    if loaded is None or not loaded & MISALIGNED_SSE or loaded & ~AMD_MXCSR_MASK:
+    if loaded is None or not loaded & records.MXCSR_MISALIGNED_SSE or loaded & ~AMD_MXCSR_MASK:
         return recorded
     if recorded.outcome is Outcome.COMPLETED:
         raise ExpectationError(f"{_key(case)} loads MXCSR {loaded:#x}, whose MM bit Intel refuses, but its recording "
@@ -412,7 +407,7 @@ def _mxcsr_load(case, recorded):
 _PATCHES = {
     "bsf": _bit_scan,
     "bsr": _bit_scan,
-    **{mnemonic: _state_save for mnemonic in _STATE_SAVES},
+    **{mnemonic: _state_save for mnemonic in _STATE_IMAGE_STORES},
     **{mnemonic: _mxcsr_load for mnemonic in _LOADS},
 }
 

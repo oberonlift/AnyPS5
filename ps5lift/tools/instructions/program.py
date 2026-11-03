@@ -21,7 +21,8 @@ is the 4 KiB before a 64 KiB boundary in a 64 KiB-aligned `.bss` section, and th
 `link` links the assembly at the image base its caller gives. `read_layout` reads the ELF's symbol table into a
 `Layout`. `case_inputs` is the second phase of building cases: block offsets become addresses, and a fixup in the block
 becomes a patch that holds its label's address; a register fixup is the program's own `lea`, so the register keeps the
-0 its spec gives it. `fingerprints` are the SHA-256 digests of the assembly and of the inputs."""
+0 its spec gives it. `build` does all of it for a group: it emits the assembly, links it, reads the layout and gives
+the case inputs, as a `LinkedProgram`. `fingerprints` are the SHA-256 digests of the assembly and of the inputs."""
 import hashlib
 import re
 import struct
@@ -105,6 +106,14 @@ class Layout:
     guard: int
     loader_fxrstor: int
     instances: tuple
+
+
+@dataclass(frozen=True)
+class LinkedProgram:
+    assembly: str
+    elf: Path
+    layout: Layout
+    inputs: list
 
 
 def _symbol(index, part=None):
@@ -509,6 +518,14 @@ def case_inputs(layout, specs):
             spec.index, spec.instance, spec.fill_seed, spec.console_defined, _slot(layout, spec), _patches(entry, spec),
         ))
     return inputs
+
+
+def build(clang, source, work, sysroot, flags, image_base, group, instances, specs):
+    assembly = emit(group, instances)
+    Path(source).write_text(assembly)
+    elf = link(clang, source, work, sysroot, flags, image_base)
+    layout = read_layout(elf)
+    return LinkedProgram(assembly, elf, layout, case_inputs(layout, specs))
 
 
 def fingerprints(assembly, inputs_bytes):

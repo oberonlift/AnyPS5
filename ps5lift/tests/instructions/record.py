@@ -24,7 +24,6 @@ RESULTS = BUNDLE / "results"
 CPUINFO = Path("/proc/cpuinfo")
 FLAGS_FIELD = "flags"
 TIMEOUT_SECONDS = 10.0
-UNFINISHED = (records.Outcome.CRASHED, records.Outcome.TIMED_OUT, records.Outcome.HOST_SIGNAL)
 
 
 def cpu_flags(path):
@@ -103,7 +102,7 @@ def record(group, timeout):
     counts = Counter(result.outcome for result in results)
     summary = ", ".join(f"{outcome.name} {count:,}" for outcome, count in sorted(counts.items()))
     print(f"{group}: {len(results):,} cases in {elapsed:.1f} s: {summary}", flush=True)
-    unfinished = [result for result in results if result.outcome in UNFINISHED]
+    unfinished = [result for result in results if result.outcome in records.UNFINISHED]
     for result in unfinished:
         print(f"  case {result.case}: {result.outcome.name}, detail {result.detail}, address {result.address:#x}")
         if result.case in stops:

@@ -26,8 +26,6 @@ from collections import defaultdict
 from pathlib import Path
 
 from . import cases, database, decoder, program, records, selftest
-from .database import Group
-from .records import Outcome
 
 PACKAGE = Path(__file__).resolve().parent
 TESTS = PACKAGE.parents[1] / "tests" / "instructions"
@@ -46,7 +44,6 @@ DRIVER_FLAGS = (
     "--target=x86_64-unknown-linux-gnu", "-std=c17", "-O2", "-Wall", "-Wextra", "-Werror", "-fPIC", "-shared",
     "-fuse-ld=lld",
 )
-UNFINISHED = (Outcome.CRASHED, Outcome.TIMED_OUT, Outcome.HOST_SIGNAL)
 LISTED_CASES = 20
 
 CPU_FLAGS = {
@@ -95,9 +92,8 @@ class SuiteError(Exception):
 
 def generate(decoder):
     definitions = database.load()
-    forms = [form for form in database.forms(definitions) if database.classify(form.definition) is Group.SET]
-    outside = [database.forms([definition])[0] for definition in definitions
-               if database.classify(definition) is not Group.SET]
+    forms = [form for form in database.forms(definitions) if database.in_set(form.definition)]
+    outside = [database.forms([definition])[0] for definition in definitions if not database.in_set(definition)]
     by_group = defaultdict(list)
     for instance in cases.instances(forms + outside, decoder):
         by_group[database.test_group(instance.form)].append(instance)
@@ -120,16 +116,22 @@ def recordable_groups(instances):
     )
 
 
-def _selected(groups, instances):
-    recordable = recordable_groups(instances)
+def selected_groups(groups, available):
     if not groups:
-        return recordable
-    for group in groups:
-        if group not in instances:
-            raise SuiteError(f"there is no test group {group}; the groups are {', '.join(sorted(instances))}")
-        if group not in recordable:
-            raise SuiteError(f"{group} has no case to record: its expectations are written, not recorded")
+        return sorted(available)
+    unknown = [group for group in groups if group not in available]
+    if unknown:
+        raise SuiteError(f"there is no test group {', '.join(unknown)}; the groups are {', '.join(sorted(available))}")
     return list(dict.fromkeys(groups))
+
+
+def _bundled_groups(groups, instances):
+    recordable = recordable_groups(instances)
+    selected = selected_groups(groups or recordable, instances)
+    written = [group for group in selected if group not in recordable]
+    if written:
+        raise SuiteError(f"{', '.join(written)} has no case to record: its expectations are written, not recorded")
+    return selected
 
 
 def _cpu_flags(group):
@@ -152,14 +154,10 @@ def compile_native_driver(clang, work):
 def _write_program(clang, work, driver, directory, name, group, instances, specs, guest_flags, guest_base):
     directory.mkdir()
     shutil.copy(driver, directory / DRIVER)
-    assembly = program.emit(group, instances)
-    source = work / f"{name}.s"
-    source.write_text(assembly)
-    elf = program.link(clang, source, directory, None, guest_flags, guest_base)
-    layout = program.read_layout(elf)
-    inputs = recorded_inputs(instances, program.case_inputs(layout, specs))
-    records.write_inputs(directory / f"{name}.inputs", recording_header(assembly, inputs), inputs)
-    return layout, len(inputs)
+    linked = program.build(clang, work / f"{name}.s", directory, None, guest_flags, guest_base, group, instances, specs)
+    inputs = recorded_inputs(instances, linked.inputs)
+    records.write_inputs(directory / f"{name}.inputs", recording_header(linked.assembly, inputs), inputs)
+    return linked.layout, len(inputs)
 
 
 def _write_bundle(output, clang, flags, generated, decode, guest_flags, guest_base):
@@ -187,7 +185,7 @@ def _write_bundle(output, clang, flags, generated, decode, guest_flags, guest_ba
 
 def bundle(output, clang, groups, generated, decode, guest_flags, guest_base):
     output = Path(output)
-    flags = {group: _cpu_flags(group) for group in _selected(groups, generated[1])}
+    flags = {group: _cpu_flags(group) for group in _bundled_groups(groups, generated[1])}
     if output.exists():
         raise SuiteError(f"{output} exists: a bundle goes into a new directory")
     output.mkdir(parents=True)
@@ -234,7 +232,7 @@ def _check_group(bundle_directory, group):
                   if case.case in by_case and (by_case[case.case].expected is not None) != case.console_defined]
     if mismatched:
         problems.append(f"{results_path} has the wrong console-defined flag in case {_listed(mismatched)}")
-    for outcome in UNFINISHED:
+    for outcome in records.UNFINISHED:
         ended = [result.case for result in results if result.outcome is outcome]
         if ended:
             problems.append(f"{results_path}: {outcome.name} in case {_listed(ended)}")
