@@ -61,7 +61,7 @@ static uint8_t resultBuffer[sizeof(Ps5LiftInstructionResultHead)
                                   * sizeof(Ps5LiftInstructionWord)
                             + sizeof(Ps5LiftInstructionExpectedCount) + MaximumConsoleValues * sizeof(uint64_t)];
 
-__attribute__((format(printf, 1, 2))) static bool Fail(const char* format, ...)
+[[gnu::format(printf, 1, 2)]] static bool Fail(const char* format, ...)
 {
     va_list arguments;
     va_start(arguments, format);
