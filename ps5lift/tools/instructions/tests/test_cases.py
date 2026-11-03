@@ -406,6 +406,17 @@ class CasesTest(unittest.TestCase):
         self.assertNotIn(self.form("jmp", 64, feature_amd="1").key, written)
         self.assertNotIn(self.form("ret", 64, opcode=0xC3).key, written)
 
+    def test_written_expectations_only_for_set_forms(self):
+        every = database.forms(database.load())
+        written = [form for form in every if cases.expectation_written(form)]
+        self.assertEqual([form.key for form in written if database.classify(form.definition) is not database.Group.SET],
+                         [])
+        outside = {form.definition.mnemonic for form in every if form.operand_size == 16
+                   and form.definition.category in ("COND_BR", "UNCOND_BR", "CALL", "RET")
+                   and database.classify(form.definition) is not database.Group.SET}
+        self.assertLessEqual({"xbegin", "iret", "call", "ret"}, outside)
+        self.assertEqual(len(written), len({form.key for form in generated()[0] if cases.expectation_written(form)}))
+
     def _xrstor_images(self):
         _, instances, specs = generated()
         for spec in specs["xsave"]:

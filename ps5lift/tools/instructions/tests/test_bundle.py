@@ -1,7 +1,6 @@
 import hashlib
 import json
 import lzma
-import os
 import shutil
 import struct
 import subprocess
@@ -13,7 +12,7 @@ from pathlib import Path
 import ps5lift
 from instructions import cases, decoder, program, records, suite
 from instructions.records import CaseInput, Header, Outcome, Result
-from instructions.tests.support import generated
+from instructions.tests.support import compiler, generated
 
 ELF_EXECUTABLE = 2
 ELF_SHARED = 3
@@ -26,13 +25,6 @@ CPUINFO_WITHOUT_AVX2 = (
 )
 
 
-def _compiler():
-    compiler = os.environ.get("PS5LIFT_CLANG")
-    if compiler is None:
-        raise AssertionError("PS5LIFT_CLANG is not set: it names the clang executable")
-    return compiler
-
-
 def _elf_kind(path):
     return struct.unpack_from("<HH", path.read_bytes(), 16)
 
@@ -40,7 +32,7 @@ def _elf_kind(path):
 class BundleTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.compiler = _compiler()
+        cls.compiler = compiler()
         cls.work = Path(tempfile.mkdtemp(prefix="ps5lift-bundle-"))
         cls.bundle = cls.work / "bundle"
         suite.bundle(cls.bundle, cls.compiler, BUNDLED, generated(), decoder.from_environment(), ps5lift.GUEST_FLAGS,

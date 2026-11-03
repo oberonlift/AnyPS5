@@ -1,4 +1,5 @@
-"""The comparisons that are not exact: the approximations `rcpps` and `rsqrtps` and the x87 transcendentals.
+"""The comparisons that are not exact: the approximations `rcpps` and `rsqrtps`, the x87 transcendentals, and the
+NaNs of `dpps` and `dppd`.
 
 `within_rcp` measures an approximated element against the exact 1/x or 1/√x of its input lane x, and accepts the
 relative error both vendors document, where x is normal and so is the exact result; otherwise (a zero, infinity, NaN,
@@ -12,6 +13,11 @@ instruction's documented range, or for an operand or result that is no normal nu
 an unnormal encoding, or a result past the extended range): such a case is compared exactly. `within_ulp` accepts the
 reference and the extended values next to it, one unit in the last place of the 64-bit format on either side, across a
 binade boundary too.
+
+`special_product` tells whether a product `dpps` or `dppd` adds is a NaN or an infinity, as the `sse41` fixture judges
+it: an operand is a NaN or an infinity, or the exact product of two finite operands rounds past the largest finite value
+with MXCSR's rounding control (to nearest from half an ulp above it, up for a positive product, down for a negative one,
+never toward zero). Denormal operands, which DAZ makes zeros, cannot give such a product.
 
 Values are bit patterns: integers of the float's width, and 80-bit extended values as 80-bit integers."""
 from decimal import ROUND_HALF_EVEN, Decimal, localcontext
@@ -67,6 +73,25 @@ def _normal_range(width):
 def _is_normal(bits, width):
     exponent_bits, fraction_bits = FLOAT_FORMATS[width]
     return 0 < bits >> fraction_bits & (1 << exponent_bits) - 1 < (1 << exponent_bits) - 1
+
+
+def _rounds_to_infinity(value, width, rounding):
+    exponent_bits, fraction_bits = FLOAT_FORMATS[width]
+    largest = _normal_range(width)[1]
+    if abs(value) <= largest:
+        return False
+    if rounding == NEAREST:
+        return abs(value) >= largest + Fraction(2) ** ((1 << exponent_bits - 1) - 1 - fraction_bits - 1)
+    if rounding not in (DOWN, UP, TOWARD_ZERO):
+        raise ToleranceError(f"a rounding control is 0 to 3, not {rounding}")
+    return rounding == (UP if value > 0 else DOWN)
+
+
+def special_product(first, second, width, rounding):
+    x, y = _float_value(first, width), _float_value(second, width)
+    if x is None or y is None:
+        return True
+    return _rounds_to_infinity(x * y, width, rounding)
 
 
 def within_rcp(expected, actual, source, width, square_root):

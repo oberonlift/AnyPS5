@@ -207,15 +207,16 @@ def _straight(instance):
 
 def _branch(instance):
     body = [
-        *_enter(), *_flags(), *_registers(instance), *_stack(), *_instance(instance),
-        *_path(0), "jmp 3f", f"{_target(instance)}:", *_path(1), "3:", *_capture(), *_finish(),
+        *_enter(), *_flags(), *_registers(instance), *_stack(), *_instance(instance), *_path(records.PATH_NOT_TAKEN),
+        "jmp 3f", f"{_target(instance)}:", *_path(records.PATH_TAKEN), "3:", *_capture(), *_finish(),
     ]
     return _function(_symbol(instance.index), body)
 
 
 def _call(instance):
     body = [*_enter(), *_flags(), *_registers(instance), *_stack(), *_instance(instance), *_finish()]
-    return _function(_symbol(instance.index), body) + _function(_target(instance), [*_path(1), *_capture(), "ret"])
+    target = [*_path(records.PATH_TAKEN), *_capture(), "ret"]
+    return _function(_symbol(instance.index), body) + _function(_target(instance), target)
 
 
 def _stubbed(instance, after):
@@ -230,7 +231,7 @@ def _return(instance):
 
 
 def _indirect_jump(instance):
-    return _stubbed(instance, []) + _function(_target(instance), [*_path(1), *_capture(), "ret"])
+    return _stubbed(instance, []) + _function(_target(instance), [*_path(records.PATH_TAKEN), *_capture(), "ret"])
 
 
 _SHAPES = {

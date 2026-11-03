@@ -50,11 +50,16 @@ class RecordsTest(unittest.TestCase):
         flags = {name: 0 for name in FLAGS}
         self.assertEqual(records.load_bytes(flags), (0x02, 0, 0, 0))
 
-    def test_store_flags_inverts_load_bytes(self):
+    def test_store_bytes(self):
+        self.assertEqual(records.store_bytes({name: 1 for name in FLAGS}), (0xD701, 1))
+        self.assertEqual(records.store_bytes({name: 0 for name in FLAGS}), (0x0200, 0))
+        self.assertEqual(records.store_bytes({**{name: 0 for name in FLAGS}, "ZF": 1, "OF": 1}), (0x4201, 0))
+
+    def test_store_flags_inverts_store_bytes(self):
         for bits in range(1 << len(FLAGS)):
             flags = {name: bits >> position & 1 for position, name in enumerate(FLAGS)}
-            ah, of_left, of_right, df = records.load_bytes(flags)
-            self.assertEqual(records.store_flags(ah << 8 | flags["OF"], df), flags)
+            self.assertEqual(records.store_flags(*records.store_bytes(flags)), flags)
+            self.assertEqual(records.store_bytes(flags)[0] >> 8, records.load_bytes(flags)[0])
 
     def test_inputs_round_trip(self):
         inputs = [

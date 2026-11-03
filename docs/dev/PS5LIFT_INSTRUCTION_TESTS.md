@@ -57,12 +57,12 @@ The expected results are recorded by running the guest program natively on an In
 
 - Flags that the manuals leave undefined for a form are not compared. The database marks them (`u` in `affected_flags`).
 - Destination values that Intel leaves undefined but AMD documents (for example `bsf` and `bsr` with a zero source, which leave the destination unchanged on AMD) are expected as AMD documents them, since Zen 2 is the target; each such case has its expectation written from AMD's manual instead of recorded.
-- Where Intel and AMD both document a behaviour and they differ, AMD's is expected, written from AMD's manual instead of recorded. Known forms: the x87 pointer fields `fxsave`, `fnstenv`, `fnsave` and `xsave` write (AMD writes FIP, FDP and FOP only when an unmasked exception is pending), `sysenter` (an invalid opcode in long mode on AMD), 66-prefixed near branches, and MXCSR's misaligned-SSE bit (MM, bit 17), which the PS5 CPUID's MisAlignSse bit allows in `ldmxcsr` and `fxrstor` and Intel rejects. The generator keeps this list; a form joins it when its AMD documentation differs from the recording.
+- Where Intel and AMD both document a behaviour and they differ, AMD's is expected, written from AMD's manual instead of recorded. Known forms: the x87 pointer fields `fxsave`, `fnstenv`, `fnsave` and `xsave` write (AMD writes FIP, FDP and FOP only when an unmasked exception is pending), `sysenter` (an invalid opcode in long mode on AMD), 66-prefixed near branches, MXCSR's misaligned-SSE bit (MM, bit 17), which the PS5 CPUID's MisAlignSse bit allows in `ldmxcsr`, `vldmxcsr`, `fxrstor` and `xrstor` and Intel rejects, and the MXCSR_MASK that `fxsave` and the XSAVE family store, `0x0002ffff` with MM allowed. The generator keeps this list; a form joins it when its AMD documentation differs from the recording.
 - Results that are implementation-specific on both vendors, such as which NaN `dpps` returns when several products are NaN, are compared after the same canonicalization `sse41.c` uses, and listed in [TechnicalDebt.md](TechnicalDebt.md#ps5lift) as unverified on Zen 2.
 
 ### Instructions without an Intel reference
 
-SSE4A (`extrq`, `insertq`, `movntsd`, `movntss`) exists only on AMD. Its expectations are written from AMD's manual (APM volume 4), not recorded.
+SSE4A (`extrq`, `insertq`, `movntsd`, `movntss`) exists only on AMD. Its expectations are written from AMD's manual (APM volume 4), not recorded. The bits the manual leaves undefined are not compared: the high quadword of an `extrq` or `insertq` destination, and its low quadword too when the field's index and length add up to more than 64, or its length is 0 and its index is not.
 
 ### Tolerances
 

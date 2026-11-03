@@ -31,9 +31,10 @@ the case's inputs patch. `x87` is the FXSAVE image up to the XMM registers, with
 `projected_recording_bytes` turns into the size of its result in a recording. Every random value derives from `SEED`,
 the form's key, the instance's place among its form's instances and the case's place in its schedule.
 
-`expectation_written` names the forms whose expectations are written from AMD's manual instead of recorded on Intel
-hardware, because Intel runs their bytes as other instructions: SSE4A, which Intel lacks, and the 16-bit near branches
-of AMD's branch mode, which Intel runs as 64-bit ones. Their cases are left out of the recording.
+`expectation_written` names the forms of the PS5 set whose expectations are written from AMD's manual instead of
+recorded on Intel hardware, because Intel runs their bytes as other instructions: SSE4A, which Intel lacks, and the
+16-bit near relative branches of AMD's branch mode (`jmp`, `call` and `jcc` rel16), which Intel runs as 64-bit ones.
+Their cases are left out of the recording.
 
 `xrstor` loads MXCSR from its image with SSE or AVX in the standard format, and with SSE alone in the compacted one,
 where an image whose XSTATE_BV leaves SSE out sets it to 0x1f80; `loads_mxcsr` says so. Each `xrstor` form adds a case
@@ -45,7 +46,7 @@ from dataclasses import dataclass, replace
 from typing import Optional, Union
 
 from . import records
-from .database import Form, operand_size_encoding, test_group
+from .database import Form, Group, classify, operand_size_encoding, test_group
 from .encoding import (
     HIGH_BYTE_REGISTERS,
     REGISTER_FILES,
@@ -199,7 +200,6 @@ _LOOP_COUNTS = (0, 1, 2, 1 << 32)
 _REP_COUNTS = (0, 1, 2, 7, 64)
 _REP_LIMIT = 64
 _WRITTEN_GROUPS = frozenset({"sse4a"})
-_NEAR_BRANCH_CATEGORIES = frozenset({"COND_BR", "UNCOND_BR", "CALL", "RET"})
 _SHORT_BRANCH_SIZE = 16
 _BASE, _RANDOM, _MEMORY_CASE, _X87_CASE, _EXTRA_CASE, _VARIANT, _STATE = range(1, 8)
 
@@ -251,9 +251,13 @@ def expression_offset(expression):
 
 
 def expectation_written(form):
+    definition = form.definition
+    if classify(definition) is not Group.SET:
+        return False
     if test_group(form) in _WRITTEN_GROUPS:
         return True
-    return form.definition.category in _NEAR_BRANCH_CATEGORIES and form.operand_size == _SHORT_BRANCH_SIZE
+    relative = any(operand["operand_type"] == "rel" for operand in definition.operands)
+    return relative and form.operand_size == _SHORT_BRANCH_SIZE
 
 
 def form_model(form):

@@ -21,6 +21,7 @@ from pathlib import Path
 
 from . import compare, decoder, expectations, program, records, runner, suite
 from .compare import Verdict
+from .state import Case, State
 
 LIFTED_DRIVER = suite.TESTS / "LiftedDriver.cpp"
 DRIVER_FLAGS = ("-std=c++20", "-O2", "-Wall", "-Wextra", "-Werror", "-fuse-ld=lld", "-pthread")
@@ -61,10 +62,10 @@ class Guest:
 
 @dataclass(frozen=True)
 class Judged:
-    case: compare.Case
+    case: Case
     verdict: Verdict
     mismatches: list
-    actual: compare.State
+    actual: State
 
 
 def _run(command, what):
@@ -132,7 +133,7 @@ def _check_twin(case, twin):
 
 
 def _judge(guest, results, recorded, float_mode):
-    cases = [compare.Case(spec, guest.instances[spec.instance], case_input, guest.layout)
+    cases = [Case(spec, guest.instances[spec.instance], case_input, guest.layout)
              for spec, case_input in zip(guest.specs, guest.inputs)]
     if [result.case for result in results] != [case.spec.index for case in cases]:
         raise LiftError(f"the lifted {guest.group} gave results for other cases than its inputs")
@@ -141,7 +142,7 @@ def _judge(guest, results, recorded, float_mode):
     run = compare.Run(os.cpu_count())
     judged = []
     for case, result in zip(cases, results):
-        actual = compare.State.of(result, case.input.slot)
+        actual = State.of(result, case.input.slot)
         reference = by_index[compare.reference_case(case.spec, float_mode)]
         if reference is not case:
             _check_twin(case, reference)
@@ -152,7 +153,7 @@ def _judge(guest, results, recorded, float_mode):
             continue
         if case.instance.index not in rules:
             rules[case.instance.index] = compare.rules_for(case.instance)
-        expected_state = compare.State.of(expected, reference.input.slot)
+        expected_state = State.of(expected, reference.input.slot)
         mismatches = compare.compare(case, rules[case.instance.index], expected_state, actual, float_mode, run)
         judged.append(Judged(case, compare.verdict(actual, mismatches), mismatches, actual))
     return judged, compare.form_mismatches(run)

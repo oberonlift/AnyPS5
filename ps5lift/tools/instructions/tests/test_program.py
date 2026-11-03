@@ -1,4 +1,3 @@
-import os
 import re
 import shutil
 import struct
@@ -13,7 +12,7 @@ import ps5lift
 from instructions import cases, decoder, program, records
 from instructions.cases import BlockOffset
 from instructions.encoding import Field, Mem, placeholder
-from instructions.tests.support import generated
+from instructions.tests.support import compiler, generated
 
 GROUP = "base"
 HOST_STUB = """int host_run_instructions(const void* table) { (void)table; return 0; }
@@ -32,13 +31,6 @@ class Built:
     elf: Path
     layout: program.Layout
     image: program.Elf
-
-
-def _compiler():
-    compiler = os.environ.get("PS5LIFT_CLANG")
-    if compiler is None:
-        raise AssertionError("PS5LIFT_CLANG is not set: it names the clang executable")
-    return compiler
 
 
 def _gpr(slot, number):
@@ -78,15 +70,15 @@ def _only(values, what):
 class ProgramTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        compiler = _compiler()
+        clang = compiler()
         cls.instances = generated()[1][GROUP]
         cls.specs = generated()[2][GROUP]
         cls.work = Path(tempfile.mkdtemp(prefix="ps5lift-program-"))
         stub = cls.work / "host_stub.c"
         stub.write_text(HOST_STUB)
         library = cls.work / "libinstructionhost.so"
-        subprocess.run([compiler, *ps5lift.GUEST_FLAGS, "-O2", "-fPIC", "-shared", stub, "-o", library], check=True)
-        cls.programs = {group: _build(compiler, cls.work, group, members) for group, members in generated()[1].items()}
+        subprocess.run([clang, *ps5lift.GUEST_FLAGS, "-O2", "-fPIC", "-shared", stub, "-o", library], check=True)
+        cls.programs = {group: _build(clang, cls.work, group, members) for group, members in generated()[1].items()}
         base = cls.programs[GROUP]
         cls.assembly, cls.elf, cls.layout, cls.image = base.assembly, base.elf, base.layout, base.image
 

@@ -50,6 +50,8 @@ STORE_AX = 1156
 STORE_DF = 1158
 PATH = 1159
 PATH_UNSET = 0xFF
+PATH_NOT_TAKEN = 0
+PATH_TAKEN = 1
 SLOT_SIZE = 1168
 SLOT_ALIGNMENT = 64
 UNRECORDED_SLOT_RANGES = (
@@ -257,13 +259,23 @@ def gpr_offset(index):
     return GPR_OFFSET + GPR_STRIDE * index
 
 
-def load_bytes(flags):
+def _ah(flags):
     _check_flags(flags)
     ah = _AH_ALWAYS_SET
     for name, bit in _AH_BITS.items():
         ah |= flags[name] << bit
+    return ah
+
+
+def load_bytes(flags):
+    ah = _ah(flags)
     of_left, of_right = (0x7F, 0x01) if flags["OF"] else (0, 0)
     return ah, of_left, of_right, flags["DF"]
+
+
+def store_bytes(flags):
+    ah = _ah(flags)
+    return ah << 8 | flags["OF"], flags["DF"]
 
 
 def store_flags(ax, df):

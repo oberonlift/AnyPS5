@@ -107,5 +107,37 @@ class X87ReferenceTest(unittest.TestCase):
         self.assertEqual(tolerance.x87_reference("fpatan", (ONE_80, ONE_80), NEAREST), {0: 0x3FFEC90FDAA22168C235})
 
 
+
+def _float64(value):
+    return struct.unpack("<Q", struct.pack("<d", value))[0]
+
+
+class SpecialProductTest(unittest.TestCase):
+    def test_specials_whatever_the_rounding(self):
+        largest, one, infinity, nan = 0x7F7FFFFF, _bits_of(1), 0x7F800000, 0x7FC00001
+        for rounding in (NEAREST, DOWN, UP, TOWARD_ZERO):
+            with self.subTest(rounding=rounding):
+                self.assertFalse(tolerance.special_product(largest, one, 32, rounding))
+                self.assertFalse(tolerance.special_product(0x00000001, largest, 32, rounding))
+                self.assertTrue(tolerance.special_product(nan, one, 32, rounding))
+                self.assertTrue(tolerance.special_product(one, nan, 32, rounding))
+                self.assertTrue(tolerance.special_product(infinity, 0, 32, rounding))
+                self.assertTrue(tolerance.special_product(infinity, one, 32, rounding))
+
+    def test_overflow_by_rounding(self):
+        modes = (NEAREST, DOWN, UP, TOWARD_ZERO)
+        positive = (_bits_of(Fraction(2**127)), _bits_of(Fraction(2)))
+        negative = (_bits_of(Fraction(-2**127)), _bits_of(Fraction(2)))
+        self.assertEqual([tolerance.special_product(*positive, 32, mode) for mode in modes], [True, False, True, False])
+        self.assertEqual([tolerance.special_product(*negative, 32, mode) for mode in modes], [True, True, False, False])
+        tie = (_bits_of(Fraction(18631 * 2**90)), _bits_of(Fraction(1801 * 2**13)))
+        self.assertEqual([tolerance.special_product(*tie, 32, mode) for mode in modes], [True, False, True, False])
+        below_tie = (_bits_of(Fraction(37 * 2**90)), _bits_of(Fraction(1813753 * 2**12)))
+        self.assertEqual([tolerance.special_product(*below_tie, 32, mode) for mode in modes],
+                         [False, False, True, False])
+        self.assertTrue(tolerance.special_product(_float64(2.0**1023), _float64(2.0), 64, NEAREST))
+        self.assertFalse(tolerance.special_product(_float64(2.0**1022), _float64(2.0), 64, NEAREST))
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -1,15 +1,19 @@
 """Judge a case's lifted result against its expectation, by the rules of the instruction-tests design.
 
-A `State` is what a case ended with: its outcome, the full final slot (the input slot with the result's words applied)
-and the changed block words. `compare` takes the case, its instance's `Rules`, the expected and the actual state, the
-floating-point mode and the `Run` the case belongs to, and lists every `Mismatch`.
+`compare` takes a `state.Case`, its instance's `Rules`, the expected and the actual `state.State`, the floating-point
+mode and the `Run` the case belongs to, and lists every `Mismatch`.
 
 - **Faults** compare by outcome, address and detail, and a page fault by its data address. For the FXSAVE and XSAVE
   family, whose processors report different bytes of a multi-byte state save, the data address only has to lie in the
   guard and in the instruction's access.
 - **Completed cases** compare every slot field and every block word, except the storer's FOP, FIP, FDP, MXCSR_MASK,
   reserved bytes and XMM area (the YMM slots hold the vector state), flags the database marks undefined (x87 condition
-  codes included), and the status flags of calls, returns and indirect jumps, which lifted code drops (DF compares).
+  codes included), the status flags of calls, returns and indirect jumps, which lifted code drops (DF compares), and
+  the bits AMD's manual leaves undefined (`expectations.undefined_bits`).
+- **Canonical NaNs:** in the destination of `dpps` and `dppd` and their VEX forms, where two or more of the products
+  the immediate selects in a 128-bit half are a NaN or an infinity (`tolerance.special_product`), a NaN lane of that
+  half matches any NaN, as the `sse41` fixture canonicalizes them: processors add the products in different orders,
+  which decides the NaN.
 - **Tolerances** (`tolerance`): `rcp*` and `rsqrt*` lanes within the documented relative error; the results an x87
   transcendental approximates within one ulp of the 64-bit format of the true result, whatever the precision control,
   where the operands lie in the documented range, with C1, the rounding indicator, not compared there.
@@ -36,11 +40,13 @@ from dataclasses import dataclass
 from typing import Optional
 
 from . import records, tolerance
-from .cases import CaseSpec, Instance, expression_offset, form_model
+from .cases import form_model
+from .encoding import Imm
+from .expectations import undefined_bits
 from .encoding import Mem, Reg
 from .model import COMPARISON_PREDICATES, FLOAT_BITS, IMPLICIT_BASES, LOCATIONS, Shape
-from .program import Layout
-from .records import CaseInput, Outcome
+from .records import Outcome
+from .state import State, apply_words, initial_block, operand_address
 
 EXACT = "exact"
 FAST = "fast"
@@ -100,6 +106,12 @@ _MXCSR_MASKS = 0x1F80
 _MXCSR_CONTROL = 0xFFC0 | 1 << 17
 _FTZ = 1 << 15
 _DAZ = 1 << 6
+_ROUNDING_SHIFT = 13
+_ROUNDING_BITS = 3
+_DOT_PRODUCTS = frozenset({"dpps", "dppd"})
+_DOT_PRODUCT_SELECTION = 4
+_HALF_LANE_BITS = 128
+_SPECIAL_PRODUCTS = 2
 _GPR_BYTES = 8
 _HALF_BITS = 32
 _EXTENDED_BYTES = 10
@@ -129,6 +141,7 @@ class Rules:
     tolerance: Tolerance
     square_root: bool
     min_max: bool
+    dot_product: Optional[int]
     console: Optional[str]
     destination: Optional[tuple]
     access: Optional[tuple]
@@ -137,43 +150,6 @@ class Rules:
     inputs: tuple
     show_mxcsr: bool
     show_x87: bool
-
-
-@dataclass(frozen=True)
-class Case:
-    spec: CaseSpec
-    instance: Instance
-    input: CaseInput
-    layout: Layout
-
-    @property
-    def address(self):
-        return self.layout.instances[self.instance.index].address
-
-
-@dataclass(frozen=True)
-class State:
-    outcome: Outcome
-    detail: int
-    address: int
-    data: int
-    slot: Optional[bytes]
-    memory: dict
-    console: Optional[tuple]
-
-    @classmethod
-    def of(cls, result, slot):
-        final = bytearray(slot)
-        for offset, value in result.slot_words.items():
-            if offset % _GPR_BYTES or not 0 <= offset < records.SLOT_SIZE:
-                raise CompareError(f"case {result.case} holds a slot word at {offset}, which is no word of the slot")
-            struct.pack_into("<Q", final, offset, value)
-        return cls(result.outcome, result.detail, result.address, result.data, bytes(final), result.memory_words,
-                   result.expected)
-
-    @classmethod
-    def stop(cls, outcome, address):
-        return cls(outcome, 0, address, 0, None, {}, None)
 
 
 @dataclass(frozen=True)
@@ -275,6 +251,15 @@ def _read_inputs(model, instance, x87_names):
     return tuple(dict.fromkeys(names))
 
 
+def _dot_product_control(instance, base, sources):
+    if base not in _DOT_PRODUCTS:
+        return None
+    if len(sources) != 2:
+        raise CompareError(f"{instance.form.key}: a dot product reads two floating-point sources, not {len(sources)}")
+    (control,) = (choice.value for choice in instance.operands if isinstance(choice, Imm))
+    return control
+
+
 def _destination(model, instance):
     choice = instance.operands[0]
     location = LOCATIONS[choice.name]
@@ -293,16 +278,18 @@ def rules_for(instance):
         access = (memory.choice, model.memory_width(memory))
     stores = ((model.explicit[0].choice, _MXCSR_STORES[mnemonic]),) if mnemonic in _MXCSR_STORES else ()
     base = mnemonic[1:] if mnemonic.startswith("v") else mnemonic
+    sources = _float_sources(model, instance)
     return Rules(
         mnemonic=mnemonic,
         undefined_flags=frozenset(flag.upper() for flag in definition.undefined_flags),
         status_flags_dropped=model.shape in _DROPPING_SHAPES,
         float_lanes=_written_float_lanes(model, instance, kind),
-        float_sources=_float_sources(model, instance),
+        float_sources=sources,
         computes=_computes(model),
         tolerance=kind,
         square_root=base.startswith("rsqrt"),
         min_max=model.floating and base.startswith(("min", "max")),
+        dot_product=_dot_product_control(instance, base, sources),
         console=mnemonic if mnemonic in _CONSOLE_REGISTERS else None,
         destination=_destination(model, instance) if kind in (Tolerance.RANDOM_VALUE, Tolerance.PROCESSOR_ID) else None,
         access=access,
@@ -386,33 +373,11 @@ def _expected_stop(case, expected, float_mode):
     return expected
 
 
-def _operand_address(case, choice, address_size):
-    memory = case.instance.operands[choice]
-    if not isinstance(memory, Mem):
-        raise CompareError(f"{case.instance.form.key}: operand {choice} is no memory operand")
-    if memory.base in (None, "rip"):
-        return case.layout.block + expression_offset(memory.displacement)
-    total = _register_value(case.input.slot, memory.base) + memory.displacement
-    if memory.index is not None:
-        total += _register_value(case.input.slot, memory.index) * memory.scale
-    return total & (1 << address_size) - 1
-
-
-def _register_value(slot, name):
-    _, number, shift, bits = LOCATIONS[name]
-    word = int.from_bytes(slot[records.gpr_offset(number):records.gpr_offset(number) + _GPR_BYTES], "little")
-    return word >> shift & (1 << bits) - 1
-
-
-def _address_size(case):
-    return form_model(case.instance.form).address_size
-
-
 def _page_fault_data(case, rules, expected, actual):
     if rules.access is None:
         return expected.data == actual.data
     choice, width = rules.access
-    start = _operand_address(case, choice, _address_size(case))
+    start = operand_address(case, choice)
     guard = case.layout.guard
     return guard <= actual.data < guard + records.GUARD_SIZE and start <= actual.data < start + width
 
@@ -465,6 +430,10 @@ def _x87_reference(case, rules):
     return tolerance.x87_reference(rules.mnemonic, operands, control >> 10 & 3)
 
 
+def _defined(data, undefined):
+    return bytes(byte & ~mask for byte, mask in zip(data, undefined))
+
+
 def _flags(slot):
     ax = struct.unpack_from("<H", slot, records.STORE_AX)[0]
     return records.store_flags(ax, slot[records.STORE_DF] & _DF_MASK), ax, slot[records.STORE_DF]
@@ -482,13 +451,15 @@ class _Judgement:
         self.run = run
         self.own_mxcsr = _mxcsr_of(case.input.slot)
         self.twin = reference_case(case.spec, float_mode) != case.spec.index
+        self.undefined = undefined_bits(case)
         self.mismatches = []
         self.settled = set()
         self.initial = None
+        self.special_halves = {}
 
     def initial_block(self):
         if self.initial is None:
-            self.initial = _initial_block(self.case.input)
+            self.initial = initial_block(self.case.input)
         return self.initial
 
     def source_lane(self, location, index, bits):
@@ -498,15 +469,32 @@ class _Judgement:
             start = records.ymm_offset(number) + index * size
             return int.from_bytes(self.case.input.slot[start:start + size], "little")
         if kind == "memory":
-            address = _operand_address(self.case, number, _address_size(self.case))
+            address = operand_address(self.case, number)
             start = address - self.case.layout.block + index * size
             if not 0 <= start <= records.BLOCK_SIZE - size:
                 raise CompareError(f"case {self.case.spec.index} reads lane {index} outside the block")
             return int.from_bytes(self.initial_block()[start:start + size], "little")
         raise CompareError(f"{self.case.instance.form.key}: no rule for a floating-point source in a {kind} register")
 
+    def several_special(self, index, bits):
+        lanes = _HALF_LANE_BITS // bits
+        half = index // lanes
+        if half not in self.special_halves:
+            (first, _), (second, _) = self.rules.float_sources
+            rounding = self.own_mxcsr >> _ROUNDING_SHIFT & _ROUNDING_BITS
+            selected = [half * lanes + lane for lane in range(lanes)
+                        if self.rules.dot_product >> _DOT_PRODUCT_SELECTION + lane & 1]
+            special = sum(tolerance.special_product(self.source_lane(first, lane, bits),
+                                                    self.source_lane(second, lane, bits), bits, rounding)
+                          for lane in selected)
+            self.special_halves[half] = special >= _SPECIAL_PRODUCTS
+        return self.special_halves[half]
+
     def lane_matches(self, expected, actual, index, bits):
         if expected == actual:
+            return True
+        if (self.rules.dot_product is not None and _is_nan(expected, bits) and _is_nan(actual, bits)
+                and self.several_special(index, bits)):
             return True
         if self.float_mode == FAST and self.rules.computes:
             if _is_nan(expected, bits) and _is_nan(actual, bits):
@@ -613,6 +601,9 @@ class _Judgement:
     def field_matches(self, name, start, size, x87):
         expected = bytes(self.expected[start:start + size])
         actual = self.actual[start:start + size]
+        undefined = self.undefined[start:start + size]
+        if any(undefined):
+            expected, actual = _defined(expected, undefined), _defined(actual, undefined)
         if name == "mxcsr":
             return _mxcsr_matches(int.from_bytes(expected, "little"), int.from_bytes(actual, "little"),
                                   self.own_mxcsr, self.float_mode, self.twin)
@@ -645,20 +636,20 @@ class _Judgement:
                           _hex(bytes(self.actual[offset] for offset in differing)))
 
     def special_ranges(self):
-        address_size = _address_size(self.case)
         block = self.case.layout.block
         for lanes in self.rules.float_lanes:
             if lanes.location[0] == "memory":
-                start = _operand_address(self.case, lanes.location[1], address_size) - block
+                start = operand_address(self.case, lanes.location[1]) - block
                 yield start, lanes.count * lanes.element_bits // 8, lanes
         for choice, offset in self.rules.mxcsr_stores:
-            yield _operand_address(self.case, choice, address_size) - block + offset, 4, None
+            yield operand_address(self.case, choice) - block + offset, 4, None
 
     def memory(self):
         if self.expected_memory == self.actual_memory:
             return
-        expected = _apply_words(self.initial_block(), self.expected_memory)
-        actual = _apply_words(self.initial_block(), self.actual_memory)
+        what = f"case {self.case.spec.index}'s block"
+        expected = apply_words(self.initial_block(), self.expected_memory, f"the expectation of {what}")
+        actual = apply_words(self.initial_block(), self.actual_memory, f"the result of {what}")
         covered = set()
         for start, size, lanes in self.special_ranges():
             if start < 0 or start + size > records.BLOCK_SIZE:
@@ -680,22 +671,6 @@ class _Judgement:
             if any(expected[byte] != actual[byte] for byte in uncovered):
                 self.mismatch(f"block+{offset:#x}", _hex(expected[offset:offset + _GPR_BYTES]),
                               _hex(actual[offset:offset + _GPR_BYTES]))
-
-
-def _initial_block(case_input):
-    block = bytearray(records.fill_block(case_input.fill_seed))
-    for offset, data in case_input.patches:
-        block[offset:offset + len(data)] = data
-    return bytes(block)
-
-
-def _apply_words(block, words):
-    final = bytearray(block)
-    for offset, value in words.items():
-        if offset % _GPR_BYTES or not 0 <= offset < records.BLOCK_SIZE:
-            raise CompareError(f"a block word at {offset} is no word of the block")
-        struct.pack_into("<Q", final, offset, value)
-    return bytes(final)
 
 
 def compare(case, rules, expected, actual, float_mode, run):
