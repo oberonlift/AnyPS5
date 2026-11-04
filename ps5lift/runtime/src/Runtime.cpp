@@ -5,6 +5,7 @@
 
 #include <pthread.h>
 #include <sched.h>
+#include <signal.h>
 #include <sys/random.h>
 #include <sys/auxv.h>
 #include <sys/mman.h>
@@ -47,6 +48,21 @@ std::uint64_t PageSize() {
 
 std::atomic<Ps5LiftStopHandler> StopHandler{nullptr};
 std::mutex SplitLock;
+thread_local sigset_t SplitLockSignalMask;
+
+const sigset_t& AsynchronousSignals() {
+    static const sigset_t signals = [] {
+        sigset_t set;
+        sigfillset(&set);
+        for (const int synchronous : {SIGSEGV, SIGBUS, SIGFPE, SIGILL, SIGTRAP}) sigdelset(&set, synchronous);
+        return set;
+    }();
+    return signals;
+}
+
+void SetSignalMask(const int how, const sigset_t* signals, sigset_t* previous) {
+    if (const int error = pthread_sigmask(how, signals, previous); error != 0) ps5lift_fail("cannot change the signal mask around a split lock: %s", std::strerror(error));
+}
 
 [[noreturn]] void InvalidOpcode(const std::uint64_t address, const std::uint64_t detail, const char* mnemonic) {
     switch (detail) {
@@ -367,7 +383,8 @@ extern "C" void ps5lift_write_back_cache_line(const std::uint64_t address) {
 
 extern "C" void ps5lift_split_lock_begin(const std::uint64_t address, const std::uint64_t bytes) {
     const auto page = PageSize();
-    for (auto probe = address; probe < address + bytes; probe = (probe | (page - 1)) + 1) static_cast<void>(*reinterpret_cast<const volatile std::uint8_t*>(probe));
+    for (auto probe = address; probe < address + bytes; probe = (probe | (page - 1)) + 1) static_cast<void>(__atomic_fetch_add(reinterpret_cast<volatile std::uint8_t*>(probe), 0, __ATOMIC_RELAXED));
+    SetSignalMask(SIG_BLOCK, &AsynchronousSignals(), &SplitLockSignalMask);
     SplitLock.lock();
     std::atomic_thread_fence(std::memory_order_seq_cst);
 }
@@ -375,6 +392,7 @@ extern "C" void ps5lift_split_lock_begin(const std::uint64_t address, const std:
 extern "C" void ps5lift_split_lock_end(void) {
     std::atomic_thread_fence(std::memory_order_seq_cst);
     SplitLock.unlock();
+    SetSignalMask(SIG_SETMASK, &SplitLockSignalMask, nullptr);
 }
 
 extern "C" std::uint64_t ps5lift_random(void) {
