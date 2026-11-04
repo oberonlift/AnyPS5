@@ -92,6 +92,11 @@ llvm::Value* FunctionLifter::Saturate(llvm::Value* wide, const unsigned element,
     return _builder.CreateTrunc(clamped, llvm::FixedVectorType::get(Int(element), llvm::cast<llvm::FixedVectorType>(type)->getNumElements()));
 }
 
+llvm::Value* FunctionLifter::AbsoluteDifferences(llvm::Value* a, llvm::Value* b) {
+    auto* words = llvm::FixedVectorType::get(Int(16), llvm::cast<llvm::FixedVectorType>(a->getType())->getNumElements());
+    return _builder.CreateBinaryIntrinsic(llvm::Intrinsic::abs, _builder.CreateSub(_builder.CreateZExt(a, words), _builder.CreateZExt(b, words)), _builder.getFalse());
+}
+
 void FunctionLifter::MoveMask(const unsigned element) {
     auto* source = Read(1);
     auto* negative = _builder.CreateICmpSLT(AsVector(source, element), llvm::Constant::getNullValue(AsVector(source, element)->getType()));
@@ -196,6 +201,12 @@ void FunctionLifter::VectorBinary(const VectorKind kind, const unsigned element)
     case K::CompareEqual: result = _builder.CreateSExt(_builder.CreateICmpEQ(va, vb), va->getType()); break;
     case K::CompareGreater: result = _builder.CreateSExt(_builder.CreateICmpSGT(va, vb), va->getType()); break;
     case K::AndNot: result = _builder.CreateAnd(_builder.CreateNot(va), vb); break;
+    case K::Sign: {
+        auto* zero = llvm::Constant::getNullValue(va->getType());
+        auto* applied = _builder.CreateSelect(_builder.CreateICmpSLT(vb, zero), _builder.CreateNeg(va), va);
+        result = _builder.CreateSelect(_builder.CreateICmpEQ(vb, zero), zero, applied);
+        break;
+    }
     case K::MultiplyHighSigned:
     case K::MultiplyHighUnsigned: {
         auto* wide = llvm::FixedVectorType::get(Int(element * 2), count);
@@ -242,9 +253,7 @@ void FunctionLifter::VectorBinary(const VectorKind kind, const unsigned element)
         break;
     }
     case K::SumAbsoluteDifferences: {
-        auto* words = llvm::FixedVectorType::get(Int(16), count * 8);
-        auto* difference = _builder.CreateBinaryIntrinsic(llvm::Intrinsic::abs, _builder.CreateSub(_builder.CreateZExt(AsVector(a, 8), words), _builder.CreateZExt(AsVector(b, 8), words)),
-                                                          _builder.getFalse());
+        auto* difference = AbsoluteDifferences(AsVector(a, 8), AsVector(b, 8));
         result = llvm::Constant::getNullValue(va->getType());
         for (unsigned i = 0; i < count; ++i) {
             std::vector<int> block(8);
@@ -325,6 +334,30 @@ void FunctionLifter::VectorBinary(const VectorKind kind, const unsigned element)
     }
     }
     Write(0, AsInteger(result));
+}
+
+void FunctionLifter::MultipleSumAbsoluteDifferences() {
+    const auto width = Bits(0);
+    const int base = Base(3);
+    const auto [a, b, va, vb] = ReadVectorOperands(base, width, 8);
+    const auto control = Immediate(base + 2);
+    std::vector<int> windows;
+    std::vector<int> blocks;
+    for (unsigned lane = 0; lane < width / 128; ++lane) {
+        const auto select = control >> (3 * lane);
+        const auto window = static_cast<int>(16 * lane + 4 * (select >> 2 & 1));
+        const auto block = static_cast<int>(16 * lane + 4 * (select & 3));
+        for (int i = 0; i < 8; ++i) {
+            for (int j = 0; j < 4; ++j) {
+                windows.push_back(window + i + j);
+                blocks.push_back(block + j);
+            }
+        }
+    }
+    auto* differences = AbsoluteDifferences(_builder.CreateShuffleVector(va, va, windows), _builder.CreateShuffleVector(vb, vb, blocks));
+    const unsigned sums = width / 16;
+    auto* pairs = _builder.CreateAdd(Pairs(differences, 2 * sums, 0), Pairs(differences, 2 * sums, 1));
+    Write(0, AsInteger(_builder.CreateAdd(Pairs(pairs, sums, 0), Pairs(pairs, sums, 1))));
 }
 
 void FunctionLifter::VectorShiftVariable(const llvm::Instruction::BinaryOps shift, const unsigned element) {

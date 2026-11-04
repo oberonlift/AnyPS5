@@ -428,18 +428,17 @@ llvm::Value* FunctionLifter::GuestLoad(llvm::Value* address, const unsigned bits
     return AsInteger(Concatenate(low, high));
 }
 
-void FunctionLifter::GuestStore(llvm::Value* address, llvm::Value* value) {
+void FunctionLifter::GuestStore(llvm::Value* address, llvm::Value* value, const StoreHint hint) {
     const auto bits = value->getType()->getIntegerBitWidth();
-    if (bits < PartBits) {
-        GuestStorePart(address, value);
-    } else if (bits == PartBits) {
-        GuestStorePart(address, AsVector(value, 64));
-    } else {
+    if (bits > PartBits) {
         const auto half = bits / 2;
         auto* vector = AsVector(value, 64);
-        GuestStore(address, AsInteger(Elements(vector, 0, half / 64)));
-        GuestStore(_builder.CreateAdd(address, _builder.getInt64(half / 8)), AsInteger(Elements(vector, half / 64, half / 64)));
+        GuestStore(address, AsInteger(Elements(vector, 0, half / 64)), hint);
+        GuestStore(_builder.CreateAdd(address, _builder.getInt64(half / 8)), AsInteger(Elements(vector, half / 64, half / 64)), hint);
+        return;
     }
+    auto* store = GuestStorePart(address, bits == PartBits ? AsVector(value, 64) : value);
+    if (hint == StoreHint::NonTemporal) store->setMetadata(llvm::LLVMContext::MD_nontemporal, llvm::MDNode::get(Context(), llvm::ConstantAsMetadata::get(_builder.getInt32(1))));
 }
 
 llvm::LoadInst* FunctionLifter::GuestLoadPart(llvm::Value* address, llvm::Type* type) {

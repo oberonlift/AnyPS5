@@ -737,7 +737,7 @@ RegisterEffects InstructionEffects(const Instruction& instruction) {
     };
     RegisterEffects effects;
     const auto mnemonic = instruction.Info.mnemonic;
-    if (mnemonic == ZYDIS_MNEMONIC_VZEROUPPER) {
+    if (mnemonic == ZYDIS_MNEMONIC_VZEROUPPER || mnemonic == ZYDIS_MNEMONIC_VZEROALL) {
         constexpr auto vectors = EveryRegister << FirstVectorBit;
         effects = {vectors, vectors};
     }

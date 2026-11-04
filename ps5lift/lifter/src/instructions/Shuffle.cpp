@@ -30,6 +30,25 @@ void FunctionLifter::VectorMove() {
     WriteRegister(destination.reg.value, value);
 }
 
+void FunctionLifter::NonTemporalStore() {
+    GuestStore(Address(Operand(0)), Read(1), StoreHint::NonTemporal);
+}
+
+void FunctionLifter::MaskedByteStore() {
+    auto* source = AsVector(Read(0), 8);
+    auto* mask = AsVector(Read(1), 8);
+    auto* address = Address(Operand(2));
+    for (unsigned i = 0; i < Bits(0) / 8; ++i) {
+        auto* store = llvm::BasicBlock::Create(Context(), "masked_byte", _host);
+        auto* next = llvm::BasicBlock::Create(Context(), "masked_byte_done", _host);
+        _builder.CreateCondBr(SignBit(_builder.CreateExtractElement(mask, i)), store, next);
+        _builder.SetInsertPoint(store);
+        GuestStore(_builder.CreateAdd(address, _builder.getInt64(i)), _builder.CreateExtractElement(source, i), StoreHint::NonTemporal);
+        _builder.CreateBr(next);
+        _builder.SetInsertPoint(next);
+    }
+}
+
 void FunctionLifter::Broadcast(const unsigned elementBits) {
     const auto& destination = Operand(0);
     const auto width = ZydisRegisterGetWidth(ZYDIS_MACHINE_MODE_LONG_64, destination.reg.value);
@@ -330,6 +349,10 @@ void FunctionLifter::MergeScalar(const unsigned element) {
 
 void FunctionLifter::ZeroUpper() {
     for (int i = 0; i < VectorCount; ++i) SetVector(i, _builder.CreateZExt(_builder.CreateTrunc(Vector(i), Int(128)), Int(256)));
+}
+
+void FunctionLifter::ZeroAll() {
+    for (int i = 0; i < VectorCount; ++i) SetVector(i, llvm::Constant::getNullValue(Int(256)));
 }
 
 }

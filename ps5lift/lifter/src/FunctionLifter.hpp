@@ -28,6 +28,8 @@ namespace Ps5Lift::Lifting {
 
 enum class StringRead { Compare, Scan, Load };
 
+enum class StoreHint { None, NonTemporal };
+
 struct UnsupportedInstruction : std::runtime_error {
     using std::runtime_error::runtime_error;
 };
@@ -114,7 +116,7 @@ private:
     void Store(llvm::Value* address, llvm::Value* value, const bool ordered);
     llvm::Value* GuestPointer(llvm::Value* address);
     llvm::Value* GuestLoad(llvm::Value* address, const unsigned bits);
-    void GuestStore(llvm::Value* address, llvm::Value* value);
+    void GuestStore(llvm::Value* address, llvm::Value* value, const StoreHint hint = StoreHint::None);
     llvm::LoadInst* GuestLoadPart(llvm::Value* address, llvm::Type* type);
     llvm::StoreInst* GuestStorePart(llvm::Value* address, llvm::Value* value);
 
@@ -203,6 +205,8 @@ private:
     void SignExtendAccumulator(const ZydisMnemonic mnemonic);
     void VectorBitwise(const llvm::Instruction::BinaryOps operation);
     void VectorMove();
+    void NonTemporalStore();
+    void MaskedByteStore();
     void BitManipulation(const ZydisMnemonic mnemonic);
     void ParallelBits(const bool deposit);
     llvm::Value* LowRdx(const unsigned bits);
@@ -212,7 +216,7 @@ private:
         Add, Sub, AddSignedSaturate, AddUnsignedSaturate, SubSignedSaturate, SubUnsignedSaturate,
         MultiplyLow, MultiplyHighSigned, MultiplyHighUnsigned, MultiplyHighRoundScale, MultiplyEvenUnsigned, MultiplyEvenSigned, MultiplyAddWords, MultiplyAddBytes,
         HorizontalAdd, HorizontalAddSaturate, HorizontalSub, HorizontalSubSaturate, SumAbsoluteDifferences,
-        MinSigned, MaxSigned, MinUnsigned, MaxUnsigned, CompareEqual, CompareGreater, Average, AndNot,
+        MinSigned, MaxSigned, MinUnsigned, MaxUnsigned, CompareEqual, CompareGreater, Average, AndNot, Sign,
         UnpackLow, UnpackHigh, PackSignedSaturate, PackUnsignedSaturate, ShuffleBytes, PermuteDwords
     };
 
@@ -228,6 +232,7 @@ private:
     llvm::Value* ShiftByCount(const llvm::Instruction::BinaryOps shift, llvm::Value* vector, llvm::Value* counts, const unsigned element);
     llvm::Value* Pairs(llvm::Value* vector, const unsigned count, const unsigned offset);
     llvm::Value* Saturate(llvm::Value* wide, const unsigned element, const bool isSigned);
+    llvm::Value* AbsoluteDifferences(llvm::Value* a, llvm::Value* b);
     ZydisRegister HiddenRegister(std::initializer_list<ZydisRegister> candidates) const;
     void StringCompare(const bool explicitLengths, const bool index);
     void Crypto(const ZydisMnemonic mnemonic);
@@ -254,6 +259,7 @@ private:
 
     VectorOperands ReadVectorOperands(const int base, const unsigned width, const unsigned element);
     void VectorBinary(const VectorKind kind, const unsigned element);
+    void MultipleSumAbsoluteDifferences();
     void VectorShiftVariable(const llvm::Instruction::BinaryOps shift, const unsigned element);
     void ShufflePairs();
     void AlignRight();
@@ -371,6 +377,7 @@ private:
     void TableLookup();
     void MergeScalar(const unsigned element);
     void ZeroUpper();
+    void ZeroAll();
     void Call();
     void Jump();
     void Return();
