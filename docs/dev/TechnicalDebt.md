@@ -45,8 +45,6 @@ Each of these gives a wrong result, corrupts state or reports a misleading error
 - The linear sweep keeps only data references outside executable segments, so a reference into a table that shares a segment with code does not end the table before it.
 - `CalledImport` recognises a PLT stub only when its first instruction is the `jmp`, so a call to `setjmp` through an IBT stub (`endbr64; bnd jmp`) gets no resume point; the fixtures build with `-fcf-protection=none`. Its stub probe decodes outside `DecodeReached`, so an undecodable call target fails without naming the call.
 - [GuestImage](../../ps5lift/lifter/src/GuestImage.cpp)'s filter for the CIE personality drops LSDA landing pads outside their FDE, such as those a compiler moves into a cold section, which then are not resume points.
-- `repne movs` and `repne stos` run once; the F2 prefix should repeat them as `rep` does.
-- A 32-bit `bsf` or `bsr` with a zero source, and a 32-bit `cmpxchg` whose comparison fails, clear the upper half of the destination register, which x86 leaves untouched.
 - A branch to an address where no function was lifted stops with a page fault only where nothing is mapped ([Runtime.cpp](../../ps5lift/runtime/src/Runtime.cpp), `ps5lift_resolve` and `ps5lift_resolve_jump`): one into mapped memory the console does not run, such as data, a stack or a guard page, stops as an address discovery missed, and one to a non-canonical address stops with a page fault where x86 raises a general-protection fault at the branch.
 - Some EVEX (AVX-512) forms produce IR that does not verify ("Operand is null") instead of being reported as unsupported.
 

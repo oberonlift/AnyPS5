@@ -137,6 +137,7 @@ private:
     llvm::Value* ReadVector(const int index, const unsigned bits);
     llvm::Value* ReadAs(const int index, const unsigned bits);
     void Write(const int index, llvm::Value* value);
+    void WriteUnlessKept(const int index, llvm::Value* value, llvm::Value* keep);
     llvm::Value* SignBit(llvm::Value* value);
     llvm::Value* Parity(llvm::Value* value);
     void ResultFlags(llvm::Value* result);

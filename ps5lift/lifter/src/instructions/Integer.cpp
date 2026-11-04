@@ -218,7 +218,7 @@ void FunctionLifter::BitScan(const ZydisMnemonic mnemonic) {
     case ZYDIS_MNEMONIC_BSR: {
         llvm::Value* index = _builder.CreateBinaryIntrinsic(llvm::Intrinsic::cttz, source, _builder.getTrue());
         if (mnemonic == ZYDIS_MNEMONIC_BSR) index = _builder.CreateSub(llvm::ConstantInt::get(type, bits - 1), _builder.CreateBinaryIntrinsic(llvm::Intrinsic::ctlz, source, _builder.getTrue()));
-        Write(0, _builder.CreateSelect(isZero, Read(0), index));
+        WriteUnlessKept(0, index, isZero);
         SetFlag(PS5LIFT_ZF, isZero);
         return;
     }
@@ -365,6 +365,15 @@ llvm::Value* FunctionLifter::CompareExchangeResult(llvm::Value* old, llvm::Value
     return _builder.CreateSelect(_builder.CreateICmpEQ(old, expected), desired, old);
 }
 
+void FunctionLifter::WriteUnlessKept(const int index, llvm::Value* value, llvm::Value* keep) {
+    const auto& operand = Operand(index);
+    if (operand.type == ZYDIS_OPERAND_TYPE_REGISTER && operand.size == 32) {
+        const auto reg = GprIndex(operand.reg.value);
+        return SetGpr(reg, _builder.CreateSelect(keep, Gpr(reg), _builder.CreateZExt(value, I64())));
+    }
+    Write(index, _builder.CreateSelect(keep, Read(index), value));
+}
+
 bool FunctionLifter::LockedMemory() const {
     return Locked() && Operand(0).type == ZYDIS_OPERAND_TYPE_MEMORY;
 }
@@ -407,7 +416,7 @@ void FunctionLifter::CompareExchange() {
         old = AtomicCompareExchange(expected, desired);
     } else {
         old = Read(0);
-        Write(0, CompareExchangeResult(old, expected, desired));
+        WriteUnlessKept(0, desired, _builder.CreateICmpNE(old, expected));
     }
     Sub(expected, old, _builder.getFalse());
     auto* equal = _builder.CreateICmpEQ(old, expected);
