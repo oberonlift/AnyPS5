@@ -140,6 +140,7 @@ private:
     void WriteUnlessKept(const int index, llvm::Value* value, llvm::Value* keep);
     llvm::Value* SignBit(llvm::Value* value);
     llvm::Value* Parity(llvm::Value* value);
+    llvm::Value* ConcatenateIntegers(llvm::Value* low, llvm::Value* high);
     void ResultFlags(llvm::Value* result);
     void AdjustFlag(llvm::Value* a, llvm::Value* b, llvm::Value* result);
     void LogicFlags(llvm::Value* result);

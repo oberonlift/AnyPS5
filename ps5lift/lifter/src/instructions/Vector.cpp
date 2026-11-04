@@ -352,7 +352,7 @@ void FunctionLifter::MinimumPosition() {
     auto* minimum = _builder.CreateUnaryIntrinsic(llvm::Intrinsic::vector_reduce_umin, words);
     auto* matches = _builder.CreateBitCast(_builder.CreateICmpEQ(words, _builder.CreateVectorSplat(8, minimum)), _builder.getInt8Ty());
     auto* index = _builder.CreateBinaryIntrinsic(llvm::Intrinsic::cttz, matches, _builder.getTrue());
-    Write(0, _builder.CreateOr(_builder.CreateZExt(minimum, Int(128)), _builder.CreateShl(_builder.CreateZExt(index, Int(128)), 16)));
+    Write(0, _builder.CreateZExt(ConcatenateIntegers(minimum, index), Int(128)));
 }
 
 }

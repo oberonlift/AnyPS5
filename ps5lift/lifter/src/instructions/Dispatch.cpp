@@ -133,7 +133,8 @@ case ZYDIS_MNEMONIC_##prefix##231##suffix: return FloatArithmetic({F::Fma, Eleme
     case ZYDIS_MNEMONIC_IDIV: return Divide(true);
     case ZYDIS_MNEMONIC_CBW: case ZYDIS_MNEMONIC_CWDE: case ZYDIS_MNEMONIC_CDQE: case ZYDIS_MNEMONIC_CWD: case ZYDIS_MNEMONIC_CDQ: case ZYDIS_MNEMONIC_CQO:
         return SignExtendAccumulator(mnemonic);
-    case ZYDIS_MNEMONIC_SHL: case ZYDIS_MNEMONIC_SHR: case ZYDIS_MNEMONIC_SAR: case ZYDIS_MNEMONIC_ROL: case ZYDIS_MNEMONIC_ROR: return Shift(mnemonic);
+    case ZYDIS_MNEMONIC_SHL: case ZYDIS_MNEMONIC_SHR: case ZYDIS_MNEMONIC_SAR: case ZYDIS_MNEMONIC_ROL: case ZYDIS_MNEMONIC_ROR: case ZYDIS_MNEMONIC_RCL: case ZYDIS_MNEMONIC_RCR:
+        return Shift(mnemonic);
     case ZYDIS_MNEMONIC_SHLD: case ZYDIS_MNEMONIC_SHRD: return ShiftDouble(mnemonic);
     case ZYDIS_MNEMONIC_BSF: case ZYDIS_MNEMONIC_BSR: case ZYDIS_MNEMONIC_TZCNT: case ZYDIS_MNEMONIC_LZCNT: case ZYDIS_MNEMONIC_POPCNT: return BitScan(mnemonic);
     case ZYDIS_MNEMONIC_BT: case ZYDIS_MNEMONIC_BTS: case ZYDIS_MNEMONIC_BTR: case ZYDIS_MNEMONIC_BTC: return BitTest(mnemonic);

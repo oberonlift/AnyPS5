@@ -507,6 +507,12 @@ llvm::Value* FunctionLifter::Parity(llvm::Value* value) {
     return _builder.CreateICmpEQ(_builder.CreateAnd(count, 1), _builder.getInt8(0));
 }
 
+llvm::Value* FunctionLifter::ConcatenateIntegers(llvm::Value* low, llvm::Value* high) {
+    const auto lowBits = low->getType()->getIntegerBitWidth();
+    auto* type = Int(lowBits + high->getType()->getIntegerBitWidth());
+    return _builder.CreateOr(_builder.CreateZExt(low, type), _builder.CreateShl(_builder.CreateZExt(high, type), lowBits));
+}
+
 void FunctionLifter::ResultFlags(llvm::Value* result) {
     SetFlag(PS5LIFT_ZF, _builder.CreateICmpEQ(result, llvm::ConstantInt::get(result->getType(), 0)));
     SetFlag(PS5LIFT_SF, SignBit(result));

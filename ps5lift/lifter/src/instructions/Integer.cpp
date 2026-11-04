@@ -20,7 +20,8 @@ void FunctionLifter::Shift(const ZydisMnemonic mnemonic) {
     llvm::Value* result = nullptr;
     llvm::Value* carry = nullptr;
     llvm::Value* overflow = nullptr;
-    const bool rotate = mnemonic == ZYDIS_MNEMONIC_ROL || mnemonic == ZYDIS_MNEMONIC_ROR;
+    const bool left = mnemonic == ZYDIS_MNEMONIC_ROL || mnemonic == ZYDIS_MNEMONIC_RCL;
+    const bool rotate = left || mnemonic == ZYDIS_MNEMONIC_ROR || mnemonic == ZYDIS_MNEMONIC_RCR;
     if (mnemonic == ZYDIS_MNEMONIC_SHL) {
         auto* wide = _builder.CreateShl(_builder.CreateZExt(value, Int(128)), wideCount);
         result = _builder.CreateTrunc(wide, Int(bits));
@@ -36,20 +37,23 @@ void FunctionLifter::Shift(const ZydisMnemonic mnemonic) {
         result = _builder.CreateTrunc(_builder.CreateAShr(wide, wideCount), Int(bits));
         carry = _builder.CreateTrunc(_builder.CreateAShr(wide, below), _builder.getInt1Ty());
         overflow = _builder.getFalse();
-    } else if (rotate) {
+    } else if (mnemonic == ZYDIS_MNEMONIC_ROL || mnemonic == ZYDIS_MNEMONIC_ROR) {
         auto* amount = _builder.CreateZExtOrTrunc(_builder.CreateURem(count, _builder.getInt8(bits)), Int(bits));
-        const auto intrinsic = mnemonic == ZYDIS_MNEMONIC_ROL ? llvm::Intrinsic::fshl : llvm::Intrinsic::fshr;
-        result = _builder.CreateIntrinsic(intrinsic, {Int(bits)}, {value, value, amount});
-        if (mnemonic == ZYDIS_MNEMONIC_ROL) {
-            carry = _builder.CreateTrunc(result, _builder.getInt1Ty());
-            overflow = _builder.CreateXor(SignBit(result), carry);
-        } else {
-            carry = SignBit(result);
-            overflow = _builder.CreateXor(carry, _builder.CreateTrunc(_builder.CreateLShr(result, bits - 2), _builder.getInt1Ty()));
-        }
+        result = _builder.CreateIntrinsic(left ? llvm::Intrinsic::fshl : llvm::Intrinsic::fshr, {Int(bits)}, {value, value, amount});
+        carry = left ? _builder.CreateTrunc(result, _builder.getInt1Ty()) : SignBit(result);
+    } else if (mnemonic == ZYDIS_MNEMONIC_RCL || mnemonic == ZYDIS_MNEMONIC_RCR) {
+        const auto span = bits + 1;
+        auto* wide = _builder.CreateZExt(ConcatenateIntegers(value, Flag(PS5LIFT_CF)), Int(128));
+        auto* amount = _builder.CreateZExt(_builder.CreateURem(count, _builder.getInt8(span)), Int(128));
+        auto* back = _builder.CreateSub(llvm::ConstantInt::get(Int(128), span), amount);
+        auto* rotated = left ? _builder.CreateOr(_builder.CreateShl(wide, amount), _builder.CreateLShr(wide, back))
+                             : _builder.CreateOr(_builder.CreateLShr(wide, amount), _builder.CreateShl(wide, back));
+        result = _builder.CreateTrunc(rotated, Int(bits));
+        carry = _builder.CreateTrunc(_builder.CreateLShr(rotated, bits), _builder.getInt1Ty());
     } else {
         UnexpectedMnemonic("Shift", mnemonic);
     }
+    if (rotate) overflow = _builder.CreateXor(SignBit(result), left ? carry : _builder.CreateTrunc(_builder.CreateLShr(result, bits - 2), _builder.getInt1Ty()));
     Write(0, result);
     SetFlag(PS5LIFT_CF, _builder.CreateSelect(zero, Flag(PS5LIFT_CF), carry));
     SetFlag(PS5LIFT_OF, _builder.CreateSelect(zero, Flag(PS5LIFT_OF), overflow));
@@ -61,22 +65,24 @@ void FunctionLifter::Shift(const ZydisMnemonic mnemonic) {
 
 void FunctionLifter::ShiftDouble(const ZydisMnemonic mnemonic) {
     const auto bits = Bits(0);
-    if (bits == 16) throw UnsupportedInstruction("16-bit");
     auto* value = Read(0);
+    auto* source = ReadAs(1, bits);
     auto* count = _builder.CreateAnd(ReadAs(2, 8), _builder.getInt8(bits == 64 ? 63 : 31));
     auto* zero = _builder.CreateICmpEQ(count, _builder.getInt8(0));
-    auto* amount = _builder.CreateZExt(count, Int(bits));
-    auto* wideValue = _builder.CreateZExt(value, Int(128));
-    auto* wideCount = _builder.CreateZExt(count, Int(128));
+    auto* pairType = Int(bits * 2);
+    auto* amount = _builder.CreateZExt(count, pairType);
     llvm::Value* result = nullptr;
     llvm::Value* carry = nullptr;
     if (mnemonic == ZYDIS_MNEMONIC_SHLD) {
-        result = _builder.CreateIntrinsic(llvm::Intrinsic::fshl, {Int(bits)}, {value, ReadAs(1, bits), amount});
-        carry = _builder.CreateTrunc(_builder.CreateLShr(_builder.CreateShl(wideValue, wideCount), bits), _builder.getInt1Ty());
+        auto* pair = ConcatenateIntegers(source, value);
+        auto* rotated = _builder.CreateIntrinsic(llvm::Intrinsic::fshl, {pairType}, {pair, pair, amount});
+        result = _builder.CreateTrunc(_builder.CreateLShr(rotated, bits), Int(bits));
+        carry = _builder.CreateTrunc(rotated, _builder.getInt1Ty());
     } else if (mnemonic == ZYDIS_MNEMONIC_SHRD) {
-        result = _builder.CreateIntrinsic(llvm::Intrinsic::fshr, {Int(bits)}, {ReadAs(1, bits), value, amount});
-        auto* below = _builder.CreateSelect(zero, llvm::ConstantInt::get(Int(128), 0), _builder.CreateSub(wideCount, llvm::ConstantInt::get(Int(128), 1)));
-        carry = _builder.CreateTrunc(_builder.CreateLShr(wideValue, below), _builder.getInt1Ty());
+        auto* pair = ConcatenateIntegers(value, source);
+        auto* rotated = _builder.CreateIntrinsic(llvm::Intrinsic::fshr, {pairType}, {pair, pair, amount});
+        result = _builder.CreateTrunc(rotated, Int(bits));
+        carry = SignBit(rotated);
     } else {
         UnexpectedMnemonic("ShiftDouble", mnemonic);
     }
@@ -100,10 +106,7 @@ llvm::Value* FunctionLifter::LowAccumulator(const unsigned bits) {
 }
 
 void FunctionLifter::WriteAccumulatorPair(const unsigned bits, llvm::Value* low, llvm::Value* high) {
-    if (bits == 8) {
-        auto* ax = _builder.CreateOr(_builder.CreateZExt(low, _builder.getInt16Ty()), _builder.CreateShl(_builder.CreateZExt(high, _builder.getInt16Ty()), 8));
-        return WriteRegister(ZYDIS_REGISTER_AX, ax);
-    }
+    if (bits == 8) return WriteRegister(ZYDIS_REGISTER_AX, ConcatenateIntegers(low, high));
     const auto rax = bits == 64 ? ZYDIS_REGISTER_RAX : bits == 32 ? ZYDIS_REGISTER_EAX : ZYDIS_REGISTER_AX;
     const auto rdx = bits == 64 ? ZYDIS_REGISTER_RDX : bits == 32 ? ZYDIS_REGISTER_EDX : ZYDIS_REGISTER_DX;
     WriteRegister(rax, low);
@@ -112,9 +115,7 @@ void FunctionLifter::WriteAccumulatorPair(const unsigned bits, llvm::Value* low,
 
 llvm::Value* FunctionLifter::AccumulatorPair(const unsigned bits) {
     if (bits == 8) return _builder.CreateTrunc(Gpr(PS5LIFT_RAX), _builder.getInt16Ty());
-    auto* low = _builder.CreateZExt(LowAccumulator(bits), Int(bits * 2));
-    auto* high = _builder.CreateZExt(_builder.CreateTrunc(Gpr(PS5LIFT_RDX), Int(bits)), Int(bits * 2));
-    return _builder.CreateOr(low, _builder.CreateShl(high, bits));
+    return ConcatenateIntegers(LowAccumulator(bits), _builder.CreateTrunc(Gpr(PS5LIFT_RDX), Int(bits)));
 }
 
 void FunctionLifter::Multiply(const bool isSigned) {
@@ -614,7 +615,7 @@ void FunctionLifter::Complement() {
 }
 
 void FunctionLifter::ByteSwap() {
-    if (Bits(0) == 16) throw UnsupportedInstruction("16-bit");
+    if (Bits(0) == 16) return Write(0, _builder.getInt16(0));
     Write(0, _builder.CreateUnaryIntrinsic(llvm::Intrinsic::bswap, Read(0)));
 }
 
