@@ -28,7 +28,10 @@ bool EndsFlow(const Instruction& instruction) {
     switch (instruction.Info.mnemonic) {
     case ZYDIS_MNEMONIC_RET:
     case ZYDIS_MNEMONIC_JMP:
+    case ZYDIS_MNEMONIC_UD0:
+    case ZYDIS_MNEMONIC_UD1:
     case ZYDIS_MNEMONIC_UD2:
+    case ZYDIS_MNEMONIC_RSM:
     case ZYDIS_MNEMONIC_HLT:
     case ZYDIS_MNEMONIC_INT3:
         return true;

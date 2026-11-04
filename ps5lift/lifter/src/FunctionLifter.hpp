@@ -106,6 +106,7 @@ private:
     llvm::Value* ReadRegister(const ZydisRegister reg);
     void WriteRegister(const ZydisRegister reg, llvm::Value* value);
     llvm::Value* Address(const ZydisDecodedOperand& operand, const bool applySegment = true);
+    llvm::Value* SegmentBase(llvm::Value* address, const ZydisRegister segment);
     bool NeedsOrdering(const ZydisDecodedOperand& operand, const unsigned bits) const;
     bool InPrivateFrame(const ZydisDecodedOperand& operand) const;
     bool InReadOnlySegment(const ZydisDecodedOperand& operand, const unsigned bits) const;
@@ -364,7 +365,9 @@ private:
     void Negation();
     void Complement();
     void ByteSwap();
+    void Enter();
     void Leave();
+    void TableLookup();
     void MergeScalar(const unsigned element);
     void ZeroUpper();
     void Call();

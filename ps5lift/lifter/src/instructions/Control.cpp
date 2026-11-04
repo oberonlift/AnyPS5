@@ -32,9 +32,33 @@ void FunctionLifter::SetCondition(const Condition condition) {
 }
 
 void FunctionLifter::Leave() {
-    if (_instruction->Info.operand_width != 64) throw UnsupportedInstruction("16-bit");
     SetGpr(PS5LIFT_RSP, Gpr(PS5LIFT_RBP));
-    SetGpr(PS5LIFT_RBP, Pop());
+    if (_instruction->Info.operand_width == 64) SetGpr(PS5LIFT_RBP, Pop());
+    else WriteRegister(ZYDIS_REGISTER_BP, Pop(16));
+}
+
+void FunctionLifter::Enter() {
+    const auto bits = _instruction->Info.operand_width;
+    const auto bytes = bits / 8;
+    const auto level = Operand(1).imm.value.u & 31;
+    Push(_builder.CreateTrunc(Gpr(PS5LIFT_RBP), Int(bits)));
+    auto* frame = Gpr(PS5LIFT_RSP);
+    for (std::uint64_t i = 1; i < level; ++i) {
+        SetGpr(PS5LIFT_RBP, _builder.CreateSub(Gpr(PS5LIFT_RBP), _builder.getInt64(bytes)));
+        Push(Load(Gpr(PS5LIFT_RBP), bits, false));
+    }
+    if (level > 0) Push(_builder.CreateTrunc(frame, Int(bits)));
+    if (bits == 64) SetGpr(PS5LIFT_RBP, frame);
+    else WriteRegister(ZYDIS_REGISTER_BP, _builder.CreateTrunc(frame, Int(16)));
+    SetGpr(PS5LIFT_RSP, _builder.CreateSub(Gpr(PS5LIFT_RSP), _builder.getInt64(Operand(0).imm.value.u)));
+}
+
+void FunctionLifter::TableLookup() {
+    const auto& table = Operand(0);
+    const auto width = _instruction->Info.address_width;
+    auto* index = _builder.CreateAdd(ReadRegister(table.mem.base), _builder.CreateZExt(ReadRegister(ZYDIS_REGISTER_AL), Int(width)));
+    auto* address = SegmentBase(_builder.CreateZExt(index, I64()), table.mem.segment);
+    Write(1, Load(address, 8, NeedsOrdering(table, 8)));
 }
 
 void FunctionLifter::Call() {

@@ -60,7 +60,8 @@ case ZYDIS_MNEMONIC_##prefix##231##suffix: return FloatArithmetic({F::Fma, Eleme
     case ZYDIS_MNEMONIC_JMP: return Jump();
     case ZYDIS_MNEMONIC_CALL: return Call();
     case ZYDIS_MNEMONIC_RET: return Return();
-    case ZYDIS_MNEMONIC_UD2: return Stop(PS5LIFT_STOP_INVALID_OPCODE, PS5LIFT_INVALID_OPCODE_BY_DEFINITION, "ud2");
+    case ZYDIS_MNEMONIC_UD0: case ZYDIS_MNEMONIC_UD1: case ZYDIS_MNEMONIC_UD2: case ZYDIS_MNEMONIC_RSM:
+        return Stop(PS5LIFT_STOP_INVALID_OPCODE, PS5LIFT_INVALID_OPCODE_BY_DEFINITION, Mnemonic());
     case ZYDIS_MNEMONIC_INT3: return Stop(PS5LIFT_STOP_BREAKPOINT, 0, "int3");
 
     case ZYDIS_MNEMONIC_SYSENTER: return StopNotOnPs5();
@@ -107,7 +108,9 @@ case ZYDIS_MNEMONIC_##prefix##231##suffix: return FloatArithmetic({F::Fma, Eleme
     case ZYDIS_MNEMONIC_BSWAP: return ByteSwap();
     case ZYDIS_MNEMONIC_PUSH: return Push(_builder.CreateSExtOrTrunc(Read(0), _builder.getIntNTy(_instruction->Info.operand_width)));
     case ZYDIS_MNEMONIC_POP: return Write(0, Pop(_instruction->Info.operand_width));
+    case ZYDIS_MNEMONIC_ENTER: return Enter();
     case ZYDIS_MNEMONIC_LEAVE: return Leave();
+    case ZYDIS_MNEMONIC_XLAT: return TableLookup();
     case ZYDIS_MNEMONIC_XCHG: return Exchange();
     case ZYDIS_MNEMONIC_XADD: return ExchangeAdd();
     case ZYDIS_MNEMONIC_CMPXCHG: return CompareExchange();
