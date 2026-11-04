@@ -3,7 +3,6 @@
 
 #include <pthread.h>
 
-#include <link.h>
 #include <sys/mman.h>
 #include <time.h>
 #include <unistd.h>
@@ -237,6 +236,17 @@ extern "C" void ps5lift_import_dl__iterate__phdr(Ps5LiftState* state) {
     }, &walk));
 }
 
+struct WalkedImage {
+    std::uint64_t Address;
+    const char* Name;
+    const void* ProgramHeaders;
+    std::uint16_t ProgramHeaderCount;
+    unsigned long long Loads;
+    unsigned long long Unloads;
+    std::size_t TlsModule;
+    void* TlsData;
+};
+
 extern "C" void ps5lift_import_host__walk__then__take__stack(Ps5LiftState* state) {
     constexpr std::size_t StackSize = 1 << 20;
     ThreadCall call{Callback<long(long)>(Integer<std::uint64_t>(state, 0)), Integer<long>(state, 1), 0};
@@ -245,8 +255,8 @@ extern "C" void ps5lift_import_host__walk__then__take__stack(Ps5LiftState* state
     std::thread([&call, stack] {
         bool sawTlsBlock = false;
         GuestCpuIterateImages_nid_no_patch([](void* image, std::size_t, void* data) {
-            const auto* info = static_cast<const dl_phdr_info*>(image);
-            if (info->dlpi_tls_modid != 0 && info->dlpi_tls_data != nullptr) *static_cast<bool*>(data) = true;
+            const auto* info = static_cast<const WalkedImage*>(image);
+            if (info->TlsModule != 0 && info->TlsData != nullptr) *static_cast<bool*>(data) = true;
             return 0;
         }, &sawTlsBlock);
         ps5lift_use_guest_stack(reinterpret_cast<std::uint64_t>(stack) + StackSize);
