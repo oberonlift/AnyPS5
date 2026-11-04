@@ -360,6 +360,31 @@ void FunctionLifter::MultipleSumAbsoluteDifferences() {
     Write(0, AsInteger(_builder.CreateAdd(Pairs(pairs, sums, 0), Pairs(pairs, sums, 1))));
 }
 
+void FunctionLifter::Gather(const unsigned indexBits) {
+    const auto& memory = Operand(1);
+    const auto destination = VectorIndex(Operand(0).reg.value);
+    const auto mask = VectorIndex(Operand(2).reg.value);
+    const auto element = Bits(1);
+    const auto setElement = [&](const int target, const unsigned position, llvm::Value* value) {
+        SetVector(target, AsInteger(_builder.CreateInsertElement(AsVector(Vector(target), element), value, position)));
+    };
+    auto* indexes = AsVector(Vector(VectorIndex(memory.mem.index)), indexBits);
+    auto* selected = AsVector(Vector(mask), element);
+    for (unsigned i = 0; i < Bits(0) / element; ++i) {
+        auto* gather = llvm::BasicBlock::Create(Context(), "gather_element", _host);
+        auto* next = llvm::BasicBlock::Create(Context(), "gather_element_done", _host);
+        _builder.CreateCondBr(SignBit(_builder.CreateExtractElement(selected, i)), gather, next);
+        _builder.SetInsertPoint(gather);
+        auto* address = IndexedAddress(memory, _builder.CreateExtractElement(indexes, i));
+        setElement(destination, i, Load(address, element, NeedsOrdering(memory, element)));
+        _builder.CreateBr(next);
+        _builder.SetInsertPoint(next);
+        setElement(mask, i, Const(element, 0));
+    }
+    WriteVector(destination, _builder.CreateTrunc(Vector(destination), Int(Bits(0))), true);
+    SetVector(mask, Const(256, 0));
+}
+
 void FunctionLifter::VectorShiftVariable(const llvm::Instruction::BinaryOps shift, const unsigned element) {
     const auto width = Bits(0);
     const auto [a, b, va, vb] = ReadVectorOperands(Base(2), width, element);

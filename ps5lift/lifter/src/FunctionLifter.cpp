@@ -344,11 +344,16 @@ void FunctionLifter::WriteRegister(const ZydisRegister reg, llvm::Value* value) 
 
 llvm::Value* FunctionLifter::Address(const ZydisDecodedOperand& operand, const bool applySegment) {
     if (operand.type != ZYDIS_OPERAND_TYPE_MEMORY) throw std::logic_error("Address of a non-memory operand");
+    if (VectorIndex(operand.mem.index) >= 0) throw std::logic_error("Address of a VSIB operand, which has an address per index element");
+    return IndexedAddress(operand, operand.mem.index == ZYDIS_REGISTER_NONE ? nullptr : ReadRegister(operand.mem.index), applySegment);
+}
+
+llvm::Value* FunctionLifter::IndexedAddress(const ZydisDecodedOperand& operand, llvm::Value* index, const bool applySegment) {
     const auto width = _instruction->Info.address_width;
     if (width != 64 && width != 32) throw UnsupportedInstruction("16-bit addressing");
     llvm::Value* address = Const(width, static_cast<std::uint64_t>(operand.mem.disp.value));
     if (operand.mem.base != ZYDIS_REGISTER_NONE) address = _builder.CreateAdd(address, ReadRegister(operand.mem.base));
-    if (operand.mem.index != ZYDIS_REGISTER_NONE) address = _builder.CreateAdd(address, _builder.CreateMul(ReadRegister(operand.mem.index), Const(width, operand.mem.scale)));
+    if (index != nullptr) address = _builder.CreateAdd(address, _builder.CreateMul(_builder.CreateSExtOrTrunc(index, Int(width)), Const(width, operand.mem.scale)));
     address = _builder.CreateZExt(address, I64());
     return applySegment ? SegmentBase(address, operand.mem.segment) : address;
 }

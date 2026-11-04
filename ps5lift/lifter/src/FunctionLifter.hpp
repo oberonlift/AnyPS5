@@ -108,6 +108,7 @@ private:
     llvm::Value* ReadRegister(const ZydisRegister reg);
     void WriteRegister(const ZydisRegister reg, llvm::Value* value);
     llvm::Value* Address(const ZydisDecodedOperand& operand, const bool applySegment = true);
+    llvm::Value* IndexedAddress(const ZydisDecodedOperand& operand, llvm::Value* index, const bool applySegment = true);
     llvm::Value* SegmentBase(llvm::Value* address, const ZydisRegister segment);
     bool NeedsOrdering(const ZydisDecodedOperand& operand, const unsigned bits) const;
     bool InPrivateFrame(const ZydisDecodedOperand& operand) const;
@@ -260,6 +261,7 @@ private:
     VectorOperands ReadVectorOperands(const int base, const unsigned width, const unsigned element);
     void VectorBinary(const VectorKind kind, const unsigned element);
     void MultipleSumAbsoluteDifferences();
+    void Gather(const unsigned indexBits);
     void VectorShiftVariable(const llvm::Instruction::BinaryOps shift, const unsigned element);
     void ShufflePairs();
     void AlignRight();

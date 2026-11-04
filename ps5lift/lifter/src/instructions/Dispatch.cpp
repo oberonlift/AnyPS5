@@ -189,6 +189,8 @@ case ZYDIS_MNEMONIC_##prefix##231##suffix: return FloatArithmetic({F::Fma, Eleme
         return HalfMove(mnemonic);
     case ZYDIS_MNEMONIC_VMASKMOVPS: case ZYDIS_MNEMONIC_VPMASKMOVD: return MaskedMove(32);
     case ZYDIS_MNEMONIC_VMASKMOVPD: case ZYDIS_MNEMONIC_VPMASKMOVQ: return MaskedMove(64);
+    case ZYDIS_MNEMONIC_VGATHERDPS: case ZYDIS_MNEMONIC_VGATHERDPD: case ZYDIS_MNEMONIC_VPGATHERDD: case ZYDIS_MNEMONIC_VPGATHERDQ: return Gather(32);
+    case ZYDIS_MNEMONIC_VGATHERQPS: case ZYDIS_MNEMONIC_VGATHERQPD: case ZYDIS_MNEMONIC_VPGATHERQD: case ZYDIS_MNEMONIC_VPGATHERQQ: return Gather(64);
     case ZYDIS_MNEMONIC_VZEROUPPER: return ZeroUpper();
     case ZYDIS_MNEMONIC_VZEROALL: return ZeroAll();
     case ZYDIS_MNEMONIC_EMMS: return LeaveMmx();
