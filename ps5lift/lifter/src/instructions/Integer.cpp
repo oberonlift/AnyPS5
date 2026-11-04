@@ -1,8 +1,12 @@
 #include "../FunctionLifter.hpp"
 
+#include <lifter/InstructionSet.hpp>
+
 #include <llvm/IR/MDBuilder.h>
+#include <llvm/Transforms/Utils/LowerAtomic.h>
 
 #include <bit>
+#include <cstdint>
 
 namespace Ps5Lift::Lifting {
 
@@ -273,13 +277,92 @@ llvm::Value* FunctionLifter::BitStringAddress(llvm::Value* offset) {
     return _builder.CreateAdd(address, _builder.CreateShl(unit, std::countr_zero(bits / 8)));
 }
 
+bool FunctionLifter::MaySplit(const unsigned bits) const {
+    if (!_module.Triple().isAArch64() || bits == 8) return false;
+    const auto rule = RequiredAlignment(_instruction->Info, _instruction->Operands.data());
+    return rule.RelaxedByMisalignedSse || rule.Bytes * 8 < bits;
+}
+
+llvm::Value* FunctionLifter::LockedAccess(llvm::Value* address, const unsigned bits, const std::function<llvm::Value*()>& atomic, const std::function<llvm::Value*(llvm::Value* old)>& update) {
+    if (!MaySplit(bits)) return atomic();
+    constexpr std::uint64_t granule = 16;
+    const std::uint64_t bytes = bits / 8;
+    auto* whole = llvm::BasicBlock::Create(Context(), "locked", _host);
+    auto* split = llvm::BasicBlock::Create(Context(), "split_lock", _host);
+    auto* done = llvm::BasicBlock::Create(Context(), "locked_done", _host);
+    auto* crosses = _builder.CreateICmpUGT(_builder.CreateAdd(_builder.CreateAnd(address, granule - 1), _builder.getInt64(bytes)), _builder.getInt64(granule));
+    _builder.CreateCondBr(crosses, split, whole, llvm::MDBuilder(Context()).createBranchWeights(1, 1u << 20));
+
+    _builder.SetInsertPoint(whole);
+    auto* atomicOld = atomic();
+    auto* wholeEnd = _builder.GetInsertBlock();
+    _builder.CreateBr(done);
+
+    _builder.SetInsertPoint(split);
+    _builder.CreateCall(_module.Runtime("ps5lift_split_lock_begin", llvm::FunctionType::get(_builder.getVoidTy(), {I64(), I64()}, false)), {address, _builder.getInt64(bytes)});
+    auto* splitOld = GuestLoad(address, bits);
+    GuestStore(address, update(splitOld));
+    _builder.CreateCall(_module.Runtime("ps5lift_split_lock_end", llvm::FunctionType::get(_builder.getVoidTy(), false)));
+    auto* splitEnd = _builder.GetInsertBlock();
+    _builder.CreateBr(done);
+
+    _builder.SetInsertPoint(done);
+    auto* old = _builder.CreatePHI(Int(bits), 2);
+    old->addIncoming(atomicOld, wholeEnd);
+    old->addIncoming(splitOld, splitEnd);
+    return old;
+}
+
 llvm::Value* FunctionLifter::AtomicUpdate(const llvm::AtomicRMWInst::BinOp operation, llvm::Value* operand) {
     return AtomicUpdate(Address(Operand(0)), operation, operand);
 }
 
 llvm::Value* FunctionLifter::AtomicUpdate(llvm::Value* address, const llvm::AtomicRMWInst::BinOp operation, llvm::Value* operand) {
-    auto* pointer = _builder.CreateIntToPtr(address, _module.Pointer());
-    return _builder.CreateAtomicRMW(operation, pointer, operand, llvm::MaybeAlign(operand->getType()->getIntegerBitWidth() / 8), llvm::AtomicOrdering::SequentiallyConsistent);
+    const auto bits = operand->getType()->getIntegerBitWidth();
+    return LockedAccess(
+        address, bits,
+        [&] { return _builder.CreateAtomicRMW(operation, GuestPointer(address), operand, llvm::MaybeAlign(bits / 8), llvm::AtomicOrdering::SequentiallyConsistent); },
+        [&](llvm::Value* old) { return llvm::buildAtomicRMWValue(operation, _builder, old, operand); });
+}
+
+llvm::Value* FunctionLifter::AtomicLoop(const std::function<llvm::Value*(llvm::Value* old)>& update) {
+    const auto bits = Bits(0);
+    auto* address = Address(Operand(0));
+    const auto loop = [&] {
+        auto* pointer = GuestPointer(address);
+        auto* initial = _builder.CreateAlignedLoad(Int(bits), pointer, llvm::Align(bits / 8));
+        initial->setAtomic(llvm::AtomicOrdering::Monotonic);
+        initial->setMetadata(llvm::LLVMContext::MD_tbaa, _module.GuestTag());
+        auto* entry = _builder.GetInsertBlock();
+        auto* retry = llvm::BasicBlock::Create(Context(), "atomic", _host);
+        auto* done = llvm::BasicBlock::Create(Context(), "atomic_done", _host);
+        _builder.CreateBr(retry);
+        _builder.SetInsertPoint(retry);
+        auto* old = _builder.CreatePHI(Int(bits), 2);
+        old->addIncoming(initial, entry);
+        auto* exchange = _builder.CreateAtomicCmpXchg(pointer, old, update(old), llvm::MaybeAlign(bits / 8), llvm::AtomicOrdering::SequentiallyConsistent,
+                                                      llvm::AtomicOrdering::SequentiallyConsistent);
+        old->addIncoming(_builder.CreateExtractValue(exchange, 0), retry);
+        _builder.CreateCondBr(_builder.CreateExtractValue(exchange, 1), done, retry);
+        _builder.SetInsertPoint(done);
+        return old;
+    };
+    return LockedAccess(address, bits, loop, update);
+}
+
+llvm::Value* FunctionLifter::AtomicCompareExchange(llvm::Value* expected, llvm::Value* desired) {
+    const auto bits = expected->getType()->getIntegerBitWidth();
+    auto* address = Address(Operand(0));
+    const auto exchange = [&] {
+        auto* result = _builder.CreateAtomicCmpXchg(GuestPointer(address), expected, desired, llvm::MaybeAlign(bits / 8), llvm::AtomicOrdering::SequentiallyConsistent,
+                                                    llvm::AtomicOrdering::SequentiallyConsistent);
+        return _builder.CreateExtractValue(result, 0);
+    };
+    return LockedAccess(address, bits, exchange, [&](llvm::Value* old) { return CompareExchangeResult(old, expected, desired); });
+}
+
+llvm::Value* FunctionLifter::CompareExchangeResult(llvm::Value* old, llvm::Value* expected, llvm::Value* desired) {
+    return _builder.CreateSelect(_builder.CreateICmpEQ(old, expected), desired, old);
 }
 
 bool FunctionLifter::LockedMemory() const {
@@ -290,8 +373,8 @@ void FunctionLifter::Exchange() {
     if (Operand(0).type == ZYDIS_OPERAND_TYPE_MEMORY || Operand(1).type == ZYDIS_OPERAND_TYPE_MEMORY) {
         const int memory = Operand(0).type == ZYDIS_OPERAND_TYPE_MEMORY ? 0 : 1;
         const int reg = 1 - memory;
-        auto* old = _builder.CreateAtomicRMW(llvm::AtomicRMWInst::Xchg, MemoryPointer(memory), Read(reg), llvm::MaybeAlign(Bits(reg) / 8), llvm::AtomicOrdering::SequentiallyConsistent);
-        Write(reg, old);
+        auto* value = Read(reg);
+        Write(reg, AtomicUpdate(Address(Operand(memory)), llvm::AtomicRMWInst::Xchg, value));
         return;
     }
     auto* a = Read(0);
@@ -321,11 +404,10 @@ void FunctionLifter::CompareExchange() {
     auto* desired = Read(1);
     llvm::Value* old = nullptr;
     if (Operand(0).type == ZYDIS_OPERAND_TYPE_MEMORY) {
-        auto* exchange = _builder.CreateAtomicCmpXchg(MemoryPointer(0), expected, desired, llvm::MaybeAlign(bits / 8), llvm::AtomicOrdering::SequentiallyConsistent, llvm::AtomicOrdering::SequentiallyConsistent);
-        old = _builder.CreateExtractValue(exchange, 0);
+        old = AtomicCompareExchange(expected, desired);
     } else {
         old = Read(0);
-        Write(0, _builder.CreateSelect(_builder.CreateICmpEQ(old, expected), desired, old));
+        Write(0, CompareExchangeResult(old, expected, desired));
     }
     Sub(expected, old, _builder.getFalse());
     auto* equal = _builder.CreateICmpEQ(old, expected);
@@ -340,10 +422,10 @@ void FunctionLifter::CompareExchangeWide() {
         auto* upper = _builder.CreateZExt(_builder.CreateTrunc(Gpr(high), Int(half)), Int(bits));
         return _builder.CreateOr(_builder.CreateShl(upper, half), _builder.CreateZExt(_builder.CreateTrunc(Gpr(low), Int(half)), Int(bits)));
     };
-    auto* exchange = _builder.CreateAtomicCmpXchg(MemoryPointer(0), pair(PS5LIFT_RDX, PS5LIFT_RAX), pair(PS5LIFT_RCX, PS5LIFT_RBX), llvm::MaybeAlign(bits / 8),
-                                                  llvm::AtomicOrdering::SequentiallyConsistent, llvm::AtomicOrdering::SequentiallyConsistent);
-    auto* old = _builder.CreateExtractValue(exchange, 0);
-    auto* matched = _builder.CreateExtractValue(exchange, 1);
+    auto* expected = pair(PS5LIFT_RDX, PS5LIFT_RAX);
+    auto* desired = pair(PS5LIFT_RCX, PS5LIFT_RBX);
+    auto* old = AtomicCompareExchange(expected, desired);
+    auto* matched = _builder.CreateICmpEQ(old, expected);
     SetFlag(PS5LIFT_ZF, matched);
     auto* low = _builder.CreateZExt(_builder.CreateTrunc(old, Int(half)), I64());
     auto* high = _builder.CreateZExt(_builder.CreateTrunc(_builder.CreateLShr(old, half), Int(half)), I64());
@@ -508,7 +590,7 @@ void FunctionLifter::Decrement() {
 
 void FunctionLifter::Negation() {
     auto* zero = llvm::ConstantInt::get(Int(Bits(0)), 0);
-    auto* value = LockedMemory() ? AtomicLoop(Bits(0), [&](llvm::Value* old) { return _builder.CreateSub(zero, old); }) : Read(0);
+    auto* value = LockedMemory() ? AtomicLoop([&](llvm::Value* old) { return _builder.CreateSub(zero, old); }) : Read(0);
     auto* result = Sub(zero, value, _builder.getFalse());
     SetFlag(PS5LIFT_CF, _builder.CreateICmpNE(value, zero));
     if (!LockedMemory()) Write(0, result);

@@ -51,7 +51,7 @@ CONSOLE_ONLY = {"cpu", "stop_not_on_ps5", "stop_privileged", "stop_segment_table
 SSE4A_FIXTURES = {"basic"}
 PROGRAM_TIMEOUT = 300
 GUEST_MODULES = {"modules": ("guestmodule", "module.c")}
-HOST_LIBRARIES = {"threads": ("hostthread", "host_thread.c"), "callbacks": ("hostcallbacks", "host_callbacks.c"), "x87": ("hostx87", "host_x87.c"), "setjmp": ("hostsetjmp", "host_setjmp.c")}
+HOST_LIBRARIES = {"threads": ("hostthread", "host_thread.c"), "split_lock": ("hostthread", "host_thread.c"), "callbacks": ("hostcallbacks", "host_callbacks.c"), "x87": ("hostx87", "host_x87.c"), "setjmp": ("hostsetjmp", "host_setjmp.c")}
 
 
 def run(command, **kwargs):

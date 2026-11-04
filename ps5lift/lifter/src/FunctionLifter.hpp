@@ -16,6 +16,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <map>
 #include <optional>
 #include <stdexcept>
@@ -110,6 +111,7 @@ private:
     bool InReadOnlySegment(const ZydisDecodedOperand& operand, const unsigned bits) const;
     llvm::Value* Load(llvm::Value* address, const unsigned bits, const bool ordered);
     void Store(llvm::Value* address, llvm::Value* value, const bool ordered);
+    llvm::Value* GuestPointer(llvm::Value* address);
     llvm::Value* GuestLoad(llvm::Value* address, const unsigned bits);
     void GuestStore(llvm::Value* address, llvm::Value* value);
     llvm::LoadInst* GuestLoadPart(llvm::Value* address, llvm::Type* type);
@@ -180,29 +182,13 @@ private:
     llvm::Value* BitUpdate(const ZydisMnemonic mnemonic, llvm::Value* value, llvm::Value* mask);
     llvm::Value* BitStringAddress(llvm::Value* offset);
     static bool Lockable(const ZydisMnemonic mnemonic);
+    bool MaySplit(const unsigned bits) const;
+    llvm::Value* LockedAccess(llvm::Value* address, const unsigned bits, const std::function<llvm::Value*()>& atomic, const std::function<llvm::Value*(llvm::Value* old)>& update);
     llvm::Value* AtomicUpdate(const llvm::AtomicRMWInst::BinOp operation, llvm::Value* operand);
     llvm::Value* AtomicUpdate(llvm::Value* address, const llvm::AtomicRMWInst::BinOp operation, llvm::Value* operand);
-
-    template <typename Update>
-    llvm::Value* AtomicLoop(const unsigned bits, Update update) {
-        auto* pointer = MemoryPointer(0);
-        auto* initial = _builder.CreateAlignedLoad(Int(bits), pointer, llvm::Align(bits / 8));
-        initial->setAtomic(llvm::AtomicOrdering::Monotonic);
-        initial->setMetadata(llvm::LLVMContext::MD_tbaa, _module.GuestTag());
-        auto* entry = _builder.GetInsertBlock();
-        auto* loop = llvm::BasicBlock::Create(Context(), "atomic", _host);
-        auto* done = llvm::BasicBlock::Create(Context(), "atomic_done", _host);
-        _builder.CreateBr(loop);
-        _builder.SetInsertPoint(loop);
-        auto* old = _builder.CreatePHI(Int(bits), 2);
-        old->addIncoming(initial, entry);
-        auto* exchange = _builder.CreateAtomicCmpXchg(pointer, old, update(old), llvm::MaybeAlign(bits / 8), llvm::AtomicOrdering::SequentiallyConsistent, llvm::AtomicOrdering::SequentiallyConsistent);
-        old->addIncoming(_builder.CreateExtractValue(exchange, 0), loop);
-        _builder.CreateCondBr(_builder.CreateExtractValue(exchange, 1), done, loop);
-        _builder.SetInsertPoint(done);
-        return old;
-    }
-
+    llvm::Value* AtomicLoop(const std::function<llvm::Value*(llvm::Value* old)>& update);
+    llvm::Value* AtomicCompareExchange(llvm::Value* expected, llvm::Value* desired);
+    llvm::Value* CompareExchangeResult(llvm::Value* old, llvm::Value* expected, llvm::Value* desired);
     bool LockedMemory() const;
     void Exchange();
     void ExchangeAdd();

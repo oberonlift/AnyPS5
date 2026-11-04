@@ -257,6 +257,8 @@ uint64_t ps5lift_random(void);
 uint32_t ps5lift_processor_id(void);
 void ps5lift_flush_cache_line(uint64_t address);
 void ps5lift_write_back_cache_line(uint64_t address);
+void ps5lift_split_lock_begin(uint64_t address, uint64_t bytes);
+void ps5lift_split_lock_end(void);
 void ps5lift_cpuid(Ps5LiftState* state, uint64_t address);
 uint64_t ps5lift_xgetbv(uint64_t address, uint32_t index);
 [[noreturn, gnu::format(printf, 1, 2)]] void ps5lift_fail(const char* format, ...);

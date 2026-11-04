@@ -407,6 +407,10 @@ void FunctionLifter::Store(llvm::Value* address, llvm::Value* value, const bool 
     }
 }
 
+llvm::Value* FunctionLifter::GuestPointer(llvm::Value* address) {
+    return _builder.CreateIntToPtr(address, _module.Pointer());
+}
+
 llvm::Value* FunctionLifter::GuestLoad(llvm::Value* address, const unsigned bits) {
     if (bits < PartBits) return GuestLoadPart(address, Int(bits));
     if (bits == PartBits) {
@@ -435,13 +439,13 @@ void FunctionLifter::GuestStore(llvm::Value* address, llvm::Value* value) {
 }
 
 llvm::LoadInst* FunctionLifter::GuestLoadPart(llvm::Value* address, llvm::Type* type) {
-    auto* load = _builder.CreateAlignedLoad(type, _builder.CreateIntToPtr(address, _module.Pointer()), llvm::Align(1), _wholeAccesses);
+    auto* load = _builder.CreateAlignedLoad(type, GuestPointer(address), llvm::Align(1), _wholeAccesses);
     load->setMetadata(llvm::LLVMContext::MD_tbaa, _module.GuestTag());
     return load;
 }
 
 llvm::StoreInst* FunctionLifter::GuestStorePart(llvm::Value* address, llvm::Value* value) {
-    auto* store = _builder.CreateAlignedStore(value, _builder.CreateIntToPtr(address, _module.Pointer()), llvm::Align(1), _wholeAccesses);
+    auto* store = _builder.CreateAlignedStore(value, GuestPointer(address), llvm::Align(1), _wholeAccesses);
     store->setMetadata(llvm::LLVMContext::MD_tbaa, _module.GuestTag());
     return store;
 }
@@ -767,7 +771,7 @@ const ZydisDecodedOperand* FunctionLifter::MemoryOperand() const {
 }
 
 llvm::Value* FunctionLifter::MemoryPointer(const int index) {
-    return _builder.CreateIntToPtr(Address(Operand(index)), _module.Pointer());
+    return GuestPointer(Address(Operand(index)));
 }
 
 std::uint64_t FunctionLifter::Immediate(const int index) const {

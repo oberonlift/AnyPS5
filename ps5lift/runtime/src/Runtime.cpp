@@ -19,6 +19,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <mutex>
 #include <vector>
 
 #if defined(__x86_64__)
@@ -45,6 +46,7 @@ std::uint64_t PageSize() {
 }
 
 std::atomic<Ps5LiftStopHandler> StopHandler{nullptr};
+std::mutex SplitLock;
 
 [[noreturn]] void InvalidOpcode(const std::uint64_t address, const std::uint64_t detail, const char* mnemonic) {
     switch (detail) {
@@ -361,6 +363,18 @@ extern "C" void ps5lift_write_back_cache_line(const std::uint64_t address) {
 #else
     _mm_clflush(reinterpret_cast<const void*>(address));
 #endif
+}
+
+extern "C" void ps5lift_split_lock_begin(const std::uint64_t address, const std::uint64_t bytes) {
+    const auto page = PageSize();
+    for (auto probe = address; probe < address + bytes; probe = (probe | (page - 1)) + 1) static_cast<void>(*reinterpret_cast<const volatile std::uint8_t*>(probe));
+    SplitLock.lock();
+    std::atomic_thread_fence(std::memory_order_seq_cst);
+}
+
+extern "C" void ps5lift_split_lock_end(void) {
+    std::atomic_thread_fence(std::memory_order_seq_cst);
+    SplitLock.unlock();
 }
 
 extern "C" std::uint64_t ps5lift_random(void) {
