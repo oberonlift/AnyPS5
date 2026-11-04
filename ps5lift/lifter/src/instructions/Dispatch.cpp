@@ -1,5 +1,7 @@
 #include "../FunctionLifter.hpp"
 
+#include <algorithm>
+
 namespace Ps5Lift::Lifting {
 
 bool FunctionLifter::Lockable(const ZydisMnemonic mnemonic) {
@@ -97,7 +99,7 @@ case ZYDIS_MNEMONIC_##prefix##231##suffix: return FloatArithmetic({F::Fma, Eleme
 
     case ZYDIS_MNEMONIC_MOV: return Write(0, Read(1));
     case ZYDIS_MNEMONIC_MOVZX: return Write(0, _builder.CreateZExt(Read(1), Int(Bits(0))));
-    case ZYDIS_MNEMONIC_MOVSX: case ZYDIS_MNEMONIC_MOVSXD: return Write(0, _builder.CreateSExtOrTrunc(Read(1), Int(Bits(0))));
+    case ZYDIS_MNEMONIC_MOVSX: case ZYDIS_MNEMONIC_MOVSXD: return Write(0, _builder.CreateSExt(ReadRegisterOrMemory(1, std::min(Bits(1), Bits(0))), Int(Bits(0))));
     case ZYDIS_MNEMONIC_LEA: return Write(0, _builder.CreateTrunc(Address(Operand(1), false), Int(Bits(0))));
     case ZYDIS_MNEMONIC_MOVBE: return Write(0, _builder.CreateUnaryIntrinsic(llvm::Intrinsic::bswap, Read(1)));
     case ZYDIS_MNEMONIC_BSWAP: return ByteSwap();
