@@ -116,7 +116,7 @@ private:
     void Store(llvm::Value* address, llvm::Value* value, const bool ordered);
     llvm::Value* GuestPointer(llvm::Value* address);
     llvm::Value* GuestLoad(llvm::Value* address, const unsigned bits);
-    void GuestStore(llvm::Value* address, llvm::Value* value, const StoreHint hint = StoreHint::None);
+    void GuestStore(llvm::Value* address, llvm::Value* value, const StoreHint hint = StoreHint::None, const llvm::Align alignment = llvm::Align(1));
     llvm::LoadInst* GuestLoadPart(llvm::Value* address, llvm::Type* type);
     llvm::StoreInst* GuestStorePart(llvm::Value* address, llvm::Value* value);
 
@@ -346,6 +346,7 @@ private:
     void X87RestoreState();
     void X87ConditionalMove(const ZydisMnemonic mnemonic);
     void CheckAlignment();
+    llvm::Align CheckedAlignment() const;
     void EmitInstruction(const Instruction& instruction);
     llvm::Value* Loop(const ZydisMnemonic mnemonic);
     void Branch(llvm::Value* condition);

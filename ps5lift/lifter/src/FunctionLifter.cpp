@@ -428,16 +428,17 @@ llvm::Value* FunctionLifter::GuestLoad(llvm::Value* address, const unsigned bits
     return AsInteger(Concatenate(low, high));
 }
 
-void FunctionLifter::GuestStore(llvm::Value* address, llvm::Value* value, const StoreHint hint) {
+void FunctionLifter::GuestStore(llvm::Value* address, llvm::Value* value, const StoreHint hint, const llvm::Align alignment) {
     const auto bits = value->getType()->getIntegerBitWidth();
     if (bits > PartBits) {
         const auto half = bits / 2;
         auto* vector = AsVector(value, 64);
-        GuestStore(address, AsInteger(Elements(vector, 0, half / 64)), hint);
-        GuestStore(_builder.CreateAdd(address, _builder.getInt64(half / 8)), AsInteger(Elements(vector, half / 64, half / 64)), hint);
+        GuestStore(address, AsInteger(Elements(vector, 0, half / 64)), hint, alignment);
+        GuestStore(_builder.CreateAdd(address, _builder.getInt64(half / 8)), AsInteger(Elements(vector, half / 64, half / 64)), hint, llvm::commonAlignment(alignment, half / 8));
         return;
     }
     auto* store = GuestStorePart(address, bits == PartBits ? AsVector(value, 64) : value);
+    store->setAlignment(alignment);
     if (hint == StoreHint::NonTemporal) store->setMetadata(llvm::LLVMContext::MD_nontemporal, llvm::MDNode::get(Context(), llvm::ConstantAsMetadata::get(_builder.getInt32(1))));
 }
 
@@ -831,6 +832,11 @@ void FunctionLifter::CheckAlignment() {
         misaligned = _builder.CreateAnd(misaligned, _builder.CreateICmpEQ(_builder.CreateAnd(mxcsr, PS5LIFT_MXCSR_MISALIGNED_SSE), _builder.getInt32(0)));
     }
     StopIf(misaligned, PS5LIFT_STOP_GENERAL_PROTECTION, 0, Mnemonic() + " accesses memory not aligned to " + std::to_string(rule.Bytes) + " bytes");
+}
+
+llvm::Align FunctionLifter::CheckedAlignment() const {
+    const auto rule = RequiredAlignment(_instruction->Info, _instruction->Operands.data());
+    return llvm::Align(rule.Bytes == 0 || rule.RelaxedByMisalignedSse ? 1 : rule.Bytes);
 }
 
 void FunctionLifter::EmitInstruction(const Instruction& instruction) {

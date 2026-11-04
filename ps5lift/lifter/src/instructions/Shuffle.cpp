@@ -31,7 +31,7 @@ void FunctionLifter::VectorMove() {
 }
 
 void FunctionLifter::NonTemporalStore() {
-    GuestStore(Address(Operand(0)), Read(1), StoreHint::NonTemporal);
+    GuestStore(Address(Operand(0)), Read(1), StoreHint::NonTemporal, CheckedAlignment());
 }
 
 void FunctionLifter::MaskedByteStore() {
