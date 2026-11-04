@@ -845,7 +845,7 @@ llvm::Align FunctionLifter::CheckedAlignment() const {
 }
 
 void FunctionLifter::EmitInstruction(const Instruction& instruction) {
-    _wholeAccesses = HasRegisterOperand(VectorIndex) || HasRegisterOperand(MmxIndex);
+    _wholeAccesses = HasRegisterOperand(VectorIndex) || HasRegisterOperand(MmxIndex) || instruction.Info.mnemonic == ZYDIS_MNEMONIC_CLZERO;
     switch (ClassifyInstruction(instruction.Info, instruction.Operands.data())) {
     case InstructionGroup::Set:
         break;

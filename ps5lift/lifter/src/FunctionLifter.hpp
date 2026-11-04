@@ -364,6 +364,7 @@ private:
     void PopFlags();
     void LeaveMmx();
     void CacheLine(const char* function);
+    void ClearCacheLine();
     void Cpuid();
     void ExtendedControlRegister();
     void Addition();

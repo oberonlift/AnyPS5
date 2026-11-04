@@ -83,6 +83,7 @@ case ZYDIS_MNEMONIC_##prefix##231##suffix: return FloatArithmetic({F::Fma, Eleme
     case ZYDIS_MNEMONIC_MFENCE: _builder.CreateFence(llvm::AtomicOrdering::SequentiallyConsistent); return;
     case ZYDIS_MNEMONIC_LFENCE: case ZYDIS_MNEMONIC_SFENCE: _builder.CreateFence(llvm::AtomicOrdering::AcquireRelease); return;
     case ZYDIS_MNEMONIC_CLFLUSH: case ZYDIS_MNEMONIC_CLFLUSHOPT: return CacheLine("ps5lift_flush_cache_line");
+    case ZYDIS_MNEMONIC_CLZERO: return ClearCacheLine();
     case ZYDIS_MNEMONIC_CLWB: return CacheLine("ps5lift_write_back_cache_line");
     case ZYDIS_MNEMONIC_CPUID: return Cpuid();
     case ZYDIS_MNEMONIC_XGETBV: return ExtendedControlRegister();
@@ -179,7 +180,7 @@ case ZYDIS_MNEMONIC_##prefix##231##suffix: return FloatArithmetic({F::Fma, Eleme
     case ZYDIS_MNEMONIC_MOVNTDQA: case ZYDIS_MNEMONIC_VMOVNTDQA: case ZYDIS_MNEMONIC_LDDQU: case ZYDIS_MNEMONIC_VLDDQU:
     case ZYDIS_MNEMONIC_MOVQ2DQ: case ZYDIS_MNEMONIC_MOVDQ2Q:
         return VectorMove();
-    case ZYDIS_MNEMONIC_MOVNTI: case ZYDIS_MNEMONIC_MOVNTQ: PS5LIFT_BOTH(MOVNTPS): PS5LIFT_BOTH(MOVNTPD): PS5LIFT_BOTH(MOVNTDQ): return NonTemporalStore();
+    case ZYDIS_MNEMONIC_MOVNTI: case ZYDIS_MNEMONIC_MOVNTQ: case ZYDIS_MNEMONIC_MOVNTSD: case ZYDIS_MNEMONIC_MOVNTSS: PS5LIFT_BOTH(MOVNTPS): PS5LIFT_BOTH(MOVNTPD): PS5LIFT_BOTH(MOVNTDQ): return NonTemporalStore();
     case ZYDIS_MNEMONIC_MASKMOVQ: PS5LIFT_BOTH(MASKMOVDQU): return MaskedByteStore();
     case ZYDIS_MNEMONIC_VMOVSS: return _instruction->Info.operand_count_visible == 3 ? MergeScalar(32) : VectorMove();
     case ZYDIS_MNEMONIC_VMOVSD: return _instruction->Info.operand_count_visible == 3 ? MergeScalar(64) : VectorMove();

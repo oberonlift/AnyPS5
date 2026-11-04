@@ -111,7 +111,7 @@ endforeach()
 
 set(PS5LIFT_INSTRUCTION_GROUPS
         outside-not-on-ps5 outside-privileged outside-segment-tables outside-console-kernel
-        adox_adcx amd3dnow_prefetch avxaes bmi1 clflushopt clfsh clwb hint lzcnt monitorx movbe pause rdpid rdrand rdseed rdtscp)
+        adox_adcx amd3dnow_prefetch avxaes bmi1 clflushopt clfsh clwb clzero hint lzcnt monitorx movbe pause rdpid rdrand rdseed rdtscp sse4a)
 foreach(triple IN LISTS PS5LIFT_TEST_TRIPLES)
     string(REGEX REPLACE "-.*" "" arch ${triple})
     foreach(group IN LISTS PS5LIFT_INSTRUCTION_GROUPS)

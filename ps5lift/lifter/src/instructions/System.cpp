@@ -67,6 +67,12 @@ void FunctionLifter::CacheLine(const char* function) {
     _builder.CreateCall(_module.Runtime(function, llvm::FunctionType::get(_builder.getVoidTy(), {I64()}, false)), {Address(Operand(0))});
 }
 
+void FunctionLifter::ClearCacheLine() {
+    constexpr unsigned lineBits = 512;
+    auto* line = _builder.CreateAnd(_builder.CreateZExtOrTrunc(Read(0), I64()), _builder.getInt64(~std::uint64_t{lineBits / 8 - 1}));
+    GuestStore(line, llvm::ConstantInt::get(Int(lineBits), 0));
+}
+
 void FunctionLifter::Cpuid() {
     for (const int index : {PS5LIFT_RAX, PS5LIFT_RCX}) StateStore(Gpr(index), offsetof(Ps5LiftState, Gpr) + 8 * static_cast<std::size_t>(index));
     _builder.CreateCall(_module.Runtime("ps5lift_cpuid", llvm::FunctionType::get(_builder.getVoidTy(), {_module.Pointer(), I64()}, false)), {_state, _builder.getInt64(_instruction->Address)});

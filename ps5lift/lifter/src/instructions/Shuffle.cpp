@@ -31,7 +31,7 @@ void FunctionLifter::VectorMove() {
 }
 
 void FunctionLifter::NonTemporalStore() {
-    GuestStore(Address(Operand(0)), Read(1), StoreHint::NonTemporal, CheckedAlignment());
+    GuestStore(Address(Operand(0)), ReadAs(1, Bits(0)), StoreHint::NonTemporal, CheckedAlignment());
 }
 
 void FunctionLifter::MaskedByteStore() {
@@ -229,22 +229,30 @@ void FunctionLifter::HalfMove(const ZydisMnemonic mnemonic) {
 }
 
 void FunctionLifter::BitField(const bool insert) {
-    const int lengthOperand = insert ? 2 : 1;
     if (Operand(0).type != ZYDIS_OPERAND_TYPE_REGISTER || (insert && Operand(1).type != ZYDIS_OPERAND_TYPE_REGISTER))
         throw std::logic_error("extrq or insertq without its registers");
-    if (Operand(lengthOperand).type != ZYDIS_OPERAND_TYPE_IMMEDIATE) throw UnsupportedInstruction("extrq or insertq with its field in a register");
-    const auto length = (Immediate(lengthOperand) & 63) == 0 ? 64 : Immediate(lengthOperand) & 63;
-    const auto index = Immediate(lengthOperand + 1) & 63;
-    if (index + length > 64) throw UnsupportedInstruction("extrq or insertq field past bit 63");
-    const auto field = length == 64 ? ~std::uint64_t{0} : (std::uint64_t{1} << length) - 1;
+    const int fieldOperand = insert ? 2 : 1;
+    llvm::Value* lengthBits = nullptr;
+    llvm::Value* indexBits = nullptr;
+    if (Operand(fieldOperand).type == ZYDIS_OPERAND_TYPE_IMMEDIATE) {
+        lengthBits = _builder.getInt64(Immediate(fieldOperand));
+        indexBits = _builder.getInt64(Immediate(fieldOperand + 1));
+    } else {
+        auto* control = _builder.CreateTrunc(insert ? _builder.CreateLShr(ReadVector(1, 128), 64) : ReadVector(1, 128), I64());
+        lengthBits = control;
+        indexBits = _builder.CreateLShr(control, 8);
+    }
+    auto* length = _builder.CreateAnd(_builder.CreateSub(lengthBits, _builder.getInt64(1)), _builder.getInt64(63));
+    auto* index = _builder.CreateAnd(indexBits, _builder.getInt64(63));
+    auto* field = _builder.CreateLShr(_builder.getInt64(~std::uint64_t{0}), _builder.CreateSub(_builder.getInt64(63), length));
     auto* destination = ReadVector(0, 128);
     auto* low = _builder.CreateTrunc(destination, I64());
     llvm::Value* result = nullptr;
     if (insert) {
-        auto* source = _builder.CreateAnd(_builder.CreateTrunc(ReadVector(1, 128), I64()), _builder.getInt64(field));
-        result = _builder.CreateOr(_builder.CreateAnd(low, _builder.getInt64(~(field << index))), _builder.CreateShl(source, index));
+        auto* source = _builder.CreateAnd(_builder.CreateTrunc(ReadVector(1, 128), I64()), field);
+        result = _builder.CreateOr(_builder.CreateAnd(low, _builder.CreateNot(_builder.CreateShl(field, index))), _builder.CreateShl(source, index));
     } else {
-        result = _builder.CreateAnd(_builder.CreateLShr(low, index), _builder.getInt64(field));
+        result = _builder.CreateAnd(_builder.CreateLShr(low, index), field);
     }
     auto* high = _builder.CreateAnd(destination, llvm::ConstantInt::get(Int(128), llvm::APInt::getHighBitsSet(128, 64)));
     Write(0, _builder.CreateOr(high, _builder.CreateZExt(result, Int(128))));
