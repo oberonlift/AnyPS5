@@ -44,6 +44,7 @@ std::unique_ptr<llvm::TargetMachine> CreateTargetMachine(const llvm::Triple& tri
     llvm::TargetOptions targetOptions;
     auto* machine = target->createTargetMachine(TripleArgument(triple), cpu, features, targetOptions, llvm::Reloc::PIC_, std::nullopt, optimize ? llvm::CodeGenOptLevel::Aggressive : llvm::CodeGenOptLevel::None);
     if (machine == nullptr) throw std::runtime_error("Cannot create a target machine for " + triple.str());
+    machine->setGlobalISel(false);
     return std::unique_ptr<llvm::TargetMachine>(machine);
 }
 
