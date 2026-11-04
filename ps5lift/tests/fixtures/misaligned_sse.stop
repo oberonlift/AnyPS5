@@ -1,0 +1,2 @@
+general-protection fault at 0x
+movdqa accesses memory not aligned to 16 bytes

@@ -48,4 +48,37 @@ InstructionGroup ClassifyInstruction(const ZydisDecodedInstruction& instruction,
     return InstructionGroup::Set;
 }
 
+const ZydisDecodedOperand* MemoryOperand(const ZydisDecodedInstruction& instruction, const ZydisDecodedOperand* operands) {
+    for (std::uint8_t i = 0; i < instruction.operand_count_visible; ++i) {
+        if (operands[i].type == ZYDIS_OPERAND_TYPE_MEMORY) return &operands[i];
+    }
+    return nullptr;
+}
+
+AlignmentRule RequiredAlignment(const ZydisDecodedInstruction& instruction, const ZydisDecodedOperand* operands) {
+    constexpr AlignmentRule unaligned{0, false};
+    const auto* memory = MemoryOperand(instruction, operands);
+    if (memory == nullptr) return unaligned;
+    switch (instruction.mnemonic) {
+    case ZYDIS_MNEMONIC_CMPXCHG16B: case ZYDIS_MNEMONIC_FXSAVE: case ZYDIS_MNEMONIC_FXSAVE64: case ZYDIS_MNEMONIC_FXRSTOR: case ZYDIS_MNEMONIC_FXRSTOR64:
+        return {16, false};
+    case ZYDIS_MNEMONIC_CVTPD2PI: case ZYDIS_MNEMONIC_CVTTPD2PI:
+        return {16, true};
+    case ZYDIS_MNEMONIC_MOVUPS: case ZYDIS_MNEMONIC_MOVUPD: case ZYDIS_MNEMONIC_MOVDQU: case ZYDIS_MNEMONIC_LDDQU:
+    case ZYDIS_MNEMONIC_PCMPESTRI: case ZYDIS_MNEMONIC_PCMPESTRM: case ZYDIS_MNEMONIC_PCMPISTRI: case ZYDIS_MNEMONIC_PCMPISTRM:
+        return unaligned;
+    default:
+        break;
+    }
+    const unsigned bytes = memory->size / 8;
+    switch (instruction.meta.exception_class) {
+    case ZYDIS_EXCEPTION_CLASS_SSE1: case ZYDIS_EXCEPTION_CLASS_AVX1:
+        return {bytes, false};
+    case ZYDIS_EXCEPTION_CLASS_SSE2: case ZYDIS_EXCEPTION_CLASS_SSE4:
+        return {bytes, true};
+    default:
+        return unaligned;
+    }
+}
+
 }

@@ -154,7 +154,7 @@ private:
     llvm::BasicBlock* Target(const std::uint64_t target);
     std::string Mnemonic() const;
     void Unsupported(const std::string& what);
-    void Stop(const Ps5LiftStopKind kind, const std::uint64_t detail, const std::string& mnemonic);
+    void Stop(const Ps5LiftStopKind kind, const std::uint64_t detail, const std::string& text);
     void StopIf(llvm::Value* condition, const Ps5LiftStopKind kind, const std::uint64_t detail, const std::string& text);
     void StopOutside(const Ps5LiftStopKind kind, MnemonicCounts& counts, const std::uint64_t detail, const std::string& text);
     void StopNotOnPs5();
@@ -164,6 +164,7 @@ private:
     void StringOp(const Ps5LiftStringOperation operation, const unsigned width);
     void ReadString(const StringRead kind, const unsigned width);
     bool Locked() const;
+    const ZydisDecodedOperand* MemoryOperand() const;
     llvm::Value* MemoryPointer(const int index);
     void Shift(const ZydisMnemonic mnemonic);
     void ShiftDouble(const ZydisMnemonic mnemonic);
@@ -335,7 +336,6 @@ private:
     llvm::Value* CallX87(const std::uint32_t operation, const std::uint32_t format, llvm::Value* address, const std::uint32_t index);
     static bool IsStackRegister(const ZydisDecodedOperand& operand);
     static std::uint32_t StackIndex(const ZydisDecodedOperand& operand);
-    const ZydisDecodedOperand* X87Memory() const;
     std::uint32_t X87Format(const bool integer) const;
     std::uint32_t X87Index(const std::uint32_t fallback) const;
     bool X87ToRegister() const;
@@ -347,6 +347,7 @@ private:
     void X87SaveState();
     void X87RestoreState();
     void X87ConditionalMove(const ZydisMnemonic mnemonic);
+    void CheckAlignment();
     void EmitInstruction(const Instruction& instruction);
     llvm::Value* Loop(const ZydisMnemonic mnemonic);
     void Branch(llvm::Value* condition);

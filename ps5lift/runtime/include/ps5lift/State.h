@@ -232,6 +232,7 @@ Ps5LiftFunction ps5lift_resolve(uint64_t target);
 Ps5LiftFunction ps5lift_resolve_jump(Ps5LiftState* state, uint64_t target);
 [[noreturn]] void ps5lift_fail_unresumed(const Ps5LiftState* state, const char* frames);
 #define PS5LIFT_MXCSR_MASK 0x2ffffu
+#define PS5LIFT_MXCSR_MISALIGNED_SSE 0x20000u
 
 void ps5lift_apply_mxcsr(Ps5LiftState* state);
 uint32_t ps5lift_read_mxcsr(Ps5LiftState* state);

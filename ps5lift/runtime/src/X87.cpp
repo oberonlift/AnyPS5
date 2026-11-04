@@ -480,7 +480,6 @@ extern "C" std::uint32_t ps5lift_x87(Ps5LiftState* state, const std::uint32_t op
         return 0;
     }
     case PS5LIFT_X87_SAVE_STATE: {
-        if ((address & 15) != 0) ps5lift_fail("fxsave to 0x%llx, which is not 16-byte aligned; the console raises #GP", static_cast<unsigned long long>(address));
         std::uint8_t area[FxStateBytes] = {};
         std::memcpy(area, &state->X87Control, 2);
         std::memcpy(area + 2, &state->X87Status, 2);
@@ -494,7 +493,6 @@ extern "C" std::uint32_t ps5lift_x87(Ps5LiftState* state, const std::uint32_t op
         return 0;
     }
     case PS5LIFT_X87_RESTORE_STATE: {
-        if ((address & 15) != 0) ps5lift_fail("fxrstor from 0x%llx, which is not 16-byte aligned; the console raises #GP", static_cast<unsigned long long>(address));
         std::uint8_t area[FxStateBytes];
         std::memcpy(area, reinterpret_cast<const void*>(address), sizeof(area));
         std::uint32_t mxcsr;

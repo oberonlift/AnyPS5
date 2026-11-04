@@ -12,7 +12,14 @@ enum class InstructionGroup {
     SegmentTables
 };
 
+struct AlignmentRule {
+    unsigned Bytes;
+    bool RelaxedByMisalignedSse;
+};
+
 InstructionGroup ClassifyInstruction(const ZydisDecodedInstruction& instruction, const ZydisDecodedOperand* operands);
+const ZydisDecodedOperand* MemoryOperand(const ZydisDecodedInstruction& instruction, const ZydisDecodedOperand* operands);
+AlignmentRule RequiredAlignment(const ZydisDecodedInstruction& instruction, const ZydisDecodedOperand* operands);
 
 }
 

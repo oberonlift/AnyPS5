@@ -708,10 +708,10 @@ llvm::BasicBlock* FunctionLifter::Target(const std::uint64_t target) {
     return block;
 }
 
-void FunctionLifter::Stop(const Ps5LiftStopKind kind, const std::uint64_t detail, const std::string& mnemonic) {
+void FunctionLifter::Stop(const Ps5LiftStopKind kind, const std::uint64_t detail, const std::string& text) {
     Flush();
     auto callee = _module.Runtime("ps5lift_stop", llvm::FunctionType::get(_builder.getVoidTy(), {_module.Pointer(), _builder.getInt32Ty(), I64(), I64(), _module.Pointer()}, false));
-    auto* call = _builder.CreateCall(callee, {_state, _builder.getInt32(kind), _builder.getInt64(_instruction->Address), _builder.getInt64(detail), _builder.CreateGlobalString(mnemonic)});
+    auto* call = _builder.CreateCall(callee, {_state, _builder.getInt32(kind), _builder.getInt64(_instruction->Address), _builder.getInt64(detail), _builder.CreateGlobalString(text)});
     call->setDoesNotReturn();
     _builder.CreateUnreachable();
 }
@@ -762,6 +762,10 @@ bool FunctionLifter::Locked() const {
     return (_instruction->Info.attributes & ZYDIS_ATTRIB_HAS_LOCK) != 0;
 }
 
+const ZydisDecodedOperand* FunctionLifter::MemoryOperand() const {
+    return Ps5Lift::MemoryOperand(_instruction->Info, _instruction->Operands.data());
+}
+
 llvm::Value* FunctionLifter::MemoryPointer(const int index) {
     return _builder.CreateIntToPtr(Address(Operand(index)), _module.Pointer());
 }
@@ -790,6 +794,17 @@ llvm::Value* FunctionLifter::ReadRegisterOrMemory(const int index, const unsigne
     return _builder.CreateZExtOrTrunc(ReadRegister(operand.reg.value), Int(bits));
 }
 
+void FunctionLifter::CheckAlignment() {
+    const auto rule = RequiredAlignment(_instruction->Info, _instruction->Operands.data());
+    if (rule.Bytes == 0) return;
+    llvm::Value* misaligned = _builder.CreateICmpNE(_builder.CreateAnd(Address(*MemoryOperand()), rule.Bytes - 1), _builder.getInt64(0));
+    if (rule.RelaxedByMisalignedSse) {
+        auto* mxcsr = StateLoad(_builder.getInt32Ty(), offsetof(Ps5LiftState, Mxcsr));
+        misaligned = _builder.CreateAnd(misaligned, _builder.CreateICmpEQ(_builder.CreateAnd(mxcsr, PS5LIFT_MXCSR_MISALIGNED_SSE), _builder.getInt32(0)));
+    }
+    StopIf(misaligned, PS5LIFT_STOP_GENERAL_PROTECTION, 0, Mnemonic() + " accesses memory not aligned to " + std::to_string(rule.Bytes) + " bytes");
+}
+
 void FunctionLifter::EmitInstruction(const Instruction& instruction) {
     _wholeAccesses = HasRegisterOperand(VectorIndex) || HasRegisterOperand(MmxIndex);
     switch (ClassifyInstruction(instruction.Info, instruction.Operands.data())) {
@@ -803,6 +818,7 @@ void FunctionLifter::EmitInstruction(const Instruction& instruction) {
         return StopSegmentTables();
     }
     try {
+        CheckAlignment();
         EmitSemantics(instruction.Info.mnemonic);
     } catch (const UnsupportedInstruction& error) {
         Unsupported(error.what());
