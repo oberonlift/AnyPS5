@@ -279,6 +279,7 @@ void StartMain(std::uint64_t& entry) {
 namespace {
 
 constexpr std::uint32_t MxcsrExceptions = 0x3f;
+constexpr std::uint32_t MxcsrMisalignedSse = 1u << 17;
 
 #if defined(__aarch64__)
 constexpr std::uint64_t FpsrBits[6] = {1u << 0, 1u << 7, 1u << 1, 1u << 2, 1u << 3, 1u << 4};
@@ -332,7 +333,7 @@ extern "C" void ps5lift_apply_mxcsr(Ps5LiftState* state) {
     if (mxcsr & (MxcsrDenormalsAreZero | MxcsrFlushToZero)) fpcr |= FlushToZero;
     __asm__ volatile("msr fpcr, %0" : : "r"(fpcr));
 #elif defined(__x86_64__)
-    _mm_setcsr((mxcsr & ~MxcsrExceptions) | 0x1f80u);
+    _mm_setcsr((mxcsr & ~(MxcsrExceptions | MxcsrMisalignedSse)) | 0x1f80u);
 #endif
     SetHostExceptions(mxcsr & MxcsrExceptions);
 }
