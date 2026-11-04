@@ -63,23 +63,23 @@ python3 tools/ps5lift.py run out
 
 ## What this branch contains
 
-The branch is the top of the pull-request stack (#16) with #17 merged. The pull requests are opened on this fork first and offered to AnyPS5 one topic at a time. They merge in this order:
+The branch is the top of the pull-request stack with its conventions fix merged. The pull requests are open on AnyPS5, each with a copy on this fork, and merge in this order:
 
-| Order | Pull request | What it adds |
-|---|---|---|
-| 1 | [#20](https://github.com/oberonlift/AnyPS5/pull/20) | The libraries' fenv, TSC, cpuid and pause instructions, through helpers |
-| 2 | [#18](https://github.com/oberonlift/AnyPS5/pull/18) | ps5lift's runtime |
-| 3 | [#9](https://github.com/oberonlift/AnyPS5/pull/9) | `ANYPS5_GUEST_LIFTED`, the build of the libraries for lifted games |
-| 4 | [#10](https://github.com/oberonlift/AnyPS5/pull/10) | Unwinding and exceptions in libc |
-| 5 | [#11](https://github.com/oberonlift/AnyPS5/pull/11) | The game's `va_list`s, read portably |
-| 6 | [#12](https://github.com/oberonlift/AnyPS5/pull/12) | The game's x87 `long double`, kept exactly |
-| 7 | [#13](https://github.com/oberonlift/AnyPS5/pull/13) | Threads for lifted games |
-| 8 | [#14](https://github.com/oberonlift/AnyPS5/pull/14) | The game's images, its modules and its fibers |
-| 9 | [#17](https://github.com/oberonlift/AnyPS5/pull/17) | Lets AnyPS5's conventions check accept LLVM from the system |
-| 10 | [#15](https://github.com/oberonlift/AnyPS5/pull/15) | The lifter |
-| 11 | [#16](https://github.com/oberonlift/AnyPS5/pull/16) | Lifted programs and games on AnyPS5's libraries |
+| Order | AnyPS5 | This fork | What it adds |
+|---|---|---|---|
+| 1 | [#15797](https://github.com/boykopovar/AnyPS5/pull/15797) | [#20](https://github.com/oberonlift/AnyPS5/pull/20) | The libraries' fenv, TSC, cpuid and pause instructions, through helpers |
+| 2 | [#15798](https://github.com/boykopovar/AnyPS5/pull/15798) | [#18](https://github.com/oberonlift/AnyPS5/pull/18) | ps5lift's runtime |
+| 3 | [#15799](https://github.com/boykopovar/AnyPS5/pull/15799) | [#9](https://github.com/oberonlift/AnyPS5/pull/9) | `ANYPS5_GUEST_LIFTED`, the build of the libraries for lifted games |
+| 4 | [#15800](https://github.com/boykopovar/AnyPS5/pull/15800) | [#10](https://github.com/oberonlift/AnyPS5/pull/10) | Unwinding and exceptions in libc |
+| 5 | [#15801](https://github.com/boykopovar/AnyPS5/pull/15801) | [#11](https://github.com/oberonlift/AnyPS5/pull/11) | The game's `va_list`s, read portably |
+| 6 | [#15802](https://github.com/boykopovar/AnyPS5/pull/15802) | [#12](https://github.com/oberonlift/AnyPS5/pull/12) | The game's x87 `long double`, kept exactly |
+| 7 | [#15803](https://github.com/boykopovar/AnyPS5/pull/15803) | [#13](https://github.com/oberonlift/AnyPS5/pull/13) | Threads for lifted games |
+| 8 | [#15804](https://github.com/boykopovar/AnyPS5/pull/15804) | [#14](https://github.com/oberonlift/AnyPS5/pull/14) | The game's images, its modules and its fibers |
+| 9 | [#15805](https://github.com/boykopovar/AnyPS5/pull/15805) | [#17](https://github.com/oberonlift/AnyPS5/pull/17) | Lets AnyPS5's conventions check accept LLVM from the system |
+| 10 | [#15806](https://github.com/boykopovar/AnyPS5/pull/15806) | [#15](https://github.com/oberonlift/AnyPS5/pull/15) | The lifter |
+| 11 | [#15807](https://github.com/boykopovar/AnyPS5/pull/15807) | [#16](https://github.com/oberonlift/AnyPS5/pull/16) | Lifted programs and games on AnyPS5's libraries |
 
-The first eight make AnyPS5's libraries build and run for a lifted program. #15 needs #17, which lets the conventions check accept the system LLVM it builds against, and #16 needs both #14 and #15.
+The first eight make AnyPS5's libraries build and run for a lifted program. The lifter (AnyPS5 #15806) needs the conventions fix (#15805), which lets the check accept the system LLVM it builds against, and the last one (#15807) needs both #15804 and #15806.
 
 When the pull requests change, this branch is rebuilt from them, so its history can be rewritten. Update with `git fetch origin && git reset --hard origin/ps5lift-preview` rather than `git pull`.
 
