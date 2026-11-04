@@ -335,7 +335,8 @@ void FunctionLifter::WriteRegister(const ZydisRegister reg, llvm::Value* value) 
     if (index < 0) throw UnsupportedInstruction(std::string("register ") + ZydisRegisterGetString(reg));
     const auto width = ZydisRegisterGetWidth(ZYDIS_MACHINE_MODE_LONG_64, reg);
     if (width == 64) return SetGpr(index, value);
-    auto* extended = _builder.CreateZExt(value, I64());
+    const bool lowPart = width < 32 && !IsHighByte(reg);
+    auto* extended = _builder.CreateZExt(lowPart && _module.Triple().isX86() ? _builder.CreateFreeze(value) : value, I64());
     if (width == 32) return SetGpr(index, extended);
     if (IsHighByte(reg)) return SetGpr(index, _builder.CreateOr(_builder.CreateAnd(Gpr(index), ~std::uint64_t{0xff00}), _builder.CreateShl(extended, 8)));
     const auto mask = width == 16 ? ~std::uint64_t{0xffff} : ~std::uint64_t{0xff};
