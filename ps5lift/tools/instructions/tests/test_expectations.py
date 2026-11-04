@@ -364,6 +364,16 @@ class NearBranch16Test(unittest.TestCase):
         bound = _at(_branch("jmp"), 0xFC00008000, 4, 0xFC00000004)
         self.assertEqual(expected_result(bound, None), fault(bound, Outcome.PAGE_FAULT, 0x0004, 0x0004))
 
+    def test_call_rel16_push_into_guard_faults_at_instance(self):
+        call = _at(_branch("call"), 0xFC0001FFF0, 4, 0xFC00020010)
+        rsp = records.gpr_offset(LOCATIONS["rsp"][1])
+        for top, data in ((GUARD + 1, GUARD), (GUARD + 2, GUARD), (GUARD + 3, GUARD + 1)):
+            with self.subTest(rsp=hex(top)):
+                case = with_slot(call, {rsp: top.to_bytes(8, "little")})
+                self.assertEqual(expected_result(case, None), fault(case, Outcome.PAGE_FAULT, case.address, data))
+        below = with_slot(call, {rsp: GUARD.to_bytes(8, "little")})
+        self.assertEqual(expected_result(below, None), fault(below, Outcome.PAGE_FAULT, 0x0010, 0x0010))
+
     def test_jcc_rel16_not_taken_completes(self):
         case = _at(_branch("jz", lambda spec: spec.flags["ZF"] == 0), 0xFC0001FFF0, 6, 0xFC00020010)
         not_taken = completed(case, {**flags(**case.spec.flags), records.PATH: bytes([records.PATH_NOT_TAKEN])})
