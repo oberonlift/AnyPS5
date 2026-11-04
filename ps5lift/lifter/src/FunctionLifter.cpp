@@ -702,13 +702,28 @@ void FunctionLifter::JumpTo(llvm::Value* function) {
     _builder.CreateBr(UnwindBlock());
 }
 
+void FunctionLifter::TailDispatch(llvm::Value* destination) {
+    Flush();
+    auto resolve = _module.Runtime("ps5lift_resolve_jump", llvm::FunctionType::get(_module.Pointer(), {_module.Pointer(), I64()}, false));
+    JumpTo(_builder.CreateCall(resolve, {_state, destination}));
+}
+
 llvm::BasicBlock* FunctionLifter::Target(const std::uint64_t target) {
     if (_blocks.contains(target)) return _blocks.at(target);
-    auto* current = _builder.GetInsertBlock();
+    const llvm::IRBuilderBase::InsertPointGuard guard(_builder);
     auto* block = llvm::BasicBlock::Create(Context(), "tail_" + Hex(target), _host);
     _builder.SetInsertPoint(block);
     TailCall(target);
-    _builder.SetInsertPoint(current);
+    return block;
+}
+
+llvm::BasicBlock* FunctionLifter::BranchTarget() {
+    const auto target = *DirectTarget(*_instruction);
+    if (!DispatchesDirectTarget(_module.Image(), *_instruction)) return Target(target);
+    const llvm::IRBuilderBase::InsertPointGuard guard(_builder);
+    auto* block = llvm::BasicBlock::Create(Context(), "dispatch_" + Hex(target), _host);
+    _builder.SetInsertPoint(block);
+    TailDispatch(_builder.getInt64(target));
     return block;
 }
 

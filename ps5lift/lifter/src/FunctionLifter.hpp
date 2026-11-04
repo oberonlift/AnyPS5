@@ -153,7 +153,9 @@ private:
     llvm::BasicBlock* UnwindBlock();
     llvm::FunctionCallee DispatchCallee();
     void TailCall(const std::uint64_t target);
+    void TailDispatch(llvm::Value* destination);
     llvm::BasicBlock* Target(const std::uint64_t target);
+    llvm::BasicBlock* BranchTarget();
     std::string Mnemonic() const;
     void Unsupported(const std::string& what);
     void Stop(const Ps5LiftStopKind kind, const std::uint64_t detail, const std::string& text);

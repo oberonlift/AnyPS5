@@ -100,6 +100,8 @@ void DefaultStopHandler(Ps5LiftState* state, const std::uint32_t kind, const std
         ps5lift_fail("reached unsupported instruction %s at 0x%" PRIx64, mnemonic, address);
     case PS5LIFT_STOP_SEGMENT_TABLES:
         ps5lift_fail("%s at 0x%" PRIx64 " depends on the console's segment descriptor tables, which are unknown", mnemonic, address);
+    case PS5LIFT_STOP_PAGE_FAULT:
+        ps5lift_fail("page fault at 0x%" PRIx64 ": %s from unmapped memory", address, mnemonic);
     case PS5LIFT_STOP_NEEDS_EXACT_FLOAT:
         ps5lift_fail("%s at 0x%" PRIx64, mnemonic, address);
     default:
@@ -412,10 +414,23 @@ extern "C" std::uint32_t ps5lift_read_mxcsr(Ps5LiftState* state) {
     return (state->Mxcsr & ~MxcsrExceptions) | HostExceptions();
 }
 
+namespace {
+
+void StopIfUnmapped(Ps5LiftState* state, const std::uint64_t address) {
+    const auto page = PageSize();
+    unsigned char resident = 0;
+    if (mincore(reinterpret_cast<void*>(address & ~(page - 1)), page, &resident) == 0) return;
+    if (errno != ENOMEM) ps5lift_fail("cannot tell whether 0x%" PRIx64 " is mapped: %s", address, std::strerror(errno));
+    ps5lift_stop(state, PS5LIFT_STOP_PAGE_FAULT, address, 0, "fetch");
+}
+
+}
+
 extern "C" Ps5LiftFunction ps5lift_resolve(const std::uint64_t target) {
     const auto function = Ps5Lift::LookupFunction(target);
-    if (function == nullptr) ps5lift_fail("indirect branch to 0x%" PRIx64 ", which was not lifted", target);
-    return function;
+    if (function != nullptr) return function;
+    StopIfUnmapped(ps5lift_current_state(), target);
+    ps5lift_fail("indirect branch to 0x%" PRIx64 ", which was not lifted", target);
 }
 
 namespace {
@@ -433,6 +448,7 @@ void ReturnByJump(Ps5LiftState*) {}
 
 extern "C" Ps5LiftFunction ps5lift_resolve_jump(Ps5LiftState* state, const std::uint64_t target) {
     if (const auto function = Ps5Lift::LookupFunction(target)) return function;
+    StopIfUnmapped(state, target);
     state->ResumeRip = target;
     state->ResumeRsp = state->Gpr[PS5LIFT_RSP];
     state->ReturnSlot = 0;

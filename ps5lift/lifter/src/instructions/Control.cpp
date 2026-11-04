@@ -16,8 +16,7 @@ llvm::Value* FunctionLifter::Loop(const ZydisMnemonic mnemonic) {
 }
 
 void FunctionLifter::Branch(llvm::Value* condition) {
-    const auto target = *DirectTarget(*_instruction);
-    _builder.CreateCondBr(condition, Target(target), Target(_instruction->Next()));
+    _builder.CreateCondBr(condition, BranchTarget(), Target(_instruction->Next()));
 }
 
 llvm::Value* FunctionLifter::CounterIsZero(const unsigned bits) {
@@ -39,16 +38,17 @@ void FunctionLifter::Leave() {
 }
 
 void FunctionLifter::Call() {
+    auto* returnAddress = Const(_instruction->Info.operand_width, _instruction->Next());
     auto target = DirectTarget(*_instruction);
     if (!target) target = ImportTarget(_module.Image(), *_instruction);
-    auto* destination = target ? nullptr : Read(0);
-    Push(_builder.getInt64(_instruction->Next()));
-    if (target) {
-        auto* callee = _module.Guest(*target);
-        CallGuest(callee, _module.Functions().at(*target).Effects);
-    } else {
-        CallGuest(DispatchCallee().getCallee(), {EveryRegister, EveryRegister}, {destination});
+    if (target && !DispatchesDirectTarget(_module.Image(), *_instruction)) {
+        Push(returnAddress);
+        CallGuest(_module.Guest(*target), _module.Functions().at(*target).Effects);
+        return;
     }
+    auto* destination = target ? _builder.getInt64(*target) : Read(0);
+    Push(returnAddress);
+    CallGuest(DispatchCallee().getCallee(), {EveryRegister, EveryRegister}, {destination});
 }
 
 void FunctionLifter::Jump() {
@@ -58,7 +58,7 @@ void FunctionLifter::Jump() {
         return;
     }
     if (target) {
-        _builder.CreateBr(Target(*target));
+        _builder.CreateBr(BranchTarget());
         return;
     }
     auto* destination = Read(0);
@@ -80,9 +80,7 @@ void FunctionLifter::Jump() {
         _builder.CreateUnreachable();
         return;
     }
-    Flush();
-    auto resolve = _module.Runtime("ps5lift_resolve_jump", llvm::FunctionType::get(_module.Pointer(), {_module.Pointer(), I64()}, false));
-    JumpTo(_builder.CreateCall(resolve, {_state, destination}));
+    TailDispatch(destination);
 }
 
 void FunctionLifter::Return() {
