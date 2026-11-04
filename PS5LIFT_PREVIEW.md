@@ -67,7 +67,7 @@ The branch is the top of the pull-request stack (#16) with #17 merged. The pull 
 
 | Order | Pull request | What it adds |
 |---|---|---|
-| 1 | [#8](https://github.com/oberonlift/AnyPS5/pull/8) | Portable versions of the libraries' CPU-specific code |
+| 1 | [#20](https://github.com/oberonlift/AnyPS5/pull/20) | The libraries' fenv, TSC, cpuid and pause instructions, through helpers |
 | 2 | [#18](https://github.com/oberonlift/AnyPS5/pull/18) | ps5lift's runtime |
 | 3 | [#9](https://github.com/oberonlift/AnyPS5/pull/9) | `ANYPS5_GUEST_LIFTED`, the build of the libraries for lifted games |
 | 4 | [#10](https://github.com/oberonlift/AnyPS5/pull/10) | Unwinding and exceptions in libc |
