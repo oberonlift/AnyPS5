@@ -533,8 +533,48 @@ void FunctionLifter::BitManipulation(const ZydisMnemonic mnemonic) {
         Write(0, high);
         return;
     }
+    case ZYDIS_MNEMONIC_PDEP:
+    case ZYDIS_MNEMONIC_PEXT: return ParallelBits(mnemonic == ZYDIS_MNEMONIC_PDEP);
     default: UnexpectedMnemonic("BitManipulation", mnemonic);
     }
+}
+
+void FunctionLifter::ParallelBits(const bool deposit) {
+    const auto bits = Bits(0);
+    auto* type = Int(bits);
+    auto* source = Read(1);
+    auto* mask = Read(2);
+    auto* zero = llvm::ConstantInt::get(type, 0);
+    auto* one = llvm::ConstantInt::get(type, 1);
+    auto* entry = _builder.GetInsertBlock();
+    auto* body = llvm::BasicBlock::Create(Context(), "parallel_bits", _host);
+    auto* done = llvm::BasicBlock::Create(Context(), "parallel_bits_done", _host);
+    _builder.CreateCondBr(_builder.CreateICmpEQ(mask, zero), done, body);
+    _builder.SetInsertPoint(body);
+    auto* remaining = _builder.CreatePHI(type, 2);
+    auto* rest = _builder.CreatePHI(type, 2);
+    auto* position = _builder.CreatePHI(type, 2);
+    auto* accumulated = _builder.CreatePHI(type, 2);
+    auto* lowest = _builder.CreateAnd(remaining, _builder.CreateNeg(remaining));
+    auto* taken = _builder.CreateICmpNE(_builder.CreateAnd(deposit ? rest : source, deposit ? one : lowest), zero);
+    auto* bit = deposit ? lowest : position;
+    auto* next = _builder.CreateOr(accumulated, _builder.CreateSelect(taken, bit, zero));
+    auto* nextRemaining = _builder.CreateAnd(remaining, _builder.CreateSub(remaining, one));
+    remaining->addIncoming(mask, entry);
+    rest->addIncoming(source, entry);
+    position->addIncoming(one, entry);
+    accumulated->addIncoming(zero, entry);
+    remaining->addIncoming(nextRemaining, body);
+    rest->addIncoming(_builder.CreateLShr(rest, one), body);
+    position->addIncoming(_builder.CreateShl(position, one), body);
+    accumulated->addIncoming(next, body);
+    auto* loopEnd = _builder.GetInsertBlock();
+    _builder.CreateCondBr(_builder.CreateICmpEQ(nextRemaining, zero), done, body);
+    _builder.SetInsertPoint(done);
+    auto* result = _builder.CreatePHI(type, 2);
+    result->addIncoming(zero, entry);
+    result->addIncoming(next, loopEnd);
+    Write(0, result);
 }
 
 llvm::Value* FunctionLifter::LowRdx(const unsigned bits) {

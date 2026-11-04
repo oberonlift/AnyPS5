@@ -204,6 +204,7 @@ private:
     void VectorBitwise(const llvm::Instruction::BinaryOps operation);
     void VectorMove();
     void BitManipulation(const ZydisMnemonic mnemonic);
+    void ParallelBits(const bool deposit);
     llvm::Value* LowRdx(const unsigned bits);
     void Broadcast(const unsigned elementBits);
 
