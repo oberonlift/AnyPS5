@@ -259,7 +259,7 @@ extern "C" void ps5lift_import_host__walk__then__take__stack(Ps5LiftState* state
             if (info->TlsModule != 0 && info->TlsData != nullptr) *static_cast<bool*>(data) = true;
             return 0;
         }, &sawTlsBlock);
-        ps5lift_use_guest_stack(reinterpret_cast<std::uint64_t>(stack) + StackSize);
+        ps5lift_use_guest_stack(GuestAddress(static_cast<std::uint8_t*>(stack) + StackSize));
         call.Result = sawTlsBlock ? -1 : call.Function(call.Argument);
     }).join();
     munmap(stack, StackSize);
