@@ -64,27 +64,30 @@ void FunctionLifter::Shift(const ZydisMnemonic mnemonic) {
 }
 
 void FunctionLifter::ShiftDouble(const ZydisMnemonic mnemonic) {
+    const bool left = mnemonic == ZYDIS_MNEMONIC_SHLD;
+    if (!left && mnemonic != ZYDIS_MNEMONIC_SHRD) UnexpectedMnemonic("ShiftDouble", mnemonic);
+    const auto funnel = left ? llvm::Intrinsic::fshl : llvm::Intrinsic::fshr;
     const auto bits = Bits(0);
     auto* value = Read(0);
     auto* source = ReadAs(1, bits);
+    auto* high = left ? value : source;
+    auto* low = left ? source : value;
     auto* count = _builder.CreateAnd(ReadAs(2, 8), _builder.getInt8(bits == 64 ? 63 : 31));
     auto* zero = _builder.CreateICmpEQ(count, _builder.getInt8(0));
-    auto* pairType = Int(bits * 2);
-    auto* amount = _builder.CreateZExt(count, pairType);
     llvm::Value* result = nullptr;
     llvm::Value* carry = nullptr;
-    if (mnemonic == ZYDIS_MNEMONIC_SHLD) {
-        auto* pair = ConcatenateIntegers(source, value);
-        auto* rotated = _builder.CreateIntrinsic(llvm::Intrinsic::fshl, {pairType}, {pair, pair, amount});
-        result = _builder.CreateTrunc(_builder.CreateLShr(rotated, bits), Int(bits));
-        carry = _builder.CreateTrunc(rotated, _builder.getInt1Ty());
-    } else if (mnemonic == ZYDIS_MNEMONIC_SHRD) {
-        auto* pair = ConcatenateIntegers(value, source);
-        auto* rotated = _builder.CreateIntrinsic(llvm::Intrinsic::fshr, {pairType}, {pair, pair, amount});
-        result = _builder.CreateTrunc(rotated, Int(bits));
-        carry = SignBit(rotated);
+    if (bits == 16) {
+        auto* pairType = Int(bits * 2);
+        auto* pair = ConcatenateIntegers(low, high);
+        auto* rotated = _builder.CreateIntrinsic(funnel, {pairType}, {pair, pair, _builder.CreateZExt(count, pairType)});
+        result = _builder.CreateTrunc(left ? _builder.CreateLShr(rotated, bits) : rotated, Int(bits));
+        carry = left ? _builder.CreateTrunc(rotated, _builder.getInt1Ty()) : SignBit(rotated);
     } else {
-        UnexpectedMnemonic("ShiftDouble", mnemonic);
+        result = _builder.CreateIntrinsic(funnel, {Int(bits)}, {high, low, _builder.CreateZExt(count, Int(bits))});
+        auto* wideValue = _builder.CreateZExt(value, Int(128));
+        auto* wideCount = _builder.CreateZExt(count, Int(128));
+        auto* shifted = left ? _builder.CreateLShr(_builder.CreateShl(wideValue, wideCount), bits) : _builder.CreateLShr(_builder.CreateLShr(_builder.CreateShl(wideValue, bits), wideCount), bits - 1);
+        carry = _builder.CreateTrunc(shifted, _builder.getInt1Ty());
     }
     Write(0, result);
     SetFlag(PS5LIFT_CF, _builder.CreateSelect(zero, Flag(PS5LIFT_CF), carry));
