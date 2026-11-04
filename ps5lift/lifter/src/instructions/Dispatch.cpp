@@ -89,8 +89,10 @@ case ZYDIS_MNEMONIC_##prefix##231##suffix: return FloatArithmetic({F::Fma, Eleme
     case ZYDIS_MNEMONIC_RDTSCP: return TimeStampAndProcessor();
     case ZYDIS_MNEMONIC_RDPID: return ProcessorId();
     case ZYDIS_MNEMONIC_RDRAND: case ZYDIS_MNEMONIC_RDSEED: return RandomNumber();
-    case ZYDIS_MNEMONIC_LAHF: return LoadFlagsIntoAh();
-    case ZYDIS_MNEMONIC_SAHF: return StoreAhIntoFlags();
+    case ZYDIS_MNEMONIC_LAHF: return WriteRegister(ZYDIS_REGISTER_AH, FlagImage(8));
+    case ZYDIS_MNEMONIC_SAHF: return SetFlagsFromImage(ReadRegister(ZYDIS_REGISTER_AH));
+    case ZYDIS_MNEMONIC_PUSHF: case ZYDIS_MNEMONIC_PUSHFQ: return Push(FlagImage(_instruction->Info.operand_width));
+    case ZYDIS_MNEMONIC_POPF: case ZYDIS_MNEMONIC_POPFQ: return PopFlags();
     case ZYDIS_MNEMONIC_CLD: return SetFlag(PS5LIFT_DF, _builder.getFalse());
     case ZYDIS_MNEMONIC_STD: return SetFlag(PS5LIFT_DF, _builder.getTrue());
     case ZYDIS_MNEMONIC_CLC: return SetFlag(PS5LIFT_CF, _builder.getFalse());

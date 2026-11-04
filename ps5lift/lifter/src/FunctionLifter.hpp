@@ -347,8 +347,9 @@ private:
     void ProcessorId();
     void TimeStamp();
     void TimeStampAndProcessor();
-    void LoadFlagsIntoAh();
-    void StoreAhIntoFlags();
+    llvm::Value* FlagImage(const unsigned bits);
+    void SetFlagsFromImage(llvm::Value* image);
+    void PopFlags();
     void LeaveMmx();
     void CacheLine(const char* function);
     void Cpuid();

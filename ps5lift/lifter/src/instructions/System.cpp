@@ -1,9 +1,18 @@
 #include "../FunctionLifter.hpp"
 
 #include <cstddef>
+#include <cstdint>
 #include <utility>
 
 namespace Ps5Lift::Lifting {
+
+namespace {
+
+constexpr std::uint64_t UserModeFlagImage = 0x202;
+constexpr std::pair<Ps5LiftFlag, unsigned> FlagImageBits[] = {
+    {PS5LIFT_CF, 0}, {PS5LIFT_PF, 2}, {PS5LIFT_AF, 4}, {PS5LIFT_ZF, 6}, {PS5LIFT_SF, 7}, {PS5LIFT_DF, 10}, {PS5LIFT_OF, 11}};
+
+}
 
 void FunctionLifter::RandomNumber() {
     auto* value = _builder.CreateCall(_module.Runtime("ps5lift_random", llvm::FunctionType::get(I64(), false)));
@@ -27,17 +36,31 @@ void FunctionLifter::TimeStampAndProcessor() {
     SetGpr(PS5LIFT_RCX, _builder.CreateZExt(_builder.CreateCall(_module.Runtime("ps5lift_processor_id", llvm::FunctionType::get(_builder.getInt32Ty(), false))), I64()));
 }
 
-void FunctionLifter::LoadFlagsIntoAh() {
-    llvm::Value* value = _builder.getInt8(2);
-    for (const auto& [flag, bit] : {std::pair{PS5LIFT_SF, 7}, std::pair{PS5LIFT_ZF, 6}, std::pair{PS5LIFT_AF, 4}, std::pair{PS5LIFT_PF, 2}, std::pair{PS5LIFT_CF, 0}})
-        value = _builder.CreateOr(value, _builder.CreateShl(_builder.CreateZExt(Flag(flag), _builder.getInt8Ty()), bit));
-    WriteRegister(ZYDIS_REGISTER_AH, value);
+llvm::Value* FunctionLifter::FlagImage(const unsigned bits) {
+    llvm::Value* image = Const(bits, UserModeFlagImage);
+    for (const auto& [flag, bit] : FlagImageBits) {
+        if (bit < bits) image = _builder.CreateOr(image, _builder.CreateShl(_builder.CreateZExt(Flag(flag), Int(bits)), bit));
+    }
+    return image;
 }
 
-void FunctionLifter::StoreAhIntoFlags() {
-    auto* value = ReadRegister(ZYDIS_REGISTER_AH);
-    for (const auto& [flag, bit] : {std::pair{PS5LIFT_SF, 7}, std::pair{PS5LIFT_ZF, 6}, std::pair{PS5LIFT_AF, 4}, std::pair{PS5LIFT_PF, 2}, std::pair{PS5LIFT_CF, 0}})
-        SetFlag(flag, _builder.CreateTrunc(_builder.CreateLShr(value, bit), _builder.getInt1Ty()));
+void FunctionLifter::SetFlagsFromImage(llvm::Value* image) {
+    const auto bits = image->getType()->getIntegerBitWidth();
+    for (const auto& [flag, bit] : FlagImageBits) {
+        if (bit < bits) SetFlag(flag, _builder.CreateTrunc(_builder.CreateLShr(image, bit), _builder.getInt1Ty()));
+    }
+}
+
+void FunctionLifter::PopFlags() {
+    constexpr std::uint64_t trap = 1 << 8;
+    constexpr std::uint64_t nestedTask = 1 << 14;
+    constexpr std::uint64_t alignmentCheck = 1 << 18;
+    constexpr std::uint64_t identification = 1 << 21;
+    const auto bits = _instruction->Info.operand_width;
+    auto* image = Pop(bits);
+    SetFlagsFromImage(image);
+    auto* unmodelled = _builder.CreateAnd(image, Const(bits, trap | nestedTask | alignmentCheck | identification));
+    StopIf(_builder.CreateICmpNE(unmodelled, Const(bits, 0)), PS5LIFT_STOP_MISSING_TRANSLATION, 0, "popf of TF, NT, AC or ID");
 }
 
 void FunctionLifter::CacheLine(const char* function) {
