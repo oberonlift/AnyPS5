@@ -168,7 +168,7 @@ void FunctionLifter::VectorShift(const llvm::Instruction::BinaryOps shift, const
 
 FunctionLifter::VectorOperands FunctionLifter::ReadVectorOperands(const int base, const unsigned width, const unsigned element) {
     auto* a = ReadAs(base, width);
-    auto* b = _builder.CreateZExtOrTrunc(Read(base + 1), Int(width));
+    auto* b = ReadVector(base + 1, width);
     return {a, b, AsVector(a, element), AsVector(b, element)};
 }
 
