@@ -286,9 +286,9 @@ std::size_t FunctionLifter::MmxOffset(const int index) const {
     return offsetof(Ps5LiftState, X87Registers) + 16 * static_cast<std::size_t>(index);
 }
 
-bool FunctionLifter::UsesMmx() const {
+bool FunctionLifter::HasRegisterOperand(int (*index)(ZydisRegister)) const {
     for (std::uint8_t i = 0; i < _instruction->Info.operand_count; ++i) {
-        if (Operand(i).type == ZYDIS_OPERAND_TYPE_REGISTER && MmxIndex(Operand(i).reg.value) >= 0) return true;
+        if (Operand(i).type == ZYDIS_OPERAND_TYPE_REGISTER && index(Operand(i).reg.value) >= 0) return true;
     }
     return false;
 }
@@ -366,10 +366,10 @@ bool FunctionLifter::InReadOnlySegment(const ZydisDecodedOperand& operand, const
 
 llvm::Value* FunctionLifter::Load(llvm::Value* address, const unsigned bits, const bool ordered) {
     if (!ordered) return GuestLoad(address, bits);
-    if (bits == 8) return Ordered(GuestLoad(address, bits), llvm::AtomicOrdering::Acquire);
+    if (bits == 8) return Ordered(GuestLoadPart(address, Int(bits)), llvm::AtomicOrdering::Acquire);
     const auto split = SplitOnAlignment(address, bits);
     _builder.SetInsertPoint(split.Aligned);
-    auto* aligned = Ordered(GuestLoad(address, bits), llvm::AtomicOrdering::Acquire);
+    auto* aligned = Ordered(GuestLoadPart(address, Int(bits)), llvm::AtomicOrdering::Acquire);
     _builder.CreateBr(split.Done);
     _builder.SetInsertPoint(split.Unaligned);
     auto* unaligned = GuestLoad(address, bits);
@@ -387,11 +387,11 @@ void FunctionLifter::Store(llvm::Value* address, llvm::Value* value, const bool 
     if (!ordered) {
         GuestStore(address, value);
     } else if (bits == 8) {
-        Ordered(GuestStore(address, value), llvm::AtomicOrdering::Release);
+        Ordered(GuestStorePart(address, value), llvm::AtomicOrdering::Release);
     } else {
         const auto split = SplitOnAlignment(address, bits);
         _builder.SetInsertPoint(split.Aligned);
-        Ordered(GuestStore(address, value), llvm::AtomicOrdering::Release);
+        Ordered(GuestStorePart(address, value), llvm::AtomicOrdering::Release);
         _builder.CreateBr(split.Done);
         _builder.SetInsertPoint(split.Unaligned);
         _builder.CreateFence(llvm::AtomicOrdering::Release);
@@ -401,14 +401,41 @@ void FunctionLifter::Store(llvm::Value* address, llvm::Value* value, const bool 
     }
 }
 
-llvm::LoadInst* FunctionLifter::GuestLoad(llvm::Value* address, const unsigned bits) {
-    auto* load = _builder.CreateAlignedLoad(Int(bits), _builder.CreateIntToPtr(address, _module.Pointer()), llvm::Align(1));
+llvm::Value* FunctionLifter::GuestLoad(llvm::Value* address, const unsigned bits) {
+    if (bits < PartBits) return GuestLoadPart(address, Int(bits));
+    if (bits == PartBits) {
+        llvm::Value* part = GuestLoadPart(address, llvm::FixedVectorType::get(I64(), PartBits / 64));
+        if (_wholeAccesses && _module.Triple().isAArch64()) part = _builder.CreateFreeze(part);
+        return AsInteger(part);
+    }
+    const auto half = bits / 2;
+    auto* low = AsVector(GuestLoad(address, half), 64);
+    auto* high = AsVector(GuestLoad(_builder.CreateAdd(address, _builder.getInt64(half / 8)), half), 64);
+    return AsInteger(Concatenate(low, high));
+}
+
+void FunctionLifter::GuestStore(llvm::Value* address, llvm::Value* value) {
+    const auto bits = value->getType()->getIntegerBitWidth();
+    if (bits < PartBits) {
+        GuestStorePart(address, value);
+    } else if (bits == PartBits) {
+        GuestStorePart(address, AsVector(value, 64));
+    } else {
+        const auto half = bits / 2;
+        auto* vector = AsVector(value, 64);
+        GuestStore(address, AsInteger(Elements(vector, 0, half / 64)));
+        GuestStore(_builder.CreateAdd(address, _builder.getInt64(half / 8)), AsInteger(Elements(vector, half / 64, half / 64)));
+    }
+}
+
+llvm::LoadInst* FunctionLifter::GuestLoadPart(llvm::Value* address, llvm::Type* type) {
+    auto* load = _builder.CreateAlignedLoad(type, _builder.CreateIntToPtr(address, _module.Pointer()), llvm::Align(1), _wholeAccesses);
     load->setMetadata(llvm::LLVMContext::MD_tbaa, _module.GuestTag());
     return load;
 }
 
-llvm::StoreInst* FunctionLifter::GuestStore(llvm::Value* address, llvm::Value* value) {
-    auto* store = _builder.CreateAlignedStore(value, _builder.CreateIntToPtr(address, _module.Pointer()), llvm::Align(1));
+llvm::StoreInst* FunctionLifter::GuestStorePart(llvm::Value* address, llvm::Value* value) {
+    auto* store = _builder.CreateAlignedStore(value, _builder.CreateIntToPtr(address, _module.Pointer()), llvm::Align(1), _wholeAccesses);
     store->setMetadata(llvm::LLVMContext::MD_tbaa, _module.GuestTag());
     return store;
 }
@@ -747,6 +774,7 @@ llvm::Value* FunctionLifter::ReadRegisterOrMemory(const int index, const unsigne
 }
 
 void FunctionLifter::EmitInstruction(const Instruction& instruction) {
+    _wholeAccesses = HasRegisterOperand(VectorIndex) || HasRegisterOperand(MmxIndex);
     switch (ClassifyInstruction(instruction.Info, instruction.Operands.data())) {
     case InstructionGroup::Set:
         break;

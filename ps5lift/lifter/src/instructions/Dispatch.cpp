@@ -16,7 +16,7 @@ bool FunctionLifter::Lockable(const ZydisMnemonic mnemonic) {
 
 void FunctionLifter::EmitSemantics(const ZydisMnemonic mnemonic) {
     if (Locked() && !(Lockable(mnemonic) && Operand(0).type == ZYDIS_OPERAND_TYPE_MEMORY)) throw UnsupportedInstruction("lock prefix");
-    if (UsesMmx()) EnterMmx();
+    if (HasRegisterOperand(MmxIndex)) EnterMmx();
     using K = VectorKind;
     using F = FloatKind;
     constexpr auto Element = [](const char* suffix) { return suffix[1] == 'S' ? 32u : 64u; };

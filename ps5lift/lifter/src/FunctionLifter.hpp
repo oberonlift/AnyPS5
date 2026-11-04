@@ -60,6 +60,7 @@ private:
     llvm::AllocaInst* _gpr[PS5LIFT_GPR_COUNT]{};
     llvm::AllocaInst* _flags[PS5LIFT_FLAG_COUNT]{};
     static constexpr int VectorCount = 16;
+    static constexpr unsigned PartBits = 128;
     llvm::AllocaInst* _vectors[VectorCount]{};
     std::array<bool, PS5LIFT_GPR_COUNT> _usedGprs{};
     std::array<bool, VectorCount> _usedVectors{};
@@ -67,6 +68,7 @@ private:
     bool _assignsStackPointer = false;
     bool _framePointer = false;
     bool _frameEscapes = false;
+    bool _wholeAccesses = false;
     std::map<std::uint64_t, llvm::BasicBlock*> _blocks;
     const Instruction* _instruction = nullptr;
     llvm::Value* _entryRsp = nullptr;
@@ -97,7 +99,7 @@ private:
     void SetVector(const int index, llvm::Value* value);
     void WriteVector(const int index, llvm::Value* value, const bool zeroUpper);
     std::size_t MmxOffset(const int index) const;
-    bool UsesMmx() const;
+    bool HasRegisterOperand(int (*index)(ZydisRegister)) const;
     void EnterMmx();
     llvm::Value* ReadRegister(const ZydisRegister reg);
     void WriteRegister(const ZydisRegister reg, llvm::Value* value);
@@ -107,8 +109,10 @@ private:
     bool InReadOnlySegment(const ZydisDecodedOperand& operand, const unsigned bits) const;
     llvm::Value* Load(llvm::Value* address, const unsigned bits, const bool ordered);
     void Store(llvm::Value* address, llvm::Value* value, const bool ordered);
-    llvm::LoadInst* GuestLoad(llvm::Value* address, const unsigned bits);
-    llvm::StoreInst* GuestStore(llvm::Value* address, llvm::Value* value);
+    llvm::Value* GuestLoad(llvm::Value* address, const unsigned bits);
+    void GuestStore(llvm::Value* address, llvm::Value* value);
+    llvm::LoadInst* GuestLoadPart(llvm::Value* address, llvm::Type* type);
+    llvm::StoreInst* GuestStorePart(llvm::Value* address, llvm::Value* value);
 
     template <typename Access>
     Access* Ordered(Access* access, const llvm::AtomicOrdering ordering) {
