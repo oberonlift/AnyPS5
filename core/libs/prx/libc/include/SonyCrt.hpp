@@ -21,7 +21,7 @@
 
 extern "C" {
 GuestTm* APS5_VABI localtime_s_nid_postfix(const std::int64_t* timer, GuestTm* result);
-extern FileStream* __stderrp_nid_postfix;
+extern GuestArena::GuestPointer<FileStream> __stderrp_nid_postfix;
 }
 
 using SonyConstraintHandler = void (APS5_VABI *)(const char* message, void* pointer, int error);
