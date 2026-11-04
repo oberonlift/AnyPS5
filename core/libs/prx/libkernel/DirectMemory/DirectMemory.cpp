@@ -26,7 +26,7 @@
 #include <system_error>
 #include <vector>
 
-#if defined(__linux__) || defined(__APPLE__)
+#if defined(__linux__) || (defined(__APPLE__) && defined(ANYPS5_GUEST_LIFTED))
 #include <fcntl.h>
 #include <sys/mman.h>
 #include <unistd.h>
@@ -243,7 +243,7 @@ void* MapAnonymousNoReplace(void* address, size_t len, int prot) {
 }
 #endif
 
-#if defined(__linux__) || defined(__APPLE__)
+#if defined(__linux__) || (defined(__APPLE__) && defined(ANYPS5_GUEST_LIFTED))
 void* MapAtOrAbove(std::uintptr_t start, size_t len, int prot, size_t alignment) {
     constexpr std::uintptr_t UserLimit = 0x7fff00000000ull;
     for (int attempt = 0; attempt < 8; ++attempt) {
@@ -367,7 +367,7 @@ void Trace(const char* format, ...) {
     va_end(args);
 }
 
-#if defined(__linux__) || defined(__APPLE__)
+#if defined(__linux__) || (defined(__APPLE__) && defined(ANYPS5_GUEST_LIFTED))
 int PhysicalFile() {
     static const int file = [] {
 #ifdef __APPLE__
@@ -477,7 +477,7 @@ public:
             std::snprintf(message, sizeof(message), "create direct memory backing of 0x%llx bytes (%llu MiB)", static_cast<unsigned long long>(size), static_cast<unsigned long long>((size + 0xFFFFF) >> 20));
             throw std::system_error(error, std::system_category(), message);
         }
-#elif defined(__APPLE__)
+#elif defined(__APPLE__) && !defined(ANYPS5_GUEST_LIFTED)
         static_cast<void>(start);
         memory_object_size_t size = bytes;
         const auto result = mach_make_memory_entry_64(mach_task_self(), &size, 0, MAP_MEM_NAMED_CREATE | VM_PROT_ALL, &entry, MACH_PORT_NULL);
@@ -491,7 +491,7 @@ public:
 
     int MemoryType() const { return memoryType; }
 
-#if defined(__linux__) || defined(__APPLE__)
+#if defined(__linux__) || (defined(__APPLE__) && defined(ANYPS5_GUEST_LIFTED))
     int File() const { return file; }
     void* HostWriteData(std::uint64_t offset, std::size_t length) {
         if (offset > bytes || length > bytes - offset) return nullptr;
@@ -514,7 +514,7 @@ public:
         } else if (!GuestArena::GuestArenaForgetReusableSection_nid_no_patch(section) || !SectionPool::Get().Keep(section, bytes)) {
             CloseHandle(section);
         }
-#elif defined(__APPLE__)
+#elif defined(__APPLE__) && !defined(ANYPS5_GUEST_LIFTED)
         mach_port_deallocate(mach_task_self(), entry);
 #else
         if (hostWriteView != nullptr) ::munmap(hostWriteView, bytes);
@@ -531,7 +531,7 @@ public:
         GuestArena::GuestArenaCommit_nid_postfix(reinterpret_cast<void*>(address), bytes, 0x04, PS5_PAGE_SIZE);
 #elif defined(_WIN32)
         GuestArena::GuestArenaMapDirect_nid_postfix(reinterpret_cast<void*>(address), bytes, section, offset, WinProtFromPosix(protection));
-#elif defined(__APPLE__)
+#elif defined(__APPLE__) && !defined(ANYPS5_GUEST_LIFTED)
         auto target = static_cast<mach_vm_address_t>(address);
         const auto result = mach_vm_map(mach_task_self(), &target, bytes, 0, VM_FLAGS_FIXED | VM_FLAGS_OVERWRITE, entry, offset, FALSE, protection, VM_PROT_ALL, VM_INHERIT_SHARE);
         if (result != KERN_SUCCESS) throw std::runtime_error(std::string("map direct memory backing: ") + mach_error_string(result));
@@ -546,7 +546,7 @@ private:
 #if defined(__EMSCRIPTEN__)
 #elif defined(_WIN32)
     HANDLE section = nullptr;
-#elif defined(__APPLE__)
+#elif defined(__APPLE__) && !defined(ANYPS5_GUEST_LIFTED)
     mach_port_t entry = MACH_PORT_NULL;
 #else
     int file = -1;
@@ -1025,6 +1025,8 @@ void* MapPlaced(void* addr, size_t len, int prot, int flags, size_t alignment) {
 #if defined(__linux__) || defined(__EMSCRIPTEN__)
         const int placement = (flags & GuestMapNoOverwrite) != 0 ? MAP_FIXED_NOREPLACE : MAP_FIXED;
         void* result = mmap(addr, len, prot, MAP_PRIVATE | MAP_ANONYMOUS | placement, -1, 0);
+#elif defined(__APPLE__) && defined(ANYPS5_GUEST_LIFTED)
+        void* result = (flags & GuestMapNoOverwrite) != 0 ? MapAnonymousNoReplace(addr, len, prot) : mmap(addr, len, prot, MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED, -1, 0);
 #elif defined(__APPLE__)
         void* result = (flags & GuestMapNoOverwrite) != 0 ? MapFixedNoReplace(addr, len, prot) : mmap(addr, len, prot, MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED, -1, 0);
 #else
