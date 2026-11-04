@@ -89,6 +89,7 @@ private:
     bool CrossesCalls(const int flag) const;
     void Flush(const RegisterSet registers = EveryRegister);
     void Reload(const RegisterSet registers = EveryRegister);
+    void ForgetFlagsAcrossCall();
     bool Terminated() const;
     void StartDeadBlock();
     llvm::Value* Gpr(const int index);
@@ -154,6 +155,7 @@ private:
     std::string Mnemonic() const;
     void Unsupported(const std::string& what);
     void Stop(const Ps5LiftStopKind kind, const std::uint64_t detail, const std::string& mnemonic);
+    void StopIf(llvm::Value* condition, const Ps5LiftStopKind kind, const std::uint64_t detail, const std::string& text);
     void StopOutside(const Ps5LiftStopKind kind, MnemonicCounts& counts, const std::uint64_t detail, const std::string& text);
     void StopNotOnPs5();
     void StopPrivileged();
@@ -323,6 +325,7 @@ private:
     void PermuteVariable(const unsigned element);
     void MaskedMove(const unsigned element);
     void LoadMxcsr();
+    void CheckMxcsrLoad(llvm::Value* value);
     void StoreMxcsr();
     void DuplicateSingles(const bool high);
     void DuplicateDoubles();

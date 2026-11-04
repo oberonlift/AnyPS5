@@ -1,2 +1,2 @@
-general-protection fault: hlt at 0x
-is privileged on the PS5
+general-protection fault at 0x
+hlt is privileged on the PS5

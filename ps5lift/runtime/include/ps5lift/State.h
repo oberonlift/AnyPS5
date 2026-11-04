@@ -150,7 +150,8 @@ enum Ps5LiftStopKind {
     PS5LIFT_STOP_GENERAL_PROTECTION = 3,
     PS5LIFT_STOP_CONSOLE_KERNEL = 4,
     PS5LIFT_STOP_MISSING_TRANSLATION = 5,
-    PS5LIFT_STOP_SEGMENT_TABLES = 6
+    PS5LIFT_STOP_SEGMENT_TABLES = 6,
+    PS5LIFT_STOP_NEEDS_EXACT_FLOAT = 8
 };
 
 enum Ps5LiftInvalidOpcode {
@@ -230,7 +231,7 @@ void ps5lift_dispatch(Ps5LiftState* state, uint64_t target);
 Ps5LiftFunction ps5lift_resolve(uint64_t target);
 Ps5LiftFunction ps5lift_resolve_jump(Ps5LiftState* state, uint64_t target);
 [[noreturn]] void ps5lift_fail_unresumed(const Ps5LiftState* state, const char* frames);
-#define PS5LIFT_MXCSR_MASK 0xffffu
+#define PS5LIFT_MXCSR_MASK 0x2ffffu
 
 void ps5lift_apply_mxcsr(Ps5LiftState* state);
 uint32_t ps5lift_read_mxcsr(Ps5LiftState* state);

@@ -75,13 +75,15 @@ void DefaultStopHandler(Ps5LiftState* state, const std::uint32_t kind, const std
     case PS5LIFT_STOP_INVALID_OPCODE:
         InvalidOpcode(address, detail, mnemonic);
     case PS5LIFT_STOP_GENERAL_PROTECTION:
-        ps5lift_fail("general-protection fault: %s at 0x%" PRIx64 " is privileged on the PS5", mnemonic, address);
+        ps5lift_fail("general-protection fault at 0x%" PRIx64 ": %s", address, mnemonic);
     case PS5LIFT_STOP_CONSOLE_KERNEL:
         ConsoleKernel(state, address, mnemonic);
     case PS5LIFT_STOP_MISSING_TRANSLATION:
         ps5lift_fail("reached unsupported instruction %s at 0x%" PRIx64, mnemonic, address);
     case PS5LIFT_STOP_SEGMENT_TABLES:
         ps5lift_fail("%s at 0x%" PRIx64 " depends on the console's segment descriptor tables, which are unknown", mnemonic, address);
+    case PS5LIFT_STOP_NEEDS_EXACT_FLOAT:
+        ps5lift_fail("%s at 0x%" PRIx64, mnemonic, address);
     default:
         ps5lift_fail("unknown stop kind %" PRIu32 " at 0x%" PRIx64, kind, address);
     }

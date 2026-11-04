@@ -36,6 +36,7 @@ bool StopOutcome(const std::uint32_t kind, std::uint8_t* outcome) {
     case PS5LIFT_STOP_CONSOLE_KERNEL: *outcome = PS5LIFT_INSTRUCTION_OUTCOME_CONSOLE_KERNEL; return true;
     case PS5LIFT_STOP_MISSING_TRANSLATION: *outcome = PS5LIFT_INSTRUCTION_OUTCOME_MISSING_TRANSLATION; return true;
     case PS5LIFT_STOP_SEGMENT_TABLES: *outcome = PS5LIFT_INSTRUCTION_OUTCOME_SEGMENT_TABLES; return true;
+    case PS5LIFT_STOP_NEEDS_EXACT_FLOAT: *outcome = PS5LIFT_INSTRUCTION_OUTCOME_NEEDS_EXACT_FLOAT; return true;
     default: return false;
     }
 }

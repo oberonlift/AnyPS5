@@ -90,6 +90,7 @@ void FunctionLifter::Lift() {
         if (_usedVectors[i]) _vectors[i] = _builder.CreateAlloca(Int(256), nullptr, "ymm" + std::to_string(i));
     }
     Reload();
+    ForgetFlagsAcrossCall();
     _entryRsp = Gpr(PS5LIFT_RSP);
     for (const auto leader : _function.Leaders) {
         if (!_function.Instructions.contains(leader)) throw std::logic_error("The block at 0x" + Hex(leader) + " in the function at 0x" + Hex(_function.Entry) + " has no instruction");
@@ -228,10 +229,15 @@ void FunctionLifter::Reload(const RegisterSet registers) {
     }
     for (int i = 0; i < PS5LIFT_FLAG_COUNT; ++i) {
         if (_flags[i] && CrossesCalls(i)) _builder.CreateStore(_builder.CreateTrunc(StateLoad(_builder.getInt8Ty(), offsetof(Ps5LiftState, Flags) + i), _builder.getInt1Ty()), _flags[i]);
-        else if (_flags[i]) _builder.CreateStore(_builder.getFalse(), _flags[i]);
     }
     for (int i = 0; i < VectorCount; ++i) {
         if (_vectors[i] && (registers >> (FirstVectorBit + i) & 1) != 0) _builder.CreateStore(StateLoad(Int(256), VectorOffset(i)), _vectors[i]);
+    }
+}
+
+void FunctionLifter::ForgetFlagsAcrossCall() {
+    for (int i = 0; i < PS5LIFT_FLAG_COUNT; ++i) {
+        if (_flags[i] && !CrossesCalls(i)) _builder.CreateStore(_builder.getFalse(), _flags[i]);
     }
 }
 
@@ -602,6 +608,7 @@ void FunctionLifter::CallGuest(llvm::Value* callee, const RegisterEffects& effec
     _builder.CreateBr(returned);
     _builder.SetInsertPoint(returned);
     Reload(effects.Written);
+    ForgetFlagsAcrossCall();
 }
 
 void FunctionLifter::ResumeIfStackSwitched(llvm::Value* rsp, llvm::Value* popped) {
@@ -644,6 +651,7 @@ llvm::BasicBlock* FunctionLifter::UnwindBlock() {
         _builder.SetInsertPoint(block);
         StateStore(_builder.getInt8(0), offsetof(Ps5LiftState, Unwinding));
         Reload();
+        ForgetFlagsAcrossCall();
         _builder.CreateBr(_blocks.at(point));
     }
     _builder.SetInsertPoint(unknown);
@@ -708,6 +716,15 @@ void FunctionLifter::Stop(const Ps5LiftStopKind kind, const std::uint64_t detail
     _builder.CreateUnreachable();
 }
 
+void FunctionLifter::StopIf(llvm::Value* condition, const Ps5LiftStopKind kind, const std::uint64_t detail, const std::string& text) {
+    auto* stop = llvm::BasicBlock::Create(Context(), "stop", _host);
+    auto* next = llvm::BasicBlock::Create(Context(), "continue", _host);
+    _builder.CreateCondBr(condition, stop, next, llvm::MDBuilder(Context()).createBranchWeights(1, 1u << 20));
+    _builder.SetInsertPoint(stop);
+    Stop(kind, detail, text);
+    _builder.SetInsertPoint(next);
+}
+
 std::string FunctionLifter::Mnemonic() const {
     return ZydisMnemonicGetString(_instruction->Info.mnemonic);
 }
@@ -728,7 +745,7 @@ void FunctionLifter::StopNotOnPs5() {
 }
 
 void FunctionLifter::StopPrivileged() {
-    StopOutside(PS5LIFT_STOP_GENERAL_PROTECTION, _module.Report().Privileged, 0, Mnemonic());
+    StopOutside(PS5LIFT_STOP_GENERAL_PROTECTION, _module.Report().Privileged, 0, Mnemonic() + " is privileged on the PS5");
 }
 
 void FunctionLifter::StopSegmentTables() {

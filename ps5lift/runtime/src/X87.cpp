@@ -499,7 +499,6 @@ extern "C" std::uint32_t ps5lift_x87(Ps5LiftState* state, const std::uint32_t op
         std::memcpy(area, reinterpret_cast<const void*>(address), sizeof(area));
         std::uint32_t mxcsr;
         std::memcpy(&mxcsr, area + 24, 4);
-        if ((mxcsr & ~PS5LIFT_MXCSR_MASK) != 0) ps5lift_fail("fxrstor of MXCSR 0x%x, which sets reserved bits; the console raises #GP", mxcsr);
         std::memcpy(&state->X87Control, area, 2);
         std::memcpy(&state->X87Status, area + 2, 2);
         state->X87Valid = area[4];

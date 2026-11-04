@@ -139,24 +139,18 @@ void FunctionLifter::Divide(const bool isSigned) {
     auto* high = _builder.CreateTrunc(_builder.CreateLShr(dividend, bits), type);
     auto* minusOne = _builder.CreateICmpEQ(divisor, llvm::ConstantInt::getAllOnesValue(type));
     const auto block = [&](const char* name) { return llvm::BasicBlock::Create(Context(), name, _host); };
-    auto* nonzero = block("divide_nonzero");
     auto* narrow = block("divide_narrow");
     auto* wideDivide = block("divide_wide");
-    auto* fault = block("divide_error");
     auto* done = block("divide_done");
-    const auto unlikely = llvm::MDBuilder(Context()).createBranchWeights(1, 1u << 20);
-    _builder.CreateCondBr(_builder.CreateICmpEQ(divisor, llvm::ConstantInt::get(type, 0)), fault, nonzero, unlikely);
-
-    _builder.SetInsertPoint(nonzero);
+    const auto divideError = [&](llvm::Value* condition) { StopIf(condition, PS5LIFT_STOP_DIVIDE_ERROR, 0, Mnemonic()); };
+    divideError(_builder.CreateICmpEQ(divisor, llvm::ConstantInt::get(type, 0)));
     auto* extended = isSigned ? _builder.CreateAShr(low, bits - 1) : llvm::ConstantInt::get(type, 0);
     _builder.CreateCondBr(_builder.CreateICmpEQ(high, extended), narrow, wideDivide);
 
     _builder.SetInsertPoint(narrow);
     if (isSigned) {
         auto* overflow = _builder.CreateAnd(minusOne, _builder.CreateICmpEQ(low, llvm::ConstantInt::get(Context(), llvm::APInt::getSignedMinValue(bits))));
-        auto* divide = block("divide_narrow_signed");
-        _builder.CreateCondBr(overflow, fault, divide, unlikely);
-        _builder.SetInsertPoint(divide);
+        divideError(overflow);
     }
     auto* narrowQuotient = isSigned ? _builder.CreateSDiv(low, divisor) : _builder.CreateUDiv(low, divisor);
     auto* narrowRemainder = isSigned ? _builder.CreateSRem(low, divisor) : _builder.CreateURem(low, divisor);
@@ -174,9 +168,7 @@ void FunctionLifter::Divide(const bool isSigned) {
         fits = _builder.CreateICmpEQ(_builder.CreateSExt(_builder.CreateTrunc(wideQuotient, type), wide), wideQuotient);
     } else {
         fits = _builder.CreateICmpULT(high, divisor);
-        auto* divide = block("divide_wide_unsigned");
-        _builder.CreateCondBr(fits, divide, fault);
-        _builder.SetInsertPoint(divide);
+        divideError(_builder.CreateNot(fits));
         auto* wideDivisor = _builder.CreateZExt(divisor, wide);
         wideQuotient = _builder.CreateUDiv(dividend, wideDivisor);
         wideRemainder = _builder.CreateURem(dividend, wideDivisor);
@@ -184,12 +176,9 @@ void FunctionLifter::Divide(const bool isSigned) {
     }
     auto* quotientBits = _builder.CreateTrunc(wideQuotient, type);
     auto* remainderBits = _builder.CreateTrunc(wideRemainder, type);
+    if (fits != nullptr) divideError(_builder.CreateNot(fits));
     auto* wideEnd = _builder.GetInsertBlock();
-    if (fits != nullptr) _builder.CreateCondBr(fits, done, fault);
-    else _builder.CreateBr(done);
-
-    _builder.SetInsertPoint(fault);
-    Stop(PS5LIFT_STOP_DIVIDE_ERROR, 0, Mnemonic());
+    _builder.CreateBr(done);
 
     _builder.SetInsertPoint(done);
     auto* quotient = _builder.CreatePHI(type, 2);
