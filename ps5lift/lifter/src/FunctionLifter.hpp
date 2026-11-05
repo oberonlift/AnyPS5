@@ -105,6 +105,7 @@ private:
     std::size_t MmxOffset(const int index) const;
     bool HasRegisterOperand(int (*index)(ZydisRegister)) const;
     void EnterMmx();
+    void RaisePendingX87();
     llvm::Value* ReadRegister(const ZydisRegister reg);
     void WriteRegister(const ZydisRegister reg, llvm::Value* value);
     llvm::Value* Address(const ZydisDecodedOperand& operand, const bool applySegment = true);

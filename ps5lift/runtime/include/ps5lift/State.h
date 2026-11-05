@@ -92,7 +92,6 @@ enum Ps5LiftX87Operation {
     PS5LIFT_X87_DECREMENT_TOP,
     PS5LIFT_X87_INITIALIZE,
     PS5LIFT_X87_CLEAR_EXCEPTIONS,
-    PS5LIFT_X87_WAIT,
     PS5LIFT_X87_STORE_STATUS,
     PS5LIFT_X87_STORE_CONTROL,
     PS5LIFT_X87_LOAD_CONTROL,
@@ -155,7 +154,8 @@ enum Ps5LiftStopKind {
     PS5LIFT_STOP_MISSING_TRANSLATION = 5,
     PS5LIFT_STOP_SEGMENT_TABLES = 6,
     PS5LIFT_STOP_PAGE_FAULT = 7,
-    PS5LIFT_STOP_NEEDS_EXACT_FLOAT = 8
+    PS5LIFT_STOP_NEEDS_EXACT_FLOAT = 8,
+    PS5LIFT_STOP_X87_FLOATING_POINT = 9
 };
 
 enum Ps5LiftInvalidOpcode {
@@ -245,6 +245,9 @@ Ps5LiftFunction ps5lift_resolve_jump(Ps5LiftState* state, uint64_t target);
 
 void ps5lift_load_mxcsr(Ps5LiftState* state, uint32_t value, uint64_t address, const char* loader);
 uint32_t ps5lift_read_mxcsr(Ps5LiftState* state);
+#define PS5LIFT_X87_EXCEPTIONS 0x3fu
+#define PS5LIFT_X87_SUMMARY 0x80u
+#define PS5LIFT_X87_BUSY 0x8000u
 uint32_t ps5lift_x87(Ps5LiftState* state, uint32_t operation, uint32_t format, uint64_t address, uint32_t index);
 void ps5lift_extended_operation(Ps5LiftState* state, uint32_t operation, const void* left, const void* right, void* result);
 void ps5lift_extended_load(Ps5LiftState* state, uint32_t format, const void* source, void* result);

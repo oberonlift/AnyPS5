@@ -22,17 +22,18 @@ constexpr std::uint16_t StatusOverflow = 1u << 3;
 constexpr std::uint16_t StatusUnderflow = 1u << 4;
 constexpr std::uint16_t StatusPrecision = 1u << 5;
 constexpr std::uint16_t StatusStackFault = 1u << 6;
-constexpr std::uint16_t StatusSummary = 1u << 7;
 constexpr std::uint16_t StatusC0 = 1u << 8;
 constexpr std::uint16_t StatusC1 = 1u << 9;
 constexpr std::uint16_t StatusC2 = 1u << 10;
 constexpr std::uint16_t StatusC3 = 1u << 14;
-constexpr std::uint16_t StatusBusy = 1u << 15;
 constexpr std::uint16_t StatusConditions = StatusC0 | StatusC1 | StatusC2 | StatusC3;
 constexpr unsigned TopShift = 11;
 constexpr std::size_t FxStateBytes = 416;
 constexpr std::uint16_t InitialControl = 0x037f;
 
+std::uint16_t UnmaskedExceptions(const std::uint16_t status, const std::uint16_t control) {
+    return static_cast<std::uint16_t>(status & ~control & PS5LIFT_X87_EXCEPTIONS);
+}
 
 extFloat80_t ReadExtended(const void* source) {
     extFloat80_t value;
@@ -112,9 +113,7 @@ public:
         if (flags & softfloat_flag_underflow) raised |= StatusUnderflow;
         if (flags & softfloat_flag_inexact) raised |= StatusPrecision;
         raised |= _extra;
-        auto status = static_cast<std::uint16_t>(_state.X87Status | raised);
-        if ((status & ~_state.X87Control & 0x3f) != 0) status |= StatusSummary | StatusBusy;
-        _state.X87Status = status;
+        _state.X87Status = Ps5Lift::X87StatusWithSummary(static_cast<std::uint16_t>(_state.X87Status | raised), _state.X87Control);
     }
 
     unsigned Top() const { return (_state.X87Status >> TopShift) & 7; }
@@ -447,8 +446,18 @@ std::uint16_t TagWord(const Ps5LiftState& state) {
 
 }
 
+std::uint16_t Ps5Lift::X87StatusWithSummary(const std::uint16_t status, const std::uint16_t control) {
+    constexpr auto Summary = static_cast<std::uint16_t>(PS5LIFT_X87_SUMMARY | PS5LIFT_X87_BUSY);
+    return static_cast<std::uint16_t>(UnmaskedExceptions(status, control) != 0 ? status | Summary : status & ~Summary);
+}
+
+void Ps5Lift::LoadX87Control(Ps5LiftState& state, const std::uint16_t control) {
+    state.X87Control = control;
+    state.X87Status = X87StatusWithSummary(state.X87Status, control);
+}
+
 void Ps5Lift::RequireNoPendingX87Exceptions(const Ps5LiftState& state) {
-    const auto pending = state.X87Status & ~state.X87Control & 0x3fu;
+    const auto pending = UnmaskedExceptions(state.X87Status, state.X87Control);
     if (pending != 0) ps5lift_fail("fwait with unmasked x87 exceptions 0x%x pending; the console raises SIGFPE", pending);
 }
 
@@ -460,23 +469,23 @@ extern "C" std::uint32_t ps5lift_x87(Ps5LiftState* state, const std::uint32_t op
         state->X87Valid = 0;
         return 0;
     case PS5LIFT_X87_CLEAR_EXCEPTIONS:
-        state->X87Status = static_cast<std::uint16_t>(state->X87Status & 0x7f00);
-        return 0;
-    case PS5LIFT_X87_WAIT:
-        Ps5Lift::RequireNoPendingX87Exceptions(*state);
+        state->X87Status = Ps5Lift::X87StatusWithSummary(static_cast<std::uint16_t>(state->X87Status & ~(PS5LIFT_X87_EXCEPTIONS | StatusStackFault)), state->X87Control);
         return 0;
     case PS5LIFT_X87_STORE_STATUS:
         return state->X87Status;
     case PS5LIFT_X87_STORE_CONTROL:
         std::memcpy(reinterpret_cast<void*>(address), &state->X87Control, 2);
         return 0;
-    case PS5LIFT_X87_LOAD_CONTROL:
-        std::memcpy(&state->X87Control, reinterpret_cast<const void*>(address), 2);
+    case PS5LIFT_X87_LOAD_CONTROL: {
+        std::uint16_t control;
+        std::memcpy(&control, reinterpret_cast<const void*>(address), 2);
+        Ps5Lift::LoadX87Control(*state, control);
         return 0;
+    }
     case PS5LIFT_X87_STORE_ENVIRONMENT: {
         const std::uint32_t environment[7] = {0xffff0000u | state->X87Control, 0xffff0000u | state->X87Status, 0xffff0000u | TagWord(*state), 0, 0, 0, 0xffff0000u};
         std::memcpy(reinterpret_cast<void*>(address), environment, sizeof(environment));
-        state->X87Control = static_cast<std::uint16_t>(state->X87Control | 0x3f);
+        Ps5Lift::LoadX87Control(*state, static_cast<std::uint16_t>(state->X87Control | PS5LIFT_X87_EXCEPTIONS));
         return 0;
     }
     case PS5LIFT_X87_SAVE_STATE: {
@@ -498,7 +507,9 @@ extern "C" std::uint32_t ps5lift_x87(Ps5LiftState* state, const std::uint32_t op
         std::uint32_t mxcsr;
         std::memcpy(&mxcsr, area + 24, 4);
         std::memcpy(&state->X87Control, area, 2);
-        std::memcpy(&state->X87Status, area + 2, 2);
+        std::uint16_t status;
+        std::memcpy(&status, area + 2, 2);
+        state->X87Status = Ps5Lift::X87StatusWithSummary(status, state->X87Control);
         state->X87Valid = area[4];
         const unsigned top = (state->X87Status >> TopShift) & 7;
         for (unsigned index = 0; index < 8; ++index) {
@@ -513,7 +524,7 @@ extern "C" std::uint32_t ps5lift_x87(Ps5LiftState* state, const std::uint32_t op
         std::uint32_t environment[7];
         std::memcpy(environment, reinterpret_cast<const void*>(address), sizeof(environment));
         state->X87Control = static_cast<std::uint16_t>(environment[0]);
-        state->X87Status = static_cast<std::uint16_t>(environment[1]);
+        state->X87Status = Ps5Lift::X87StatusWithSummary(static_cast<std::uint16_t>(environment[1]), state->X87Control);
         std::uint8_t valid = 0;
         for (unsigned physical = 0; physical < 8; ++physical) {
             if (((environment[2] >> (2 * physical)) & 3) != 3) valid = static_cast<std::uint8_t>(valid | (1u << physical));

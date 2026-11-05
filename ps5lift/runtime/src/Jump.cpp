@@ -1,3 +1,5 @@
+#include "Runtime.hpp"
+
 #include <ps5lift/State.h>
 
 #include <cstddef>
@@ -49,7 +51,7 @@ void Jump(Ps5LiftState* state, const bool mask) {
     for (std::size_t i = 0; i < std::size(SavedRegisters); ++i) state->Gpr[SavedRegisters[i]] = Get<std::uint64_t>(buffer, 8 + 8 * i);
     state->Gpr[PS5LIFT_RAX] = value != 0 ? value : 1;
     ps5lift_load_mxcsr(state, Get<std::uint32_t>(buffer, 64), state->Rip, "longjmp");
-    state->X87Control = Get<std::uint16_t>(buffer, 68);
+    Ps5Lift::LoadX87Control(*state, Get<std::uint16_t>(buffer, 68));
     state->ResumeRip = Get<std::uint64_t>(buffer, 0);
     state->ResumeRsp = state->Gpr[PS5LIFT_RSP];
     state->ReturnSlot = 0;

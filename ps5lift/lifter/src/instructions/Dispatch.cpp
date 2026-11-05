@@ -458,7 +458,7 @@ case ZYDIS_MNEMONIC_##prefix##231##suffix: return FloatArithmetic({F::Fma, Eleme
     case ZYDIS_MNEMONIC_FDECSTP: CallX87(PS5LIFT_X87_DECREMENT_TOP, 0, nullptr, 0); return;
     case ZYDIS_MNEMONIC_FNINIT: CallX87(PS5LIFT_X87_INITIALIZE, 0, nullptr, 0); return;
     case ZYDIS_MNEMONIC_FNCLEX: CallX87(PS5LIFT_X87_CLEAR_EXCEPTIONS, 0, nullptr, 0); return;
-    case ZYDIS_MNEMONIC_FWAIT: CallX87(PS5LIFT_X87_WAIT, 0, nullptr, 0); return;
+    case ZYDIS_MNEMONIC_FWAIT: return;
     case ZYDIS_MNEMONIC_FNSTSW: return X87StoreStatus();
     case ZYDIS_MNEMONIC_FNSTCW: CallX87(PS5LIFT_X87_STORE_CONTROL, 0, X87Address(), 0); return;
     case ZYDIS_MNEMONIC_FLDCW: CallX87(PS5LIFT_X87_LOAD_CONTROL, 0, X87Address(), 0); return;

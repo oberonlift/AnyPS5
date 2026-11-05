@@ -303,6 +303,13 @@ void FunctionLifter::EnterMmx() {
     StateStore(_builder.getInt8(0xff), offsetof(Ps5LiftState, X87Valid));
 }
 
+void FunctionLifter::RaisePendingX87() {
+    auto* status = StateLoad(_builder.getInt16Ty(), offsetof(Ps5LiftState, X87Status));
+    auto* control = StateLoad(_builder.getInt16Ty(), offsetof(Ps5LiftState, X87Control));
+    auto* pending = _builder.CreateAnd(_builder.CreateAnd(status, _builder.CreateNot(control)), _builder.getInt16(PS5LIFT_X87_EXCEPTIONS));
+    StopIf(_builder.CreateICmpNE(pending, _builder.getInt16(0)), PS5LIFT_STOP_X87_FLOATING_POINT, 0, Mnemonic() + " with an unmasked x87 exception pending");
+}
+
 llvm::Value* FunctionLifter::ReadRegister(const ZydisRegister reg) {
     if (reg == ZYDIS_REGISTER_RIP) return _builder.getInt64(_instruction->Next());
     if (const auto mmx = MmxIndex(reg); mmx >= 0) return StateLoad(I64(), MmxOffset(mmx));
@@ -855,6 +862,7 @@ void FunctionLifter::EmitInstruction(const Instruction& instruction) {
     case InstructionGroup::SegmentTables:
         return StopSegmentTables();
     }
+    if (WaitsForX87(instruction.Info)) RaisePendingX87();
     try {
         CheckAlignment();
         EmitSemantics(instruction.Info.mnemonic);

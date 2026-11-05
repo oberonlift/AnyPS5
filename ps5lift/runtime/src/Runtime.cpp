@@ -106,6 +106,8 @@ void DefaultStopHandler(Ps5LiftState* state, const std::uint32_t kind, const std
         ps5lift_fail("page fault at 0x%" PRIx64 ": %s from unmapped memory", address, text);
     case PS5LIFT_STOP_NEEDS_EXACT_FLOAT:
         ps5lift_fail("--float fast stops at 0x%" PRIx64 ": %s", address, text);
+    case PS5LIFT_STOP_X87_FLOATING_POINT:
+        ps5lift_fail("x87 floating-point exception at 0x%" PRIx64 ": %s", address, text);
     default:
         ps5lift_fail("unknown stop kind %" PRIu32 " at 0x%" PRIx64, kind, address);
     }

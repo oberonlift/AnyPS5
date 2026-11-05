@@ -18,6 +18,7 @@ struct AlignmentRule {
 };
 
 InstructionGroup ClassifyInstruction(const ZydisDecodedInstruction& instruction, const ZydisDecodedOperand* operands);
+bool WaitsForX87(const ZydisDecodedInstruction& instruction);
 const ZydisDecodedOperand* MemoryOperand(const ZydisDecodedInstruction& instruction, const ZydisDecodedOperand* operands);
 AlignmentRule RequiredAlignment(const ZydisDecodedInstruction& instruction, const ZydisDecodedOperand* operands);
 
