@@ -2,7 +2,6 @@
 
 #include <lifter/InstructionSet.hpp>
 
-#include <llvm/IR/MDBuilder.h>
 #include <llvm/Transforms/Utils/LowerAtomic.h>
 
 #include <bit>
@@ -295,7 +294,7 @@ llvm::Value* FunctionLifter::LockedAccess(llvm::Value* address, const unsigned b
     auto* split = llvm::BasicBlock::Create(Context(), "split_lock", _host);
     auto* done = llvm::BasicBlock::Create(Context(), "locked_done", _host);
     auto* crosses = _builder.CreateICmpUGT(_builder.CreateAdd(_builder.CreateAnd(address, granule - 1), _builder.getInt64(bytes)), _builder.getInt64(granule));
-    _builder.CreateCondBr(crosses, split, whole, llvm::MDBuilder(Context()).createBranchWeights(1, 1u << 20));
+    _builder.CreateCondBr(crosses, split, whole, _module.Unlikely());
 
     _builder.SetInsertPoint(whole);
     auto* atomicOld = atomic();

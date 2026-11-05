@@ -5,8 +5,6 @@
 #include <lifter/Hex.hpp>
 #include <lifter/InstructionSet.hpp>
 
-#include <llvm/IR/MDBuilder.h>
-
 #include <algorithm>
 #include <cstddef>
 #include <initializer_list>
@@ -464,7 +462,7 @@ FunctionLifter::AlignmentSplit FunctionLifter::SplitOnAlignment(llvm::Value* add
     const AlignmentSplit split{llvm::BasicBlock::Create(Context(), "aligned", _host), llvm::BasicBlock::Create(Context(), "unaligned", _host),
         llvm::BasicBlock::Create(Context(), "ordered", _host)};
     auto* misaligned = _builder.CreateICmpNE(_builder.CreateAnd(address, _builder.getInt64(bits / 8 - 1)), _builder.getInt64(0));
-    _builder.CreateCondBr(misaligned, split.Unaligned, split.Aligned, llvm::MDBuilder(Context()).createBranchWeights(1, 1u << 20));
+    _builder.CreateCondBr(misaligned, split.Unaligned, split.Aligned, _module.Unlikely());
     return split;
 }
 
@@ -608,7 +606,7 @@ void FunctionLifter::CallGuest(llvm::Value* callee, const RegisterEffects& effec
     auto* returned = llvm::BasicBlock::Create(Context(), "returned", _host);
     auto* unwinding = _builder.CreateICmpNE(StateLoad(_builder.getInt8Ty(), offsetof(Ps5LiftState, Unwinding)), _builder.getInt8(0));
     auto* stopped = llvm::BasicBlock::Create(Context(), "unwinding", _host);
-    _builder.CreateCondBr(unwinding, stopped, returned, llvm::MDBuilder(Context()).createBranchWeights(1, 1u << 20));
+    _builder.CreateCondBr(unwinding, stopped, returned, _module.Unlikely());
     _builder.SetInsertPoint(stopped);
     auto* popped = llvm::BasicBlock::Create(Context(), "returned_popped", _host);
     auto* passed = llvm::BasicBlock::Create(Context(), "unwind_passes", _host);
@@ -634,7 +632,7 @@ void FunctionLifter::CallGuest(llvm::Value* callee, const RegisterEffects& effec
 void FunctionLifter::ResumeIfStackSwitched(llvm::Value* rsp, llvm::Value* popped) {
     auto* switched = llvm::BasicBlock::Create(Context(), "switched_stack", _host);
     auto* own = llvm::BasicBlock::Create(Context(), "own_stack", _host);
-    _builder.CreateCondBr(_builder.CreateICmpEQ(rsp, _entryRsp), own, switched, llvm::MDBuilder(Context()).createBranchWeights(1u << 20, 1));
+    _builder.CreateCondBr(_builder.CreateICmpNE(rsp, _entryRsp), switched, own, _module.Unlikely());
     _builder.SetInsertPoint(switched);
     StateStore(Load(rsp, 64, false), offsetof(Ps5LiftState, ResumeRip));
     StateStore(popped, offsetof(Ps5LiftState, ResumeRsp));
@@ -695,7 +693,7 @@ void FunctionLifter::JumpTo(llvm::Value* function) {
     auto* rsp = Gpr(PS5LIFT_RSP);
     auto* tail = llvm::BasicBlock::Create(Context(), "tail_call", _host);
     auto* switched = llvm::BasicBlock::Create(Context(), "switched_jump", _host);
-    _builder.CreateCondBr(_builder.CreateICmpEQ(rsp, _entryRsp), tail, switched, llvm::MDBuilder(Context()).createBranchWeights(1u << 20, 1));
+    _builder.CreateCondBr(_builder.CreateICmpNE(rsp, _entryRsp), switched, tail, _module.Unlikely());
     _builder.SetInsertPoint(tail);
     _builder.CreateCall(_module.GuestType(), function, {_state})->setTailCallKind(llvm::CallInst::TCK_MustTail);
     _builder.CreateRetVoid();
@@ -754,7 +752,7 @@ void FunctionLifter::Stop(const Ps5LiftStopKind kind, const std::uint64_t detail
 void FunctionLifter::StopIf(llvm::Value* condition, const Ps5LiftStopKind kind, const std::uint64_t detail, const std::string& text) {
     auto* stop = llvm::BasicBlock::Create(Context(), "stop", _host);
     auto* next = llvm::BasicBlock::Create(Context(), "continue", _host);
-    _builder.CreateCondBr(condition, stop, next, llvm::MDBuilder(Context()).createBranchWeights(1, 1u << 20));
+    _builder.CreateCondBr(condition, stop, next, _module.Unlikely());
     _builder.SetInsertPoint(stop);
     Stop(kind, detail, text);
     _builder.SetInsertPoint(next);
