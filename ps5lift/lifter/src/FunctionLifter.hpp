@@ -326,8 +326,7 @@ private:
     void MinimumPosition();
     void PermuteVariable(const unsigned element);
     void MaskedMove(const unsigned element);
-    void LoadMxcsr();
-    void CheckMxcsrLoad(llvm::Value* value);
+    void LoadMxcsr(llvm::Value* value);
     void StoreMxcsr();
     void DuplicateSingles(const bool high);
     void DuplicateDoubles();

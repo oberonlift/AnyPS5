@@ -1099,6 +1099,7 @@ KERNEL_IMPORTS = ["printf", "exit", "scePthreadCreate", "scePthreadJoin", "scePt
 FIBER_IMPORTS = ["printf", "fflush", "exit", "_sceFiberInitializeImpl", "sceFiberFinalize", "sceFiberRun", "sceFiberSwitch", "sceFiberReturnToThread", "sceFiberGetSelf",
                  "scePthreadCreate", "scePthreadJoin"]
 LOADER_IMPORTS = ["printf", "exit", "dlopen", "sceKernelGetExecutableModuleHandle", "sceKernelLoadStartModule", "sceKernelDlsym"]
+FAST_FLOAT_IMPORTS = ["printf", "fflush", "feenableexcept"]
 LOG_LINE = re.compile(r"^\[[^\]\s]+:\d+ [^\]]+\] .*\n", re.MULTILINE)
 GUEST_LINK = ["-no-pie", f"-Wl,--image-base={GUEST_BASE:#x}", "-Wl,--dynamic-linker=/lib64/ld-linux-x86-64.so.2"]
 LIBRARY_PROGRAM_TIMEOUT = 600
@@ -1108,6 +1109,12 @@ def build_libc_guest(args, work, optimization):
     build_host_library(args.clang, work)
     guest = build_stubbed_guest(args, work, optimization, "libc", LIBC_IMPORTS, LIBC_DATA_IMPORTS, ["host"])[0]
     return guest, False, [FIXTURES / "host_bridge.cpp"], []
+
+
+def build_fast_float_guest(args, work, optimization):
+    build_host_library(args.clang, work)
+    guest = build_stubbed_guest(args, work, optimization, "fast_float", FAST_FLOAT_IMPORTS, libraries=["host"])[0]
+    return guest, False, [FIXTURES / "host_bridge.cpp"], ["--float", "fast"]
 
 
 def build_exceptions_guest(args, work, optimization):
@@ -1155,8 +1162,9 @@ def build_loader_guest(args, work, optimization):
     return build_stubbed_guest(args, work, optimization, "loader", LOADER_IMPORTS, libraries=[f":{relative}"])
 
 
-LIBRARY_GUESTS = {"libc": build_libc_guest, "exceptions": build_exceptions_guest, "kernel": build_kernel_guest, "fiber": build_fiber_guest, "loader": build_loader_guest}
-GUEST_LIBRARIES = {"libc": ["libc"], "exceptions": ["libc"], "kernel": ["libc", "libkernel", "libkernel_sys"], "fiber": ["libc", "libkernel", "libSceFiber"], "loader": ["libc", "libkernel"]}
+LIBRARY_GUESTS = {"libc": build_libc_guest, "fast_float": build_fast_float_guest, "exceptions": build_exceptions_guest, "kernel": build_kernel_guest, "fiber": build_fiber_guest,
+                  "loader": build_loader_guest}
+GUEST_LIBRARIES = {"libc": ["libc"], "fast_float": ["libc"], "exceptions": ["libc"], "kernel": ["libc", "libkernel", "libkernel_sys"], "fiber": ["libc", "libkernel", "libSceFiber"], "loader": ["libc", "libkernel"]}
 
 
 def libc_fixture_command(args):

@@ -185,17 +185,18 @@ endforeach()
 execute_process(COMMAND ${Python3_EXECUTABLE} -c "import clang.cindex; clang.cindex.Index.create()"
         RESULT_VARIABLE PS5LIFT_LIBCLANG_PYTHON ERROR_VARIABLE PS5LIFT_LIBCLANG_PYTHON_ERROR OUTPUT_QUIET)
 if(NOT PS5LIFT_LIBCLANG_PYTHON EQUAL 0)
-    message(FATAL_ERROR "The libc, exceptions, kernel, fiber and loader tests generate bridges with the libclang Python bindings, "
+    message(FATAL_ERROR "The libc, fast_float, exceptions, kernel, fiber and loader tests generate bridges with the libclang Python bindings, "
             "which ${Python3_EXECUTABLE} cannot load:\n${PS5LIFT_LIBCLANG_PYTHON_ERROR}"
             "Install them (python3-clang-18 on Ubuntu) or configure with -DBUILD_TESTING=OFF.")
 endif()
 set(PS5LIFT_BRIDGES_libc libc)
+set(PS5LIFT_BRIDGES_fast_float libc)
 set(PS5LIFT_BRIDGES_exceptions libc)
 set(PS5LIFT_BRIDGES_kernel libc libkernel libkernel_sys)
 set(PS5LIFT_BRIDGES_fiber libc libkernel libSceFiber)
 set(PS5LIFT_BRIDGES_loader libc libkernel)
 set(PS5LIFT_TEST_BRIDGES)
-foreach(fixture libc exceptions kernel fiber loader)
+foreach(fixture libc fast_float exceptions kernel fiber loader)
     set(bridges ${CMAKE_BINARY_DIR}/test-bridges/${fixture}.cpp)
     set(libraries)
     foreach(library IN LISTS PS5LIFT_BRIDGES_${fixture})

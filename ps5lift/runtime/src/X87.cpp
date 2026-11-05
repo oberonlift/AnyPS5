@@ -507,9 +507,7 @@ extern "C" std::uint32_t ps5lift_x87(Ps5LiftState* state, const std::uint32_t op
             std::memset(reg + 10, 0, sizeof(state->X87Registers[0]) - 10);
         }
         for (unsigned reg = 0; reg < 16; ++reg) std::memcpy(state->Vector[reg], area + 160 + 16 * reg, 16);
-        state->Mxcsr = mxcsr;
-        ps5lift_apply_mxcsr(state);
-        return 0;
+        return mxcsr;
     }
     case PS5LIFT_X87_LOAD_ENVIRONMENT: {
         std::uint32_t environment[7];

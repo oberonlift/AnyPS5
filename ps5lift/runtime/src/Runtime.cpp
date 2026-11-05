@@ -46,6 +46,8 @@ std::uint64_t PageSize() {
     return static_cast<std::uint64_t>(sysconf(_SC_PAGESIZE));
 }
 
+void ApplyMxcsr(Ps5LiftState* state);
+
 std::atomic<Ps5LiftStopHandler> StopHandler{nullptr};
 std::mutex SplitLock;
 thread_local sigset_t SplitLockSignalMask;
@@ -266,7 +268,7 @@ void* RunMain(void* argument) {
     PrepareState(state, memory.Tls, ConsoleMxcsr);
     const auto top = StackTop(memory.Stack);
     BindThread(&state, memory);
-    ps5lift_apply_mxcsr(&state);
+    ApplyMxcsr(&state);
     const auto function = Ps5Lift::LookupFunction(entry);
     if (function == nullptr) ps5lift_fail("the program entry 0x%" PRIx64 " was not lifted", entry);
     static constexpr char ProgramName[] = "eboot.bin";
@@ -299,6 +301,7 @@ void StartMain(std::uint64_t& entry) {
 namespace {
 
 constexpr std::uint32_t MxcsrExceptions = 0x3f;
+constexpr std::uint32_t MxcsrExceptionMasks = 0x1f80;
 
 #if defined(__aarch64__)
 constexpr std::uint64_t FpsrBits[6] = {1u << 0, 1u << 7, 1u << 1, 1u << 2, 1u << 3, 1u << 4};
@@ -334,9 +337,7 @@ void SetHostExceptions(const std::uint32_t flags) {
 #endif
 }
 
-}
-
-extern "C" void ps5lift_apply_mxcsr(Ps5LiftState* state) {
+void ApplyMxcsr(Ps5LiftState* state) {
     if (!GuestEnvironmentLive()) return;
     const auto mxcsr = state->Mxcsr;
 #if defined(__aarch64__)
@@ -352,9 +353,27 @@ extern "C" void ps5lift_apply_mxcsr(Ps5LiftState* state) {
     if (mxcsr & (MxcsrDenormalsAreZero | MxcsrFlushToZero)) fpcr |= FlushToZero;
     __asm__ volatile("msr fpcr, %0" : : "r"(fpcr));
 #elif defined(__x86_64__)
-    _mm_setcsr((mxcsr & ~(MxcsrExceptions | PS5LIFT_MXCSR_MISALIGNED_SSE)) | 0x1f80u);
+    _mm_setcsr((mxcsr & ~(MxcsrExceptions | PS5LIFT_MXCSR_MISALIGNED_SSE)) | MxcsrExceptionMasks);
 #endif
     SetHostExceptions(mxcsr & MxcsrExceptions);
+}
+
+[[noreturn]] void StopMxcsrLoad(Ps5LiftState* state, const std::uint32_t kind, const std::uint64_t address, const char* loader, const char* reason) {
+    char text[256];
+    const int length = std::snprintf(text, sizeof(text), "%s %s", loader, reason);
+    if (length < 0 || static_cast<std::size_t>(length) >= sizeof(text)) ps5lift_fail("the stop of an MXCSR load at 0x%" PRIx64 " does not fit its message", address);
+    ps5lift_stop(state, kind, address, 0, text);
+}
+
+}
+
+extern "C" void ps5lift_load_mxcsr(Ps5LiftState* state, const std::uint32_t value, const std::uint64_t address, const char* loader) {
+    if ((value & ~PS5LIFT_MXCSR_MASK) != 0) StopMxcsrLoad(state, PS5LIFT_STOP_GENERAL_PROTECTION, address, loader, "loads a reserved MXCSR bit");
+    if (Ps5Lift::Program().FloatModel == PS5LIFT_FLOAT_FAST && (value & MxcsrExceptionMasks) != MxcsrExceptionMasks) {
+        StopMxcsrLoad(state, PS5LIFT_STOP_NEEDS_EXACT_FLOAT, address, loader, "unmasks a SIMD floating-point exception, which needs --float exact");
+    }
+    state->Mxcsr = value;
+    ApplyMxcsr(state);
 }
 
 extern "C" std::uint64_t ps5lift_read_tsc(void) {
@@ -601,7 +620,7 @@ extern "C" Ps5LiftState* ps5lift_enter_guest(void) {
     auto* state = ps5lift_current_state();
     if (Foreign != nullptr && Foreign->Entered++ == 0) {
         Foreign->Host = SaveHostFloatingPoint();
-        ps5lift_apply_mxcsr(state);
+        ApplyMxcsr(state);
     }
     return state;
 }

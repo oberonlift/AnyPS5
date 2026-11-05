@@ -81,11 +81,8 @@ void FunctionLifter::X87SaveState() {
 }
 
 void FunctionLifter::X87RestoreState() {
-    constexpr std::uint64_t mxcsrOffset = 24;
-    auto* address = X87Address();
-    CheckMxcsrLoad(GuestLoad(_builder.CreateAdd(address, _builder.getInt64(mxcsrOffset)), 32));
     Flush();
-    CallX87(PS5LIFT_X87_RESTORE_STATE, 0, address, 0);
+    LoadMxcsr(CallX87(PS5LIFT_X87_RESTORE_STATE, 0, X87Address(), 0));
     Reload();
 }
 

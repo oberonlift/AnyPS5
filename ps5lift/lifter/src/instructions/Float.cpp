@@ -429,19 +429,9 @@ void FunctionLifter::DotProduct(const unsigned element) {
     Write(0, FloatBits(result));
 }
 
-void FunctionLifter::CheckMxcsrLoad(llvm::Value* value) {
-    StopIf(_builder.CreateICmpNE(_builder.CreateAnd(value, ~PS5LIFT_MXCSR_MASK), _builder.getInt32(0)), PS5LIFT_STOP_GENERAL_PROTECTION, 0, Mnemonic() + " loads a reserved MXCSR bit");
-    if (ExactFloat()) return;
-    constexpr std::uint32_t exceptionMasks = 0x1f80;
-    StopIf(_builder.CreateICmpNE(_builder.CreateAnd(value, exceptionMasks), _builder.getInt32(exceptionMasks)), PS5LIFT_STOP_NEEDS_EXACT_FLOAT, 0,
-           Mnemonic() + " unmasks a SIMD floating-point exception, which needs --float exact");
-}
-
-void FunctionLifter::LoadMxcsr() {
-    auto* value = Read(0);
-    CheckMxcsrLoad(value);
-    StateStore(value, offsetof(Ps5LiftState, Mxcsr));
-    _builder.CreateCall(_module.Runtime("ps5lift_apply_mxcsr", llvm::FunctionType::get(_builder.getVoidTy(), {_module.Pointer()}, false)), {_state});
+void FunctionLifter::LoadMxcsr(llvm::Value* value) {
+    auto callee = _module.Runtime("ps5lift_load_mxcsr", llvm::FunctionType::get(_builder.getVoidTy(), {_module.Pointer(), _builder.getInt32Ty(), I64(), _module.Pointer()}, false));
+    _builder.CreateCall(callee, {_state, value, _builder.getInt64(_instruction->Address), _builder.CreateGlobalString(Mnemonic())});
 }
 
 void FunctionLifter::StoreMxcsr() {

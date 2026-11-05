@@ -1,0 +1,2 @@
+--float fast stops at 0x
+a native call unmasks a SIMD floating-point exception, which needs --float exact

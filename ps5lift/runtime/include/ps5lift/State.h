@@ -219,6 +219,11 @@ typedef struct Ps5LiftImage {
     uint64_t ExportCount;
 } Ps5LiftImage;
 
+enum Ps5LiftFloatModel {
+    PS5LIFT_FLOAT_EXACT = 0,
+    PS5LIFT_FLOAT_FAST = 1
+};
+
 typedef struct Ps5LiftProgram {
     const Ps5LiftImage* Images;
     uint64_t ImageCount;
@@ -227,6 +232,7 @@ typedef struct Ps5LiftProgram {
     const Ps5LiftFunctionEntry* Functions;
     uint64_t FunctionCount;
     uint64_t Entry;
+    uint64_t FloatModel;
 } Ps5LiftProgram;
 
 void ps5lift_use_program(const Ps5LiftProgram* program);
@@ -238,7 +244,7 @@ Ps5LiftFunction ps5lift_resolve_jump(Ps5LiftState* state, uint64_t target);
 #define PS5LIFT_MXCSR_MASK 0x2ffffu
 #define PS5LIFT_MXCSR_MISALIGNED_SSE 0x20000u
 
-void ps5lift_apply_mxcsr(Ps5LiftState* state);
+void ps5lift_load_mxcsr(Ps5LiftState* state, uint32_t value, uint64_t address, const char* loader);
 uint32_t ps5lift_read_mxcsr(Ps5LiftState* state);
 uint32_t ps5lift_x87(Ps5LiftState* state, uint32_t operation, uint32_t format, uint64_t address, uint32_t index);
 void ps5lift_extended_operation(Ps5LiftState* state, uint32_t operation, const void* left, const void* right, void* result);
