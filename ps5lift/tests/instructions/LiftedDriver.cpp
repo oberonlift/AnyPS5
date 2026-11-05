@@ -42,14 +42,14 @@ bool StopOutcome(const std::uint32_t kind, std::uint8_t* outcome) {
     }
 }
 
-void OnStop(Ps5LiftState* state, const std::uint32_t kind, const std::uint64_t address, const std::uint64_t detail, const char* mnemonic) {
+void OnStop(Ps5LiftState* state, const std::uint32_t kind, const std::uint64_t address, const std::uint64_t detail, const char* text) {
     if (!inCase) {
         ps5lift_set_stop_handler(nullptr);
-        ps5lift_stop(state, kind, address, detail, mnemonic);
+        ps5lift_stop(state, kind, address, detail, text);
     }
     std::uint8_t outcome = 0;
     if (!StopOutcome(kind, &outcome) || detail > UINT16_MAX) {
-        Fail("the runtime stopped %s at 0x%" PRIx64 " with kind %" PRIu32 " and detail 0x%" PRIx64 ", which no result holds", mnemonic, address, kind, detail);
+        Fail("the runtime stopped %s at 0x%" PRIx64 " with kind %" PRIu32 " and detail 0x%" PRIx64 ", which no result holds", text, address, kind, detail);
         std::_Exit(PS5LIFT_INSTRUCTION_DRIVER_FAILED);
     }
     const std::uint64_t data = kind == PS5LIFT_STOP_PAGE_FAULT ? address : 0;

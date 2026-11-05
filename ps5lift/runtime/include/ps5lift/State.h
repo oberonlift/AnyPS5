@@ -164,7 +164,7 @@ enum Ps5LiftInvalidOpcode {
 };
 
 typedef void (*Ps5LiftFunction)(Ps5LiftState*);
-typedef void (*Ps5LiftStopHandler)(Ps5LiftState*, uint32_t kind, uint64_t address, uint64_t detail, const char* mnemonic);
+typedef void (*Ps5LiftStopHandler)(Ps5LiftState*, uint32_t kind, uint64_t address, uint64_t detail, const char* text);
 
 typedef struct Ps5LiftFunctionEntry {
     uint64_t GuestAddress;
@@ -266,7 +266,7 @@ void ps5lift_split_lock_end(void);
 void ps5lift_cpuid(Ps5LiftState* state, uint64_t address);
 uint64_t ps5lift_xgetbv(uint64_t address, uint32_t index);
 [[noreturn, gnu::format(printf, 1, 2)]] void ps5lift_fail(const char* format, ...);
-[[noreturn]] void ps5lift_stop(Ps5LiftState* state, uint32_t kind, uint64_t address, uint64_t detail, const char* mnemonic);
+[[noreturn]] void ps5lift_stop(Ps5LiftState* state, uint32_t kind, uint64_t address, uint64_t detail, const char* text);
 void ps5lift_set_stop_handler(Ps5LiftStopHandler handler);
 void ps5lift_unknown_resume(Ps5LiftState* state, uint64_t function, uint64_t resume);
 void ps5lift_left_jump_table(Ps5LiftState* state, uint64_t address);
