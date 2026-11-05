@@ -29,6 +29,11 @@ extern "C" void ps5lift_import_host__clear__fs__base(Ps5LiftState* state) {
     state->FsBase = 0;
 }
 
+extern "C" void ps5lift_import_host__map__fixed(Ps5LiftState* state) {
+    auto* mapped = mmap(reinterpret_cast<void*>(state->Gpr[PS5LIFT_RDI]), state->Gpr[PS5LIFT_RSI], PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED_NOREPLACE, -1, 0);
+    state->Gpr[PS5LIFT_RAX] = reinterpret_cast<std::uint64_t>(mapped);
+}
+
 extern "C" void ps5lift_import_host__ticks(Ps5LiftState* state) {
     timespec time{};
     clock_gettime(CLOCK_MONOTONIC, &time);

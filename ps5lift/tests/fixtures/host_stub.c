@@ -25,3 +25,12 @@ void host_clear_fs_base(void) {
     long number = 158;
     __asm__ volatile("syscall" : "+a"(number) : "D"(0x1002), "S"(0) : "rcx", "r11", "memory");
 }
+
+void* host_map_fixed(unsigned long address, unsigned long bytes) {
+    register long flags __asm__("r10") = 0x100022;
+    register long descriptor __asm__("r8") = -1;
+    register long offset __asm__("r9") = 0;
+    long result;
+    __asm__ volatile("syscall" : "=a"(result) : "a"(9), "D"(address), "S"(bytes), "d"(3), "r"(flags), "r"(descriptor), "r"(offset) : "rcx", "r11", "memory");
+    return (void*)result;
+}
