@@ -236,12 +236,11 @@ extern "C" void GuestCpuCallInterrupted_nid_no_patch(const std::uint64_t target,
 }
 
 extern "C" void GuestCpuInterruptedContext_nid_no_patch(std::uint64_t* registers, std::uint64_t* flags) {
-    static constexpr unsigned FlagBits[PS5LIFT_FLAG_COUNT] = {0, 2, 4, 6, 7, 11, 10};
     const auto* state = ps5lift_current_state();
     for (int i = 0; i < 16; ++i) registers[i] = state->Gpr[DwarfRegisters[i]];
     registers[DwarfRip] = state->Rip;
-    std::uint64_t value = 0x202;
-    for (int i = 0; i < PS5LIFT_FLAG_COUNT; ++i) value |= static_cast<std::uint64_t>(state->Flags[i] & 1) << FlagBits[i];
+    std::uint64_t value = PS5LIFT_USER_MODE_RFLAGS;
+    for (int i = 0; i < PS5LIFT_FLAG_COUNT; ++i) value |= static_cast<std::uint64_t>(state->Flags[i] & 1) << PS5LIFT_RFLAGS_BIT[i];
     *flags = value;
 }
 

@@ -2,17 +2,8 @@
 
 #include <cstddef>
 #include <cstdint>
-#include <utility>
 
 namespace Ps5Lift::Lifting {
-
-namespace {
-
-constexpr std::uint64_t UserModeFlagImage = 0x202;
-constexpr std::pair<Ps5LiftFlag, unsigned> FlagImageBits[] = {
-    {PS5LIFT_CF, 0}, {PS5LIFT_PF, 2}, {PS5LIFT_AF, 4}, {PS5LIFT_ZF, 6}, {PS5LIFT_SF, 7}, {PS5LIFT_DF, 10}, {PS5LIFT_OF, 11}};
-
-}
 
 void FunctionLifter::RandomNumber() {
     auto* value = _builder.CreateCall(_module.Runtime("ps5lift_random", llvm::FunctionType::get(I64(), false)));
@@ -37,8 +28,9 @@ void FunctionLifter::TimeStampAndProcessor() {
 }
 
 llvm::Value* FunctionLifter::FlagImage(const unsigned bits) {
-    llvm::Value* image = Const(bits, UserModeFlagImage);
-    for (const auto& [flag, bit] : FlagImageBits) {
+    llvm::Value* image = Const(bits, PS5LIFT_USER_MODE_RFLAGS);
+    for (int flag = 0; flag < PS5LIFT_FLAG_COUNT; ++flag) {
+        const unsigned bit = PS5LIFT_RFLAGS_BIT[flag];
         if (bit < bits) image = _builder.CreateOr(image, _builder.CreateShl(_builder.CreateZExt(Flag(flag), Int(bits)), bit));
     }
     return image;
@@ -46,7 +38,8 @@ llvm::Value* FunctionLifter::FlagImage(const unsigned bits) {
 
 void FunctionLifter::SetFlagsFromImage(llvm::Value* image) {
     const auto bits = image->getType()->getIntegerBitWidth();
-    for (const auto& [flag, bit] : FlagImageBits) {
+    for (int flag = 0; flag < PS5LIFT_FLAG_COUNT; ++flag) {
+        const unsigned bit = PS5LIFT_RFLAGS_BIT[flag];
         if (bit < bits) SetFlag(flag, _builder.CreateTrunc(_builder.CreateLShr(image, bit), _builder.getInt1Ty()));
     }
 }

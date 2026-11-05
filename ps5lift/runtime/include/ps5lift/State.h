@@ -39,6 +39,9 @@ enum Ps5LiftFlag {
     PS5LIFT_FLAG_COUNT
 };
 
+#define PS5LIFT_USER_MODE_RFLAGS 0x202u
+static const uint8_t PS5LIFT_RFLAGS_BIT[PS5LIFT_FLAG_COUNT] = {0, 2, 4, 6, 7, 11, 10};
+
 typedef struct Ps5LiftState {
     uint64_t Gpr[PS5LIFT_GPR_COUNT];
     uint64_t Rip;
