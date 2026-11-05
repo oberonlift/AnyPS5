@@ -426,10 +426,10 @@ void StopIfUnmapped(Ps5LiftState* state, const std::uint64_t address) {
 
 }
 
-extern "C" Ps5LiftFunction ps5lift_resolve(const std::uint64_t target) {
+extern "C" Ps5LiftFunction ps5lift_resolve(Ps5LiftState* state, const std::uint64_t target) {
     const auto function = Ps5Lift::LookupFunction(target);
     if (function != nullptr) return function;
-    StopIfUnmapped(ps5lift_current_state(), target);
+    StopIfUnmapped(state, target);
     ps5lift_fail("indirect branch to 0x%" PRIx64 ", which was not lifted", target);
 }
 
@@ -466,7 +466,7 @@ extern "C" void ps5lift_fail_unresumed(const Ps5LiftState* state, const char* fr
 }
 
 extern "C" void ps5lift_dispatch(Ps5LiftState* state, const std::uint64_t target) {
-    ps5lift_resolve(target)(state);
+    ps5lift_resolve(state, target)(state);
 }
 
 extern "C" void ps5lift_fail(const char* format, ...) {
