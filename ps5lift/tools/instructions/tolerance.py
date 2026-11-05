@@ -12,7 +12,7 @@ the tangent in ST(1) under an exact 1.0, which is no approximation. It gives Non
 instruction's documented range, or for an operand or result that is no normal number (NaN, infinity, zero, denormal,
 an unnormal encoding, or a result past the extended range): such a case is compared exactly. `within_ulp` accepts the
 reference and the extended values next to it, one unit in the last place of the 64-bit format on either side, across a
-binade boundary too.
+binade boundary too. `pi` gives π at the precision of the current `decimal` context.
 
 `special_product` tells whether a product `dpps` or `dppd` adds is a NaN or an infinity, as the `sse41` fixture judges
 it: an operand is a NaN or an infinity, or the exact product of two finite operands rounds past the largest finite value
@@ -157,7 +157,7 @@ def _round_extended(value, rounding):
     return sign | biased << _EXTENDED_SIGNIFICAND_BITS | significand << _EXTENDED_SIGNIFICAND_BITS - precision
 
 
-def _pi():
+def pi():
     with localcontext() as context:
         context.prec += 2
         total, previous, term = Decimal(3), 0, Decimal(3)
@@ -194,7 +194,7 @@ def _cosine_series(x):
 def _sine_cosine(x):
     with localcontext() as context:
         context.prec += _REDUCTION_DIGITS
-        half_pi = _pi() / 2
+        half_pi = pi() / 2
         quadrant = (x / half_pi).to_integral_value(ROUND_HALF_EVEN)
         reduced = x - quadrant * half_pi
     sine, cosine = _sine_series(reduced), _cosine_series(reduced)
@@ -205,7 +205,7 @@ def _arctangent(t):
     if t < 0:
         return -_arctangent(-t)
     if t > 1:
-        return _pi() / 2 - _arctangent(1 / t)
+        return pi() / 2 - _arctangent(1 / t)
     halvings = 0
     while t > _ATAN_STEP:
         t = t / (1 + (1 + t * t).sqrt())
@@ -235,7 +235,7 @@ def _true_results(mnemonic, x, y):
     if mnemonic == "fpatan":
         angle = _arctangent(y / x)
         if x < 0:
-            angle += _pi() if y > 0 else -_pi()
+            angle += pi() if y > 0 else -pi()
         return (angle,)
     if mnemonic == "fyl2x":
         return (y * x.ln() / Decimal(2).ln(),) if x > 0 else None
