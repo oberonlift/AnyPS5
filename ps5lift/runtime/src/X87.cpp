@@ -729,12 +729,6 @@ extern "C" void ps5lift_extended_operation(Ps5LiftState* state, const std::uint3
     StoreMemory(fpu, PS5LIFT_X87_FLOAT80, reinterpret_cast<std::uint64_t>(result), Compute(fpu, operation, first, second));
 }
 
-extern "C" void ps5lift_extended_load(Ps5LiftState* state, const std::uint32_t format, const void* source, void* result) {
-    Fpu fpu(state);
-    fpu.ClearRoundedUp();
-    StoreMemory(fpu, PS5LIFT_X87_FLOAT80, reinterpret_cast<std::uint64_t>(result), LoadMemory(fpu, format, reinterpret_cast<std::uint64_t>(source)));
-}
-
 extern "C" void ps5lift_extended_store(Ps5LiftState* state, const std::uint32_t format, const void* value, void* destination) {
     Fpu fpu(state);
     fpu.ClearRoundedUp();

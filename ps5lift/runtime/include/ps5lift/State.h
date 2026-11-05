@@ -250,7 +250,6 @@ uint32_t ps5lift_read_mxcsr(Ps5LiftState* state);
 #define PS5LIFT_X87_BUSY 0x8000u
 uint32_t ps5lift_x87(Ps5LiftState* state, uint32_t operation, uint32_t format, uint64_t address, uint32_t index);
 void ps5lift_extended_operation(Ps5LiftState* state, uint32_t operation, const void* left, const void* right, void* result);
-void ps5lift_extended_load(Ps5LiftState* state, uint32_t format, const void* source, void* result);
 void ps5lift_extended_store(Ps5LiftState* state, uint32_t format, const void* value, void* destination);
 #if LDBL_MANT_DIG == 64 || LDBL_MANT_DIG == 113
 #define PS5LIFT_HOST_LONG_DOUBLE_HOLDS_EXTENDED
