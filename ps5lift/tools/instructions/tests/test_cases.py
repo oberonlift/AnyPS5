@@ -24,6 +24,9 @@ MEMORY_TYPES = frozenset({"mem", "mem_vsibx", "mem_vsiby", "moffs", "implicit_me
 X87_ELEMENTS = frozenset({"float80", "bcd80"})
 X87_STATE_FLAGS = frozenset({"fpu_state_cr", "fpu_state_cw"})
 X87_CONTROL_PAIRS = frozenset((precision, rounding) for precision in (0, 2, 3) for rounding in range(4))
+FX_DEFAULT_FCW = 0x037F
+MMX_PENDING_FCW = 0x037E
+MMX_PENDING_FSW = 0x8081
 STACK_MARGIN = 512
 IMPLICIT_BASES = {"si": 6, "di": 7, "bx": 3, "bp": 5, "sp": 4}
 MASK64 = 2**64 - 1
@@ -102,13 +105,24 @@ def _accesses_memory(form):
     )
 
 
-def _is_x87(form):
+def _is_mmx(form):
     definition = form.definition
-    types = {operand["operand_type"] for operand in definition.operands}
-    elements = {operand.get("element_type") for operand in definition.operands}
-    if definition.extension == "MMX" or "mmx" in types:
+    return definition.extension == "MMX" or any(operand["operand_type"] == "mmx" for operand in definition.operands)
+
+
+def _is_x87(form):
+    if _is_mmx(form):
         return False
+    definition = form.definition
+    elements = {operand.get("element_type") for operand in definition.operands}
     return definition.extension == "X87" or bool(elements & X87_ELEMENTS) or bool(definition.flags & X87_STATE_FLAGS)
+
+
+def _form_schedules(instances, group, group_specs):
+    schedules = defaultdict(list)
+    for spec in group_specs:
+        schedules[instances[group][spec.instance].form.key].append(spec)
+    return schedules
 
 
 def _set_groups(instances, specs):
@@ -331,10 +345,7 @@ class CasesTest(unittest.TestCase):
         forms, instances, specs = generated()
         checked = 0
         for group, group_specs in _set_groups(instances, specs):
-            schedules = defaultdict(list)
-            for spec in group_specs:
-                schedules[instances[group][spec.instance].form.key].append(spec)
-            for key, schedule in schedules.items():
+            for key, schedule in _form_schedules(instances, group, group_specs).items():
                 if not _is_x87(instances[group][schedule[0].instance].form):
                     continue
                 checked += 1
@@ -342,6 +353,19 @@ class CasesTest(unittest.TestCase):
                 self.assertEqual({status >> 11 & 7 for _, status in states}, set(range(8)), key)
                 controls = {(control >> 8 & 3, control >> 10 & 3) for control, _ in states}
                 self.assertEqual(controls, X87_CONTROL_PAIRS, key)
+        self.assertGreater(checked, 0)
+
+    def test_mmx_forms_run_one_pending_case(self):
+        forms, instances, specs = generated()
+        checked = 0
+        for group, group_specs in _set_groups(instances, specs):
+            for key, schedule in _form_schedules(instances, group, group_specs).items():
+                if not _is_mmx(instances[group][schedule[0].instance].form):
+                    continue
+                checked += 1
+                states = [struct.unpack_from("<HH", spec.x87, records.FX_FCW) for spec in schedule]
+                others = [state for state in states if state != (FX_DEFAULT_FCW, 0)]
+                self.assertEqual(others, [(MMX_PENDING_FCW, MMX_PENDING_FSW)], key)
         self.assertGreater(checked, 0)
 
     def test_unknown_implicit_register_names_the_form(self):
