@@ -198,10 +198,17 @@ def _page_fault(case, address, data):
     return Result(case.spec.index, Outcome.PAGE_FAULT, 0, address, data, {}, {}, None)
 
 
-def _store_low(case, size):
-    address = operand_address(case, 0)
+def _guard_fault(case, address, size):
     if address + size > case.layout.guard:
         return _page_fault(case, case.address, max(address, case.layout.guard))
+    return None
+
+
+def _store_low(case, size):
+    address = operand_address(case, 0)
+    fault = _guard_fault(case, address, size)
+    if fault is not None:
+        return fault
     final = _Final.completed(case)
     start = final.offset(address, size)
     vector = records.ymm_offset(_vector(case, 1))
@@ -227,9 +234,9 @@ def _near_branch16(case):
     if relative not in _REL16:
         raise ExpectationError(f"{_key(case)}: its target lies {relative:#x} from its end, beyond a rel16")
     if case.instance.shape is Shape.CALL:
-        pushed = register_value(case.input.slot, "rsp") - _SHORT_RETURN_BYTES
-        if pushed + _SHORT_RETURN_BYTES > case.layout.guard:
-            return _page_fault(case, case.address, max(pushed, case.layout.guard))
+        fault = _guard_fault(case, register_value(case.input.slot, "rsp") - _SHORT_RETURN_BYTES, _SHORT_RETURN_BYTES)
+        if fault is not None:
+            return fault
     if not _taken(case):
         return _Final.completed(case, records.PATH_NOT_TAKEN).result()
     target = end + relative & _SHORT_TARGET
@@ -242,8 +249,9 @@ def _unchanged(case):
 
 def _clear_line(case):
     line = register_value(case.input.slot, "rax") & ~(_CACHE_LINE - 1)
-    if line + _CACHE_LINE > case.layout.guard:
-        return _page_fault(case, case.address, max(line, case.layout.guard))
+    fault = _guard_fault(case, line, _CACHE_LINE)
+    if fault is not None:
+        return fault
     final = _Final.completed(case)
     start = final.offset(line, _CACHE_LINE)
     final.block[start:start + _CACHE_LINE] = bytes(_CACHE_LINE)
