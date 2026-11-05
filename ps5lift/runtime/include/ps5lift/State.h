@@ -238,7 +238,6 @@ typedef struct Ps5LiftProgram {
 void ps5lift_use_program(const Ps5LiftProgram* program);
 
 void ps5lift_dispatch(Ps5LiftState* state, uint64_t target);
-Ps5LiftFunction ps5lift_resolve(Ps5LiftState* state, uint64_t target);
 Ps5LiftFunction ps5lift_resolve_jump(Ps5LiftState* state, uint64_t target);
 [[noreturn]] void ps5lift_fail_unresumed(const Ps5LiftState* state, const char* frames);
 #define PS5LIFT_MXCSR_MASK 0x2ffffu
