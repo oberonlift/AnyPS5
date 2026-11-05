@@ -242,9 +242,9 @@ void FunctionLifter::BitField(const bool insert) {
         lengthBits = control;
         indexBits = _builder.CreateLShr(control, 8);
     }
-    auto* length = _builder.CreateAnd(_builder.CreateSub(lengthBits, _builder.getInt64(1)), _builder.getInt64(63));
+    auto* lastBit = _builder.CreateAnd(_builder.CreateSub(lengthBits, _builder.getInt64(1)), _builder.getInt64(63));
     auto* index = _builder.CreateAnd(indexBits, _builder.getInt64(63));
-    auto* field = _builder.CreateLShr(_builder.getInt64(~std::uint64_t{0}), _builder.CreateSub(_builder.getInt64(63), length));
+    auto* field = _builder.CreateLShr(_builder.getInt64(~std::uint64_t{0}), _builder.CreateSub(_builder.getInt64(63), lastBit));
     auto* destination = ReadVector(0, 128);
     auto* low = _builder.CreateTrunc(destination, I64());
     llvm::Value* result = nullptr;

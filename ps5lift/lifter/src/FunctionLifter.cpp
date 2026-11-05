@@ -354,10 +354,10 @@ llvm::Value* FunctionLifter::IndexedAddress(const ZydisDecodedOperand& operand, 
     if (operand.mem.base != ZYDIS_REGISTER_NONE) address = _builder.CreateAdd(address, ReadRegister(operand.mem.base));
     if (index != nullptr) address = _builder.CreateAdd(address, _builder.CreateMul(_builder.CreateSExtOrTrunc(index, Int(width)), Const(width, operand.mem.scale)));
     address = _builder.CreateZExt(address, I64());
-    return applySegment ? SegmentBase(address, operand.mem.segment) : address;
+    return applySegment ? ApplySegment(address, operand.mem.segment) : address;
 }
 
-llvm::Value* FunctionLifter::SegmentBase(llvm::Value* address, const ZydisRegister segment) {
+llvm::Value* FunctionLifter::ApplySegment(llvm::Value* address, const ZydisRegister segment) {
     if (segment == ZYDIS_REGISTER_FS) return _builder.CreateAdd(address, StateLoad(I64(), offsetof(Ps5LiftState, FsBase)));
     if (segment == ZYDIS_REGISTER_GS) return _builder.CreateAdd(address, StateLoad(I64(), offsetof(Ps5LiftState, GsBase)));
     return address;

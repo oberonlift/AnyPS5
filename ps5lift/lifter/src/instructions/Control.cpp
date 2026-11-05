@@ -57,7 +57,7 @@ void FunctionLifter::TableLookup() {
     const auto& table = Operand(0);
     const auto width = _instruction->Info.address_width;
     auto* index = _builder.CreateAdd(ReadRegister(table.mem.base), _builder.CreateZExt(ReadRegister(ZYDIS_REGISTER_AL), Int(width)));
-    auto* address = SegmentBase(_builder.CreateZExt(index, I64()), table.mem.segment);
+    auto* address = ApplySegment(_builder.CreateZExt(index, I64()), table.mem.segment);
     Write(1, Load(address, 8, NeedsOrdering(table, 8)));
 }
 

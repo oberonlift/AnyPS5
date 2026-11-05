@@ -17,8 +17,8 @@ void FunctionLifter::Shift(const ZydisMnemonic mnemonic) {
     llvm::Value* result = nullptr;
     llvm::Value* carry = nullptr;
     llvm::Value* overflow = nullptr;
-    const bool left = mnemonic == ZYDIS_MNEMONIC_ROL || mnemonic == ZYDIS_MNEMONIC_RCL;
-    const bool rotate = left || mnemonic == ZYDIS_MNEMONIC_ROR || mnemonic == ZYDIS_MNEMONIC_RCR;
+    const bool rotateLeft = mnemonic == ZYDIS_MNEMONIC_ROL || mnemonic == ZYDIS_MNEMONIC_RCL;
+    const bool rotate = rotateLeft || mnemonic == ZYDIS_MNEMONIC_ROR || mnemonic == ZYDIS_MNEMONIC_RCR;
     if (mnemonic == ZYDIS_MNEMONIC_SHL) {
         auto* wide = _builder.CreateShl(_builder.CreateZExt(value, Int(128)), wideCount);
         result = _builder.CreateTrunc(wide, Int(bits));
@@ -36,21 +36,21 @@ void FunctionLifter::Shift(const ZydisMnemonic mnemonic) {
         overflow = _builder.getFalse();
     } else if (mnemonic == ZYDIS_MNEMONIC_ROL || mnemonic == ZYDIS_MNEMONIC_ROR) {
         auto* amount = _builder.CreateZExtOrTrunc(_builder.CreateURem(count, _builder.getInt8(bits)), Int(bits));
-        result = _builder.CreateIntrinsic(left ? llvm::Intrinsic::fshl : llvm::Intrinsic::fshr, {Int(bits)}, {value, value, amount});
-        carry = left ? _builder.CreateTrunc(result, _builder.getInt1Ty()) : SignBit(result);
+        result = _builder.CreateIntrinsic(rotateLeft ? llvm::Intrinsic::fshl : llvm::Intrinsic::fshr, {Int(bits)}, {value, value, amount});
+        carry = rotateLeft ? _builder.CreateTrunc(result, _builder.getInt1Ty()) : SignBit(result);
     } else if (mnemonic == ZYDIS_MNEMONIC_RCL || mnemonic == ZYDIS_MNEMONIC_RCR) {
         const auto span = bits + 1;
         auto* wide = _builder.CreateZExt(ConcatenateIntegers(value, Flag(PS5LIFT_CF)), Int(128));
         auto* amount = _builder.CreateZExt(_builder.CreateURem(count, _builder.getInt8(span)), Int(128));
         auto* back = _builder.CreateSub(llvm::ConstantInt::get(Int(128), span), amount);
-        auto* rotated = left ? _builder.CreateOr(_builder.CreateShl(wide, amount), _builder.CreateLShr(wide, back))
+        auto* rotated = rotateLeft ? _builder.CreateOr(_builder.CreateShl(wide, amount), _builder.CreateLShr(wide, back))
                              : _builder.CreateOr(_builder.CreateLShr(wide, amount), _builder.CreateShl(wide, back));
         result = _builder.CreateTrunc(rotated, Int(bits));
         carry = _builder.CreateTrunc(_builder.CreateLShr(rotated, bits), _builder.getInt1Ty());
     } else {
         UnexpectedMnemonic("Shift", mnemonic);
     }
-    if (rotate) overflow = _builder.CreateXor(SignBit(result), left ? carry : _builder.CreateTrunc(_builder.CreateLShr(result, bits - 2), _builder.getInt1Ty()));
+    if (rotate) overflow = _builder.CreateXor(SignBit(result), rotateLeft ? carry : _builder.CreateTrunc(_builder.CreateLShr(result, bits - 2), _builder.getInt1Ty()));
     Write(0, result);
     SetFlag(PS5LIFT_CF, _builder.CreateSelect(zero, Flag(PS5LIFT_CF), carry));
     SetFlag(PS5LIFT_OF, _builder.CreateSelect(zero, Flag(PS5LIFT_OF), overflow));
@@ -165,23 +165,19 @@ void FunctionLifter::Divide(const bool isSigned) {
     _builder.SetInsertPoint(wideDivide);
     llvm::Value* wideQuotient = nullptr;
     llvm::Value* wideRemainder = nullptr;
-    llvm::Value* fits = nullptr;
     if (isSigned) {
         auto* safeDivisor = _builder.CreateSelect(minusOne, llvm::ConstantInt::get(wide, 1), _builder.CreateSExt(divisor, wide));
         wideQuotient = _builder.CreateSelect(minusOne, _builder.CreateNeg(dividend), _builder.CreateSDiv(dividend, safeDivisor));
         wideRemainder = _builder.CreateSelect(minusOne, llvm::ConstantInt::get(wide, 0), _builder.CreateSRem(dividend, safeDivisor));
-        fits = _builder.CreateICmpEQ(_builder.CreateSExt(_builder.CreateTrunc(wideQuotient, type), wide), wideQuotient);
+        divideError(_builder.CreateICmpNE(_builder.CreateSExt(_builder.CreateTrunc(wideQuotient, type), wide), wideQuotient));
     } else {
-        fits = _builder.CreateICmpULT(high, divisor);
-        divideError(_builder.CreateNot(fits));
+        divideError(_builder.CreateICmpUGE(high, divisor));
         auto* wideDivisor = _builder.CreateZExt(divisor, wide);
         wideQuotient = _builder.CreateUDiv(dividend, wideDivisor);
         wideRemainder = _builder.CreateURem(dividend, wideDivisor);
-        fits = nullptr;
     }
     auto* quotientBits = _builder.CreateTrunc(wideQuotient, type);
     auto* remainderBits = _builder.CreateTrunc(wideRemainder, type);
-    if (fits != nullptr) divideError(_builder.CreateNot(fits));
     auto* wideEnd = _builder.GetInsertBlock();
     _builder.CreateBr(done);
 

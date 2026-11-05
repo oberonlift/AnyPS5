@@ -109,7 +109,7 @@ private:
     void WriteRegister(const ZydisRegister reg, llvm::Value* value);
     llvm::Value* Address(const ZydisDecodedOperand& operand, const bool applySegment = true);
     llvm::Value* IndexedAddress(const ZydisDecodedOperand& operand, llvm::Value* index, const bool applySegment = true);
-    llvm::Value* SegmentBase(llvm::Value* address, const ZydisRegister segment);
+    llvm::Value* ApplySegment(llvm::Value* address, const ZydisRegister segment);
     bool NeedsOrdering(const ZydisDecodedOperand& operand, const unsigned bits) const;
     bool InPrivateFrame(const ZydisDecodedOperand& operand) const;
     bool InReadOnlySegment(const ZydisDecodedOperand& operand, const unsigned bits) const;
