@@ -403,7 +403,7 @@ case ZYDIS_MNEMONIC_##prefix##231##suffix: return FloatArithmetic({F::Fma, Eleme
     PS5LIFT_BOTH(COMISD): PS5LIFT_BOTH(UCOMISD): return CompareScalar(64);
     PS5LIFT_BOTH(DPPS): return DotProduct(32);
     PS5LIFT_BOTH(DPPD): return DotProduct(64);
-    PS5LIFT_BOTH(LDMXCSR): return LoadMxcsr(Read(0));
+    PS5LIFT_BOTH(LDMXCSR): return LoadMxcsrOperand();
     PS5LIFT_BOTH(STMXCSR): return StoreMxcsr();
 
     case ZYDIS_MNEMONIC_FLD: CallX87(PS5LIFT_X87_LOAD, X87Format(false), X87Address(), X87Index(0)); return;
