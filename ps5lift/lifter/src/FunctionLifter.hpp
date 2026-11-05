@@ -105,6 +105,7 @@ private:
     std::size_t MmxOffset(const int index) const;
     bool HasRegisterOperand(int (*index)(ZydisRegister)) const;
     void EnterMmx();
+    void LeaveMmx();
     void RaisePendingX87();
     llvm::Value* ReadRegister(const ZydisRegister reg);
     void WriteRegister(const ZydisRegister reg, llvm::Value* value);
@@ -364,7 +365,6 @@ private:
     llvm::Value* FlagImage(const unsigned bits);
     void SetFlagsFromImage(llvm::Value* image);
     void PopFlags();
-    void LeaveMmx();
     void CacheLine(const char* function);
     void ClearCacheLine();
     void Cpuid();

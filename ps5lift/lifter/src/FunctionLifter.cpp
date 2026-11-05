@@ -298,9 +298,15 @@ bool FunctionLifter::HasRegisterOperand(int (*index)(ZydisRegister)) const {
 }
 
 void FunctionLifter::EnterMmx() {
+    RaisePendingX87();
     constexpr std::uint16_t Top = 7 << 11;
     StateStore(_builder.CreateAnd(StateLoad(_builder.getInt16Ty(), offsetof(Ps5LiftState, X87Status)), _builder.getInt16(static_cast<std::uint16_t>(~Top))), offsetof(Ps5LiftState, X87Status));
     StateStore(_builder.getInt8(0xff), offsetof(Ps5LiftState, X87Valid));
+}
+
+void FunctionLifter::LeaveMmx() {
+    RaisePendingX87();
+    StateStore(_builder.getInt8(0), offsetof(Ps5LiftState, X87Valid));
 }
 
 void FunctionLifter::RaisePendingX87() {
