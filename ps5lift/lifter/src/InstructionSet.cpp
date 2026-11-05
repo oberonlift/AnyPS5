@@ -1,6 +1,8 @@
 #include <lifter/InstructionSet.hpp>
 
 #include <cstdint>
+#include <stdexcept>
+#include <string>
 
 namespace Ps5Lift {
 
@@ -75,7 +77,8 @@ AlignmentRule RequiredAlignment(const ZydisDecodedInstruction& instruction, cons
     case ZYDIS_EXCEPTION_CLASS_SSE1: case ZYDIS_EXCEPTION_CLASS_AVX1:
         return {bytes, false};
     case ZYDIS_EXCEPTION_CLASS_SSE2: case ZYDIS_EXCEPTION_CLASS_SSE4:
-        return {bytes, true};
+        if (bytes != 16) throw std::logic_error(std::string(ZydisMnemonicGetString(instruction.mnemonic)) + " has a " + std::to_string(bytes) + "-byte memory operand in an SSE exception class whose alignment applies to 16-byte operands");
+        return {16, true};
     default:
         return unaligned;
     }
