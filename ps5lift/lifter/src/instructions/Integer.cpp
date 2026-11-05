@@ -1,7 +1,5 @@
 #include "../FunctionLifter.hpp"
 
-#include <lifter/InstructionSet.hpp>
-
 #include <llvm/Transforms/Utils/LowerAtomic.h>
 
 #include <bit>
@@ -281,9 +279,7 @@ llvm::Value* FunctionLifter::BitStringAddress(llvm::Value* offset) {
 }
 
 bool FunctionLifter::MaySplit(const unsigned bits) const {
-    if (!_module.Triple().isAArch64() || bits == 8) return false;
-    const auto rule = RequiredAlignment(_instruction->Info, _instruction->Operands.data());
-    return rule.RelaxedByMisalignedSse || rule.Bytes * 8 < bits;
+    return _module.Triple().isAArch64() && CheckedAlignment().value() * 8 < bits;
 }
 
 llvm::Value* FunctionLifter::LockedAccess(llvm::Value* address, const unsigned bits, const std::function<llvm::Value*()>& atomic, const std::function<llvm::Value*(llvm::Value* old)>& update) {
@@ -370,11 +366,14 @@ llvm::Value* FunctionLifter::CompareExchangeResult(llvm::Value* old, llvm::Value
 
 void FunctionLifter::WriteUnlessKept(const int index, llvm::Value* value, llvm::Value* keep) {
     const auto& operand = Operand(index);
-    if (operand.type == ZYDIS_OPERAND_TYPE_REGISTER && operand.size == 32) {
-        const auto reg = GprIndex(operand.reg.value);
-        return SetGpr(reg, _builder.CreateSelect(keep, Gpr(reg), _builder.CreateZExt(value, I64())));
-    }
+    if (operand.type == ZYDIS_OPERAND_TYPE_REGISTER) return WriteRegisterUnlessKept(operand.reg.value, value, keep);
     Write(index, _builder.CreateSelect(keep, Read(index), value));
+}
+
+void FunctionLifter::WriteRegisterUnlessKept(const ZydisRegister reg, llvm::Value* value, llvm::Value* keep) {
+    const auto gpr = GprIndex(reg);
+    if (gpr >= 0 && ZydisRegisterGetWidth(ZYDIS_MACHINE_MODE_LONG_64, reg) == 32) return SetGpr(gpr, _builder.CreateSelect(keep, Gpr(gpr), _builder.CreateZExt(value, I64())));
+    WriteRegister(reg, _builder.CreateSelect(keep, ReadRegister(reg), value));
 }
 
 bool FunctionLifter::LockedMemory() const {
@@ -422,27 +421,22 @@ void FunctionLifter::CompareExchange() {
         WriteUnlessKept(0, desired, _builder.CreateICmpNE(old, expected));
     }
     Sub(expected, old, _builder.getFalse());
-    auto* equal = _builder.CreateICmpEQ(old, expected);
-    if (bits == 32) return SetGpr(PS5LIFT_RAX, _builder.CreateSelect(equal, Gpr(PS5LIFT_RAX), _builder.CreateZExt(old, I64())));
-    WriteRegister(bits == 64 ? ZYDIS_REGISTER_RAX : bits == 16 ? ZYDIS_REGISTER_AX : ZYDIS_REGISTER_AL, old);
+    const auto accumulator = bits == 64 ? ZYDIS_REGISTER_RAX : bits == 32 ? ZYDIS_REGISTER_EAX : bits == 16 ? ZYDIS_REGISTER_AX : ZYDIS_REGISTER_AL;
+    WriteRegisterUnlessKept(accumulator, old, _builder.CreateICmpEQ(old, expected));
 }
 
 void FunctionLifter::CompareExchangeWide() {
     const auto bits = Bits(0);
     const auto half = bits / 2;
-    const auto pair = [&](const int high, const int low) {
-        auto* upper = _builder.CreateZExt(_builder.CreateTrunc(Gpr(high), Int(half)), Int(bits));
-        return _builder.CreateOr(_builder.CreateShl(upper, half), _builder.CreateZExt(_builder.CreateTrunc(Gpr(low), Int(half)), Int(bits)));
-    };
-    auto* expected = pair(PS5LIFT_RDX, PS5LIFT_RAX);
-    auto* desired = pair(PS5LIFT_RCX, PS5LIFT_RBX);
+    const auto halves = [&](const int low, const int high) { return ConcatenateIntegers(_builder.CreateTrunc(Gpr(low), Int(half)), _builder.CreateTrunc(Gpr(high), Int(half))); };
+    auto* expected = halves(PS5LIFT_RAX, PS5LIFT_RDX);
+    auto* desired = halves(PS5LIFT_RBX, PS5LIFT_RCX);
     auto* old = AtomicCompareExchange(expected, desired);
     auto* matched = _builder.CreateICmpEQ(old, expected);
     SetFlag(PS5LIFT_ZF, matched);
-    auto* low = _builder.CreateZExt(_builder.CreateTrunc(old, Int(half)), I64());
-    auto* high = _builder.CreateZExt(_builder.CreateTrunc(_builder.CreateLShr(old, half), Int(half)), I64());
-    SetGpr(PS5LIFT_RAX, _builder.CreateSelect(matched, Gpr(PS5LIFT_RAX), low));
-    SetGpr(PS5LIFT_RDX, _builder.CreateSelect(matched, Gpr(PS5LIFT_RDX), high));
+    const bool quadwords = half == 64;
+    WriteRegisterUnlessKept(quadwords ? ZYDIS_REGISTER_RAX : ZYDIS_REGISTER_EAX, _builder.CreateTrunc(old, Int(half)), matched);
+    WriteRegisterUnlessKept(quadwords ? ZYDIS_REGISTER_RDX : ZYDIS_REGISTER_EDX, _builder.CreateTrunc(_builder.CreateLShr(old, half), Int(half)), matched);
 }
 
 void FunctionLifter::SignExtendAccumulator(const ZydisMnemonic mnemonic) {

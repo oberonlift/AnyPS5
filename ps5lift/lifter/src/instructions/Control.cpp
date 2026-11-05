@@ -62,17 +62,16 @@ void FunctionLifter::TableLookup() {
 }
 
 void FunctionLifter::Call() {
-    auto* returnAddress = Const(_instruction->Info.operand_width, _instruction->Next());
     auto target = DirectTarget(*_instruction);
     if (!target) target = ImportTarget(_module.Image(), *_instruction);
-    if (target && !DispatchesDirectTarget(_module.Image(), *_instruction)) {
-        Push(returnAddress);
-        CallGuest(_module.Guest(*target), _module.Functions().at(*target).Effects);
-        return;
-    }
+    if (target && !DispatchesDirectTarget(_module.Image(), *_instruction)) return PushAndCall(_module.Guest(*target), _module.Functions().at(*target).Effects);
     auto* destination = target ? _builder.getInt64(*target) : Read(0);
-    Push(returnAddress);
-    CallGuest(DispatchCallee().getCallee(), {EveryRegister, EveryRegister}, {destination});
+    PushAndCall(DispatchCallee().getCallee(), {EveryRegister, EveryRegister}, {destination});
+}
+
+void FunctionLifter::PushAndCall(llvm::Value* callee, const RegisterEffects& effects, llvm::ArrayRef<llvm::Value*> extra) {
+    Push(Const(_instruction->Info.operand_width, _instruction->Next()));
+    CallGuest(callee, effects, extra);
 }
 
 void FunctionLifter::Jump() {

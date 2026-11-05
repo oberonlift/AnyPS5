@@ -142,6 +142,7 @@ private:
     llvm::Value* ReadAs(const int index, const unsigned bits);
     void Write(const int index, llvm::Value* value);
     void WriteUnlessKept(const int index, llvm::Value* value, llvm::Value* keep);
+    void WriteRegisterUnlessKept(const ZydisRegister reg, llvm::Value* value, llvm::Value* keep);
     llvm::Value* SignBit(llvm::Value* value);
     llvm::Value* Parity(llvm::Value* value);
     llvm::Value* ConcatenateIntegers(llvm::Value* low, llvm::Value* high);
@@ -383,6 +384,7 @@ private:
     void ZeroUpper();
     void ZeroAll();
     void Call();
+    void PushAndCall(llvm::Value* callee, const RegisterEffects& effects, llvm::ArrayRef<llvm::Value*> extra = {});
     void Jump();
     void Return();
     void EmitSemantics(const ZydisMnemonic mnemonic);
