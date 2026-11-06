@@ -337,6 +337,7 @@ private:
     void PermuteDoubles();
     void InsertSingle();
     llvm::Value* CallX87(const std::uint32_t operation, const std::uint32_t format, llvm::Value* address, const std::uint32_t index);
+    llvm::Value* EmitX87Call(const std::uint32_t operation, const std::uint32_t format, llvm::Value* address, llvm::Value* index);
     static bool IsStackRegister(const ZydisDecodedOperand& operand);
     static std::uint32_t StackIndex(const ZydisDecodedOperand& operand);
     std::uint32_t X87Format(const bool integer) const;
@@ -349,6 +350,9 @@ private:
     void X87Environment(const std::uint32_t operation);
     void X87SaveState();
     void X87RestoreState();
+    llvm::Value* RequestedComponents();
+    void XsaveState(const std::uint32_t form);
+    void XrstorState();
     void X87ConditionalMove(const ZydisMnemonic mnemonic);
     void CheckAlignment();
     llvm::Align CheckedAlignment() const;

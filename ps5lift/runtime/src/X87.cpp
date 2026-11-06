@@ -39,6 +39,21 @@ constexpr int RangeBiasAdjustment = 24576;
 constexpr int CompleteRemainderDifference = 64;
 constexpr int PartialRemainderBits = 32;
 constexpr std::size_t FxStateBytes = 416;
+constexpr std::size_t FxX87Bytes = 24;
+constexpr std::size_t FxMxcsr = 24;
+constexpr std::size_t FxRegisters = 32;
+constexpr std::size_t FxRegisterStride = 16;
+constexpr std::size_t FxXmm = 160;
+constexpr std::size_t XmmBytes = 16;
+constexpr std::size_t XsaveHeader = 512;
+constexpr std::size_t XsaveHeaderBytes = 64;
+constexpr std::size_t XsaveStandardHeaderBytes = 24;
+constexpr std::size_t XsaveAvx = 576;
+constexpr std::uint64_t XsaveCompacted = 1ull << 63;
+constexpr std::uint32_t ComponentX87 = 1;
+constexpr std::uint32_t ComponentSse = 2;
+constexpr std::uint32_t ComponentAvx = 4;
+constexpr std::uint32_t InitialMxcsr = 0x1f80;
 constexpr std::size_t EnvironmentBytes = 28;
 constexpr std::size_t ShortEnvironmentBytes = 14;
 constexpr std::size_t RegisterBytes = 10;
@@ -823,6 +838,161 @@ void Initialize(Ps5LiftState& state) {
     state.X87Valid = 0;
 }
 
+void SaveX87Area(const Ps5LiftState& state, std::uint8_t* area) {
+    std::memset(area, 0, FxX87Bytes);
+    std::memcpy(area, &state.X87Control, 2);
+    std::memcpy(area + 2, &state.X87Status, 2);
+    area[4] = state.X87Valid;
+    std::memset(area + FxRegisters, 0, FxXmm - FxRegisters);
+    SaveRegisters(state, area + FxRegisters, FxRegisterStride);
+}
+
+void RestoreX87Area(Ps5LiftState& state, const std::uint8_t* area) {
+    std::uint16_t status;
+    std::memcpy(&state.X87Control, area, 2);
+    std::memcpy(&status, area + 2, 2);
+    state.X87Status = Ps5Lift::X87StatusWithSummary(status, state.X87Control);
+    state.X87Valid = area[4];
+    RestoreRegisters(state, area + FxRegisters, FxRegisterStride);
+}
+
+void SaveMxcsrArea(Ps5LiftState& state, std::uint8_t* area) {
+    const std::uint32_t mxcsr[2] = {ps5lift_read_mxcsr(&state), PS5LIFT_MXCSR_MASK};
+    std::memcpy(area + FxMxcsr, mxcsr, sizeof(mxcsr));
+}
+
+void SaveXmmArea(const Ps5LiftState& state, std::uint8_t* area) {
+    for (unsigned reg = 0; reg < 16; ++reg) std::memcpy(area + FxXmm + XmmBytes * reg, state.Vector[reg], XmmBytes);
+}
+
+void RestoreXmmArea(Ps5LiftState& state, const std::uint8_t* area) {
+    for (unsigned reg = 0; reg < 16; ++reg) std::memcpy(state.Vector[reg], area + FxXmm + XmmBytes * reg, XmmBytes);
+}
+
+void InitializeX87Component(Ps5LiftState& state) {
+    Initialize(state);
+    std::memset(state.X87Registers, 0, sizeof(state.X87Registers));
+}
+
+bool AnyNonzero(const std::uint8_t* bytes, const std::size_t size) {
+    for (std::size_t i = 0; i < size; ++i) {
+        if (bytes[i] != 0) return true;
+    }
+    return false;
+}
+
+std::uint32_t ComponentsInUse(Ps5LiftState& state) {
+    std::uint32_t used = 0;
+    if (state.X87Control != InitialControl || state.X87Status != 0 || state.X87Valid != 0) used |= ComponentX87;
+    bool xmm = ps5lift_read_mxcsr(&state) != InitialMxcsr;
+    bool upper = false;
+    for (const auto& reg : state.Vector) {
+        xmm = xmm || AnyNonzero(reg, XmmBytes);
+        upper = upper || AnyNonzero(reg + XmmBytes, XmmBytes);
+    }
+    if (xmm) used |= ComponentSse;
+    if (upper) used |= ComponentAvx;
+    return used;
+}
+
+std::uint32_t EnabledComponents(const std::uint32_t requested) {
+    return requested & static_cast<std::uint32_t>(ps5lift_xgetbv(0, 0));
+}
+
+template <typename T>
+void WriteGuest(const std::uint64_t address, const std::size_t offset, const T* bytes, const std::size_t size) {
+    std::memcpy(reinterpret_cast<void*>(address + offset), bytes, size);
+}
+
+template <typename T>
+void ReadGuest(T* bytes, const std::uint64_t address, const std::size_t offset, const std::size_t size) {
+    std::memcpy(bytes, reinterpret_cast<const void*>(address + offset), size);
+}
+
+void SaveExtendedState(Ps5LiftState& state, const std::uint32_t form, const std::uint64_t address, const std::uint32_t requested) {
+    const auto features = EnabledComponents(requested);
+    const auto used = ComponentsInUse(state);
+    const auto saved = form == PS5LIFT_XSAVE_STANDARD ? features : features & used;
+    std::uint8_t legacy[FxStateBytes];
+    if ((saved & ComponentX87) != 0) {
+        SaveX87Area(state, legacy);
+        WriteGuest(address, 0, legacy, FxX87Bytes);
+        WriteGuest(address, FxRegisters, legacy + FxRegisters, FxXmm - FxRegisters);
+    }
+    const bool mxcsr = form == PS5LIFT_XSAVE_COMPACTED ? (saved & ComponentSse) != 0 : (features & (ComponentSse | ComponentAvx)) != 0;
+    if (mxcsr) {
+        SaveMxcsrArea(state, legacy);
+        WriteGuest(address, FxMxcsr, legacy + FxMxcsr, FxRegisters - FxMxcsr);
+    }
+    if ((saved & ComponentSse) != 0) {
+        SaveXmmArea(state, legacy);
+        WriteGuest(address, FxXmm, legacy + FxXmm, FxStateBytes - FxXmm);
+    }
+    if (form == PS5LIFT_XSAVE_COMPACTED) {
+        const std::uint64_t header[2] = {features & used, features | XsaveCompacted};
+        WriteGuest(address, XsaveHeader, header, sizeof(header));
+    } else {
+        std::uint64_t present;
+        ReadGuest(&present, address, XsaveHeader, sizeof(present));
+        present = (present & ~std::uint64_t{features}) | (features & used);
+        WriteGuest(address, XsaveHeader, &present, sizeof(present));
+    }
+    if ((saved & ComponentAvx) != 0) {
+        std::uint8_t upper[16 * XmmBytes];
+        for (unsigned reg = 0; reg < 16; ++reg) std::memcpy(upper + XmmBytes * reg, state.Vector[reg] + XmmBytes, XmmBytes);
+        WriteGuest(address, XsaveAvx, upper, sizeof(upper));
+    }
+}
+
+bool ValidXsaveHeader(const std::uint64_t address) {
+    const auto enabled = ps5lift_xgetbv(0, 0);
+    std::uint64_t header[XsaveHeaderBytes / 8];
+    ReadGuest(header, address, XsaveHeader, 16);
+    if ((header[1] & XsaveCompacted) == 0) {
+        ReadGuest(header + 2, address, XsaveHeader + 16, XsaveStandardHeaderBytes - 16);
+        return (header[0] & ~enabled) == 0 && header[1] == 0 && header[2] == 0;
+    }
+    ReadGuest(header + 2, address, XsaveHeader + 16, XsaveHeaderBytes - 16);
+    if ((header[1] & ~XsaveCompacted & ~enabled) != 0 || (header[0] & ~header[1]) != 0) return false;
+    for (std::size_t word = 2; word < XsaveHeaderBytes / 8; ++word) {
+        if (header[word] != 0) return false;
+    }
+    return true;
+}
+
+std::uint32_t RestoreExtendedState(Ps5LiftState& state, const std::uint64_t address, const std::uint32_t requested) {
+    const auto features = EnabledComponents(requested);
+    std::uint64_t header[2];
+    ReadGuest(header, address, XsaveHeader, sizeof(header));
+    const auto present = header[0];
+    const bool compacted = (header[1] & XsaveCompacted) != 0;
+    std::uint8_t legacy[FxStateBytes] = {};
+    if ((features & ComponentX87) != 0) {
+        if ((present & ComponentX87) != 0) {
+            ReadGuest(legacy, address, 0, FxXmm);
+            RestoreX87Area(state, legacy);
+        } else {
+            InitializeX87Component(state);
+        }
+    }
+    if ((features & ComponentSse) != 0) {
+        if ((present & ComponentSse) != 0) ReadGuest(legacy + FxXmm, address, FxXmm, FxStateBytes - FxXmm);
+        else std::memset(legacy + FxXmm, 0, FxStateBytes - FxXmm);
+        RestoreXmmArea(state, legacy);
+    }
+    auto mxcsr = ps5lift_read_mxcsr(&state);
+    if (compacted ? (features & ComponentSse) != 0 : (features & (ComponentSse | ComponentAvx)) != 0) {
+        if (!compacted || (present & ComponentSse) != 0) ReadGuest(&mxcsr, address, FxMxcsr, sizeof(mxcsr));
+        else mxcsr = InitialMxcsr;
+    }
+    if ((features & ComponentAvx) != 0) {
+        std::uint8_t upper[16 * XmmBytes] = {};
+        if ((present & ComponentAvx) != 0) ReadGuest(upper, address, XsaveAvx, sizeof(upper));
+        for (unsigned reg = 0; reg < 16; ++reg) std::memcpy(state.Vector[reg] + XmmBytes, upper + XmmBytes * reg, XmmBytes);
+    }
+    return mxcsr;
+}
+
 std::uint32_t Execute(Fpu& fpu, const std::uint32_t operation, const std::uint32_t format, const std::uint64_t address, const std::uint32_t index) {
     const bool memory = (format & 7) != PS5LIFT_X87_REGISTER;
     switch (operation) {
@@ -1036,14 +1206,10 @@ extern "C" std::uint32_t ps5lift_x87(Ps5LiftState* state, const std::uint32_t op
         return 0;
     }
     case PS5LIFT_X87_SAVE_STATE: {
-        std::uint8_t area[FxStateBytes] = {};
-        std::memcpy(area, &state->X87Control, 2);
-        std::memcpy(area + 2, &state->X87Status, 2);
-        area[4] = state->X87Valid;
-        const std::uint32_t mxcsr[2] = {ps5lift_read_mxcsr(state), PS5LIFT_MXCSR_MASK};
-        std::memcpy(area + 24, mxcsr, sizeof(mxcsr));
-        SaveRegisters(*state, area + 32, 16);
-        for (unsigned reg = 0; reg < 16; ++reg) std::memcpy(area + 160 + 16 * reg, state->Vector[reg], 16);
+        std::uint8_t area[FxStateBytes];
+        SaveX87Area(*state, area);
+        SaveMxcsrArea(*state, area);
+        SaveXmmArea(*state, area);
         std::memcpy(reinterpret_cast<void*>(address), area, sizeof(area));
         return 0;
     }
@@ -1051,16 +1217,18 @@ extern "C" std::uint32_t ps5lift_x87(Ps5LiftState* state, const std::uint32_t op
         std::uint8_t area[FxStateBytes];
         std::memcpy(area, reinterpret_cast<const void*>(address), sizeof(area));
         std::uint32_t mxcsr;
-        std::memcpy(&mxcsr, area + 24, 4);
-        std::memcpy(&state->X87Control, area, 2);
-        std::uint16_t status;
-        std::memcpy(&status, area + 2, 2);
-        state->X87Status = Ps5Lift::X87StatusWithSummary(status, state->X87Control);
-        state->X87Valid = area[4];
-        RestoreRegisters(*state, area + 32, 16);
-        for (unsigned reg = 0; reg < 16; ++reg) std::memcpy(state->Vector[reg], area + 160 + 16 * reg, 16);
+        std::memcpy(&mxcsr, area + FxMxcsr, sizeof(mxcsr));
+        RestoreX87Area(*state, area);
+        RestoreXmmArea(*state, area);
         return mxcsr;
     }
+    case PS5LIFT_X87_XSAVE:
+        SaveExtendedState(*state, format, address, index);
+        return 0;
+    case PS5LIFT_X87_XRSTOR_VALID:
+        return ValidXsaveHeader(address) ? 1 : 0;
+    case PS5LIFT_X87_XRSTOR:
+        return RestoreExtendedState(*state, address, index);
     case PS5LIFT_X87_LOAD_ENVIRONMENT: {
         std::uint8_t image[EnvironmentBytes];
         std::memcpy(image, reinterpret_cast<const void*>(address), EnvironmentSize(format));

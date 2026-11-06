@@ -3,11 +3,15 @@
 namespace Ps5Lift::Lifting {
 
 llvm::Value* FunctionLifter::CallX87(const std::uint32_t operation, const std::uint32_t format, llvm::Value* address, const std::uint32_t index) {
+    return EmitX87Call(operation, format, address, _builder.getInt32(index));
+}
+
+llvm::Value* FunctionLifter::EmitX87Call(const std::uint32_t operation, const std::uint32_t format, llvm::Value* address, llvm::Value* index) {
     const auto* memory = address ? MemoryOperand() : nullptr;
     const bool ordered = memory != nullptr && _module.Options().Memory == MemoryModel::Tso && !InPrivateFrame(*memory) && !InReadOnlySegment(*memory, memory->size);
     if (ordered) _builder.CreateFence(llvm::AtomicOrdering::SequentiallyConsistent);
     auto callee = _module.Runtime("ps5lift_x87", llvm::FunctionType::get(_builder.getInt32Ty(), {_module.Pointer(), _builder.getInt32Ty(), _builder.getInt32Ty(), I64(), _builder.getInt32Ty()}, false));
-    auto* result = _builder.CreateCall(callee, {_state, _builder.getInt32(operation), _builder.getInt32(format), address ? address : _builder.getInt64(0), _builder.getInt32(index)});
+    auto* result = _builder.CreateCall(callee, {_state, _builder.getInt32(operation), _builder.getInt32(format), address ? address : _builder.getInt64(0), index});
     if (ordered) _builder.CreateFence(llvm::AtomicOrdering::SequentiallyConsistent);
     return result;
 }
@@ -88,6 +92,24 @@ void FunctionLifter::X87SaveState() {
 void FunctionLifter::X87RestoreState() {
     Flush();
     LoadMxcsr(CallX87(PS5LIFT_X87_RESTORE_STATE, 0, X87Address(), 0));
+    Reload();
+}
+
+llvm::Value* FunctionLifter::RequestedComponents() {
+    return _builder.CreateTrunc(Gpr(PS5LIFT_RAX), _builder.getInt32Ty());
+}
+
+void FunctionLifter::XsaveState(const std::uint32_t form) {
+    Flush();
+    EmitX87Call(PS5LIFT_X87_XSAVE, form, X87Address(), RequestedComponents());
+}
+
+void FunctionLifter::XrstorState() {
+    Flush();
+    auto* address = X87Address();
+    auto* requested = RequestedComponents();
+    StopIf(_builder.CreateICmpEQ(EmitX87Call(PS5LIFT_X87_XRSTOR_VALID, 0, address, requested), _builder.getInt32(0)), PS5LIFT_STOP_GENERAL_PROTECTION, 0, "xrstor with an invalid XSAVE header");
+    LoadMxcsr(EmitX87Call(PS5LIFT_X87_XRSTOR, 0, address, requested));
     Reload();
 }
 
