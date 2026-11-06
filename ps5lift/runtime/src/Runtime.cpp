@@ -335,7 +335,7 @@ void ApplyMxcsr(Ps5LiftState* state) {
     if (!GuestEnvironmentLive()) return;
     const auto mxcsr = state->Mxcsr;
     constexpr std::uint32_t MxcsrFlushing = PS5LIFT_MXCSR_DENORMALS_ARE_ZERO | PS5LIFT_MXCSR_FLUSH_TO_ZERO;
-    const auto flushing = Ps5Lift::Program().FloatModel == PS5LIFT_FLOAT_FAST ? mxcsr & MxcsrFlushing : 0;
+    const auto flushing = Ps5Lift::Program().FloatModel == PS5LIFT_FLOAT_FAST && (mxcsr & MxcsrFlushing) != 0 ? MxcsrFlushing : 0;
 #if defined(__aarch64__)
     constexpr std::uint64_t FlushToZero = 1u << 24;
     constexpr std::uint64_t RoundingShift = 22;
