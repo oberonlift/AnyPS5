@@ -681,10 +681,6 @@ IrProgram InstructionTranslator::Translate(const RdnaProgram& decoded, const Con
     return program;
 }
 
-void InstructionTranslator::translateInstruction(IrBuilder& builder, const RdnaInstruction& instruction, const ControlFlowGraph& cfg, const TranslateOptions& options) const {
-    DispatchInstruction(builder, instruction, cfg, options);
-}
-
 TranslationContext::TranslationContext(IrProgram& program, IrBlock& block, std::uint32_t vectorLimit) : program(program), ir(program), block(block), instructionBranchCondition(IrU1(program.CreateValue(IrOpcode::Void, IrType::Bool))), currentVectorLimit(vectorLimit) {
     ir.SetInsertionPoint(block);
 }

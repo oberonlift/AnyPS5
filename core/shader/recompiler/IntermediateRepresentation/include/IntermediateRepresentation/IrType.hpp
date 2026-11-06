@@ -41,9 +41,6 @@ enum class IrType : std::uint32_t {
     F32x2 = Vec2F32
 };
 
-[[nodiscard]] bool IsFloatType(IrType type);
-[[nodiscard]] bool IsIntegerType(IrType type);
-[[nodiscard]] bool IsVectorType(IrType type);
 [[nodiscard]] std::uint32_t ComponentCount(IrType type);
 [[nodiscard]] std::string TypeToString(IrType type);
 

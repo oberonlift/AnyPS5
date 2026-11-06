@@ -105,10 +105,8 @@ private:
     IrU32 readU16LaneRaw(const RdnaOperand& operand, bool highLane);
     IrU32 readU16LaneAsU32(const RdnaOperand& operand, bool highLane, bool signExtend);
     IrU32 readU16AsU32(const RdnaOperand& operand, bool signExtend);
-    IrU32 readF16LaneBits(const RdnaOperand& operand, bool highLane);
     std::array<IrU32, 2> extractU64(IrU64 value);
     void writeU32Pair(const RdnaOperand& operand, const std::array<IrU32, 2>& value);
-    IrU32 conditionBit(const RdnaOperand& operand);
     IrU1 readMask(const RdnaOperand& operand);
     IrU1 readMaskValid(const RdnaOperand& operand);
     static bool maskLanesExact(const RdnaOperand& operand);

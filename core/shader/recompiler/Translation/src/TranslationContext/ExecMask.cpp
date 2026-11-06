@@ -37,10 +37,6 @@ IrU1 TranslationContext::threadBit(const std::array<IrU32, 2>& mask) {
     return IrU1(ir.INotEqual(ir.BitwiseAnd(ir.ShiftRightLogical(word.Value(), bit.Value()), ir.Constant(1u)), ir.Constant(0u)));
 }
 
-IrU32 TranslationContext::conditionBit(const RdnaOperand& operand) {
-    return IrU32(ir.Select(readMask(operand).Value(), ir.Constant(1u), ir.Constant(0u)));
-}
-
 IrU1 TranslationContext::readMask(const RdnaOperand& operand) {
     if (operand.kind == RdnaOperandKind::LiteralConstant || operand.kind == RdnaOperandKind::IntegerInlineConstant || operand.kind == RdnaOperandKind::FloatInlineConstant) {
         return threadBit(readU32Pair(operand));

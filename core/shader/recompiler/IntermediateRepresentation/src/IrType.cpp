@@ -4,28 +4,6 @@
 
 namespace ShaderRecompiler {
 
-namespace {
-
-constexpr std::uint32_t FloatTypeMask = static_cast<std::uint32_t>(IrType::F16) | static_cast<std::uint32_t>(IrType::F32) | static_cast<std::uint32_t>(IrType::F64) | static_cast<std::uint32_t>(IrType::Vec2F32) | static_cast<std::uint32_t>(IrType::Vec3F32) | static_cast<std::uint32_t>(IrType::Vec4F32);
-
-constexpr std::uint32_t IntegerTypeMask = static_cast<std::uint32_t>(IrType::Bool) | static_cast<std::uint32_t>(IrType::U8) | static_cast<std::uint32_t>(IrType::U16) | static_cast<std::uint32_t>(IrType::U32) | static_cast<std::uint32_t>(IrType::S32) | static_cast<std::uint32_t>(IrType::U64) | static_cast<std::uint32_t>(IrType::S64) | static_cast<std::uint32_t>(IrType::Vec2U32) | static_cast<std::uint32_t>(IrType::Vec3U32) | static_cast<std::uint32_t>(IrType::Vec4U32);
-
-constexpr std::uint32_t VectorTypeMask = static_cast<std::uint32_t>(IrType::Vec2U32) | static_cast<std::uint32_t>(IrType::Vec3U32) | static_cast<std::uint32_t>(IrType::Vec4U32) | static_cast<std::uint32_t>(IrType::Vec2F32) | static_cast<std::uint32_t>(IrType::Vec3F32) | static_cast<std::uint32_t>(IrType::Vec4F32);
-
-}
-
-bool IsFloatType(IrType type) {
-    return (static_cast<std::uint32_t>(type) & FloatTypeMask) != 0u;
-}
-
-bool IsIntegerType(IrType type) {
-    return (static_cast<std::uint32_t>(type) & IntegerTypeMask) != 0u;
-}
-
-bool IsVectorType(IrType type) {
-    return (static_cast<std::uint32_t>(type) & VectorTypeMask) != 0u;
-}
-
 std::uint32_t ComponentCount(IrType type) {
     switch (type) {
         case IrType::Bool:

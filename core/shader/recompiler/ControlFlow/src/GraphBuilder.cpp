@@ -435,12 +435,6 @@ bool isScalarLoad(RdnaOpcode op) {
     }
 }
 
-bool onlyWritesLinkRegister(const RdnaInstruction& instruction, std::uint32_t linkRegister) {
-    const bool overwrites = instruction.family == RdnaInstructionFamily::SOP2 || instruction.op == RdnaOpcode::SMovB32 || instruction.op == RdnaOpcode::SMovB64 ||
-        (instruction.family == RdnaInstructionFamily::SMEM && isScalarLoad(instruction.op));
-    return overwrites && !readsLinkRegister(instruction, linkRegister);
-}
-
 bool isFetchCallPrefixOpcode(const RdnaInstruction& instruction) {
     return IsScalarAluOpcode(instruction.op) || instruction.op == RdnaOpcode::SNop || instruction.op == RdnaOpcode::SWaitcnt ||
         instruction.op == RdnaOpcode::SWaitcntDepctr || instruction.op == RdnaOpcode::SWaitIdle || instruction.op == RdnaOpcode::SIcacheInv ||

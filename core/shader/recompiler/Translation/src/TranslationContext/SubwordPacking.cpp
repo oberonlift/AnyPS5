@@ -128,10 +128,6 @@ IrF32 TranslationContext::readMixF32(const RdnaOperand& operand) {
     return flushF16InputValue(readF16LaneAsF32(operand, operand.opSel, false));
 }
 
-IrU32 TranslationContext::readF16LaneBits(const RdnaOperand& operand, bool highLane) {
-    return readU16LaneRaw(operand, highLane ? operand.opSelHi : operand.opSel);
-}
-
 IrU32 TranslationContext::readU16LaneRaw(const RdnaOperand& operand, bool highLane) {
     const IrU32 raw = applyBitSourceModifiers(operand, readRawU32(operand));
     return IrU32(ir.Emit(IrOpcode::BitFieldUExtract, IrType::U32, {&raw.Value(), &ir.Constant(highLane ? 16u : 0u), &ir.Constant(16u)}));

@@ -21,13 +21,6 @@ struct PushData {
     static constexpr std::uint32_t MeshDrawDwordCount = 6;
     static constexpr std::uint32_t NoStart = std::numeric_limits<std::uint32_t>::max();
     std::array<std::uint32_t, DwordCount> dwords {};
-
-    [[nodiscard]] static bool CanFit(std::uint32_t start, std::uint32_t size) {
-        return size != 0u && start <= DwordCount && size <= DwordCount - start;
-    }
-    [[nodiscard]] static std::uint32_t StartFor(std::uint32_t cursor, std::uint32_t size) {
-        return CanFit(cursor, size) ? cursor : NoStart;
-    }
 };
 
 struct IrDescriptorBinding {
@@ -65,11 +58,6 @@ struct IrBindingLayout {
     }
     [[nodiscard]] std::uint32_t PushSlotDword() const {
         return UsesPushData() ? pushDataStartDword / PushData::DwordCount * PushData::DwordCount : 0u;
-    }
-    void AdvancePushData(std::uint32_t& cursor) const {
-        if (UsesPushData()) {
-            cursor = pushDataStartDword + ShaderDataDwords();
-        }
     }
 
     bool operator==(const IrBindingLayout& other) const = default;

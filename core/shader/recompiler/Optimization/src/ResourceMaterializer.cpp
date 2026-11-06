@@ -374,14 +374,6 @@ ImageDecode inspectImageDescriptor(const DescriptorValue& descriptor, const Imag
     return result;
 }
 
-DecodedImage decodeImageDescriptor(const DescriptorValue& descriptor, const ImageResource& base, std::uint32_t srgbDecodeFormats) {
-    auto result = inspectImageDescriptor(descriptor, base, srgbDecodeFormats);
-    if (result.reason.has_value()) {
-        throw std::runtime_error(result.detail);
-    }
-    return result.decoded;
-}
-
 bool requiresPointSampler(const ImageResource& mode) {
     return mode.numericClass == IrTextureNumericClass::Uint || mode.numericClass == IrTextureNumericClass::Sint || mode.conversionFormat != IrBufferFormat::Invalid || mode.depthBits;
 }
