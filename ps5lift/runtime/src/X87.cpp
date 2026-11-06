@@ -169,6 +169,10 @@ public:
         _destination = Destination::Register;
     }
 
+    void SetDestination(const unsigned index, const extFloat80_t value) {
+        Set(index, _stackUnderflow ? Indefinite() : value);
+    }
+
     extFloat80_t SetResult(unsigned index, std::uint32_t operation, extFloat80_t left, extFloat80_t right);
 
     void Push(const extFloat80_t value) {
@@ -239,6 +243,7 @@ private:
     std::uint16_t _extra = 0;
     bool _roundedUp = false;
     bool _completesOnDenormal = false;
+    bool _stackUnderflow = false;
     Destination _destination = Destination::None;
     std::optional<Computation> _computation;
     void* _store = nullptr;
@@ -247,6 +252,7 @@ private:
 
     void StackFault(const bool overflow) {
         _extra |= StatusInvalid | StatusStackFault;
+        _stackUnderflow = _stackUnderflow || !overflow;
         const std::uint16_t direction = overflow ? StatusC1 : 0;
         _status = static_cast<std::uint16_t>((_status & ~StatusC1) | direction);
         _exceptionStatus = static_cast<std::uint16_t>((_exceptionStatus & ~StatusC1) | direction);
@@ -264,6 +270,7 @@ private:
         if (flags & softfloat_flag_overflow) raised |= StatusOverflow;
         if (flags & softfloat_flag_underflow) raised |= StatusUnderflow;
         if (flags & softfloat_flag_inexact) raised |= StatusPrecision;
+        if (raised & (StatusInvalid | StatusZeroDivide)) raised &= static_cast<std::uint16_t>(~StatusDenormal);
         return raised;
     }
 
@@ -570,8 +577,8 @@ extFloat80_t ScaledResult(const std::uint32_t operation, const extFloat80_t left
 extFloat80_t Fpu::SetResult(const unsigned index, const std::uint32_t operation, const extFloat80_t left, const extFloat80_t right) {
     const auto result = Compute(*this, operation, left, right);
     _computation = Computation{Physical(index), operation, left, right};
-    Set(index, result);
-    return result;
+    SetDestination(index, result);
+    return Contents(index);
 }
 
 std::uint16_t Fpu::WriteScaledResult(const int bias) {
@@ -737,7 +744,6 @@ std::uint32_t Execute(Fpu& fpu, const std::uint32_t operation, const std::uint32
     }
     case PS5LIFT_X87_COMPARE_FLAGS:
     case PS5LIFT_X87_COMPARE_FLAGS_UNORDERED: {
-        fpu.ClearRoundedUp();
         const auto left = fpu.Get(0);
         const auto right = fpu.Get(index);
         fpu.Operands(left, right);
@@ -758,14 +764,14 @@ std::uint32_t Execute(Fpu& fpu, const std::uint32_t operation, const std::uint32
         fpu.ClearRoundedUp();
         auto value = fpu.Get(0);
         value.signExp = static_cast<std::uint16_t>(value.signExp ^ 0x8000);
-        fpu.Set(0, value);
+        fpu.SetDestination(0, value);
         return 0;
     }
     case PS5LIFT_X87_ABSOLUTE: {
         fpu.ClearRoundedUp();
         auto value = fpu.Get(0);
         value.signExp = static_cast<std::uint16_t>(value.signExp & 0x7fff);
-        fpu.Set(0, value);
+        fpu.SetDestination(0, value);
         return 0;
     }
     case PS5LIFT_X87_SQUARE_ROOT:
@@ -810,9 +816,12 @@ std::uint32_t Execute(Fpu& fpu, const std::uint32_t operation, const std::uint32
         fpu.ClearRoundedUp();
         fpu.SetTop(fpu.Top() - 1);
         return 0;
-    case PS5LIFT_X87_MOVE_REGISTER:
-        fpu.Set(0, fpu.Get(index));
+    case PS5LIFT_X87_CONDITIONAL_MOVE: {
+        const auto top = fpu.Get(0);
+        const auto source = fpu.Get(index);
+        fpu.SetDestination(0, address != 0 ? source : top);
         return 0;
+    }
     default:
         ps5lift_fail("unknown x87 operation 0x%x", operation);
     }

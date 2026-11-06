@@ -99,13 +99,7 @@ void FunctionLifter::X87ConditionalMove(const ZydisMnemonic mnemonic) {
     case ZYDIS_MNEMONIC_FCMOVNU: condition = _builder.CreateNot(Flag(PS5LIFT_PF)); break;
     default: UnexpectedMnemonic("X87ConditionalMove", mnemonic);
     }
-    auto* move = llvm::BasicBlock::Create(Context(), "fcmov", _host);
-    auto* after = llvm::BasicBlock::Create(Context(), "fcmov_done", _host);
-    _builder.CreateCondBr(condition, move, after);
-    _builder.SetInsertPoint(move);
-    CallX87(PS5LIFT_X87_MOVE_REGISTER, 0, nullptr, X87Index(1));
-    _builder.CreateBr(after);
-    _builder.SetInsertPoint(after);
+    CallX87(PS5LIFT_X87_CONDITIONAL_MOVE, 0, _builder.CreateZExt(condition, I64()), X87Index(1));
 }
 
 }
