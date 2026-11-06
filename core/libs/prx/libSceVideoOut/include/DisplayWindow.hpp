@@ -18,7 +18,6 @@ public:
     void Ensure(std::uint32_t sourceWidth, std::uint32_t sourceHeight);
     void Destroy() noexcept;
     SDL_Window* Handle() const;
-    void DrawableSize(std::uint32_t& width, std::uint32_t& height) const;
     void UpdateTitle();
     std::uint64_t FrameNumber() const { return frameNum; }
     void ToggleFullscreen();

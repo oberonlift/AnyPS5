@@ -130,33 +130,6 @@ bool MutexOperations::IsOwned(const PthreadMutex* mutex) {
     return current->_owner.load(std::memory_order_acquire) == std::this_thread::get_id();
 }
 
-int MutexOperations::Timedlock(PthreadMutex* mutex, const KernelTimespec* abstime) {
-    if (!abstime || abstime->tv_sec < 0 || abstime->tv_nsec < 0 || abstime->tv_nsec >= 1000000000)
-        throw std::invalid_argument("Invalid absolute mutex timeout");
-    const auto maximum = std::chrono::nanoseconds::max().count();
-    if (abstime->tv_sec > (maximum - abstime->tv_nsec) / 1000000000)
-        throw std::overflow_error("Absolute mutex timeout exceeds the host clock range");
-    const auto duration = std::chrono::nanoseconds(abstime->tv_sec * 1000000000 + abstime->tv_nsec);
-    if (std::chrono::duration<long double>(duration) >= std::chrono::duration<long double>(std::chrono::system_clock::duration::max()))
-        throw std::overflow_error("Absolute mutex timeout exceeds the host clock range");
-    const auto deadline = std::chrono::system_clock::time_point(std::chrono::duration_cast<std::chrono::system_clock::duration>(duration));
-    auto* current = resolveMutex(mutex, true);
-    return acquireMutex(current, [&](auto& native) {
-#ifdef _WIN32
-        for (;;) {
-            const auto now = std::chrono::system_clock::now();
-            if (now >= deadline) return native.try_lock();
-            const auto remaining = std::chrono::duration_cast<std::chrono::nanoseconds>(deadline - now).count();
-            const std::uint64_t slice = TimedWait::NowNanos() + static_cast<std::uint64_t>(std::min<std::int64_t>(remaining, 100000000));
-            if (TimedWait::ParkAcquire(current, [&] { return native.try_lock(); }, &slice)) return true;
-        }
-#else
-        static_cast<void>(current);
-        return native.try_lock_until(deadline);
-#endif
-    }, sceTimedOut, false);
-}
-
 extern "C" {
 
 int APS5_VABI scePthreadMutexattrInit(PthreadMutexattr* attr) {

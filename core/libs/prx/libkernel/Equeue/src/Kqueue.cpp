@@ -96,14 +96,6 @@ int ReserveDescriptor() {
 #endif
 }
 
-void ReleaseDescriptor(int descriptor) {
-#ifdef _WIN32
-    ::_close(descriptor);
-#else
-    ::close(descriptor);
-#endif
-}
-
 std::optional<std::uint64_t> TimerPeriodNanos(std::int64_t data, std::uint32_t fflags) {
     std::uint64_t unit = 0;
     switch (fflags & NOTE_TIMER_PRECMASK) {

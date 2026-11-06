@@ -174,11 +174,9 @@ bool IsCommIdText(const char* text) {
 bool SameCommId(const NpCommunicationId& lhs, const NpCommunicationId& rhs) {
     return std::strncmp(lhs.data, rhs.data, sizeof(lhs.data)) == 0 && lhs.num == rhs.num;
 }
-constexpr std::size_t NP_SDK_VERSION_SIZE = 8;
 constexpr std::size_t NP_RFC3339_BUFFER_MIN = 0x80;
 constexpr std::size_t NP_USER_ID_LIST_SIZE = 20;
 constexpr int USER_ID_INVALID = -1;
-constexpr KernelClockid NP_SYSTEM_CLOCK = 4;
 
 static_assert(sizeof(SceKernelSystemSwVersion) == 0x28);
 
@@ -188,10 +186,6 @@ std::uint32_t SystemVersion() {
     sceKernelGetSystemSwVersion_nid_postfix(&version);
 
     return version.version;
-}
-
-int BcdPair(std::uint32_t value, int shift) {
-    return static_cast<int>((value >> (shift + 4)) & 0xF) * 10 + static_cast<int>((value >> shift) & 0xF);
 }
 
 constexpr int NP_ERROR_OUT_OF_MEMORY = static_cast<int>(0x80550005);
@@ -501,8 +495,6 @@ constexpr int NP_ERROR_EVENT_FLAG_BUSY = static_cast<int>(0x8055800C);
 constexpr int NP_ERROR_CANCELED = static_cast<int>(0x80558010);
 constexpr int NP_ERROR_SEMA_BUSY = static_cast<int>(0x8055800D);
 constexpr int NP_ERROR_MUTEX_BUSY = static_cast<int>(0x8055800F);
-constexpr std::uint32_t NP_MUTEX_FLAG_RECURSIVE = 1;
-constexpr int PTHREAD_MUTEX_TYPE_RECURSIVE = 2;
 constexpr std::uint32_t NP_SEMA_FLAG_PRIORITY = 1;
 constexpr std::uint32_t KERNEL_SEMA_ATTR_FIFO = 1;
 constexpr std::uint32_t KERNEL_SEMA_ATTR_PRIORITY_SHIFT = 8;
@@ -515,17 +507,6 @@ int NpResult(int result) {
 
 int NpBusyResult(int result, int busy) {
     return result == KERNEL_ERROR_EBUSY ? busy : NpResult(result);
-}
-
-int InitMutex(PthreadMutex* mutex, const char* name, std::uint32_t flags) {
-    PthreadMutexattr attr {};
-    int result = scePthreadMutexattrInit(&attr);
-    if (result < 0) return result;
-    if ((flags & NP_MUTEX_FLAG_RECURSIVE) != 0) result = scePthreadMutexattrSettype(&attr, PTHREAD_MUTEX_TYPE_RECURSIVE);
-    if (result >= 0) result = scePthreadMutexInit(mutex, &attr, name);
-    scePthreadMutexattrDestroy(&attr);
-
-    return NpResult(result);
 }
 
 int InitCond(PthreadCond* cond, const char* name) {

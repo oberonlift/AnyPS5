@@ -4,7 +4,6 @@
 #include "prx/libSceAgcDriver/Execution/include/Driver.hpp"
 #include "prx/libkernel/AppMetadata/include/AppMetadata.hpp"
 #include "Decoder/Png.hpp"
-#include "SDL_vulkan.h"
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
@@ -104,19 +103,6 @@ void DisplayWindow::ToggleFullscreen() {
     require(window != nullptr, "window must exist before toggling fullscreen");
     const auto flags = (SDL_GetWindowFlags(window) & SDL_WINDOW_FULLSCREEN) != 0 ? 0u : static_cast<Uint32>(SDL_WINDOW_FULLSCREEN_DESKTOP);
     require(SDL_SetWindowFullscreen(window, flags) == 0, SDL_GetError());
-}
-
-void DisplayWindow::DrawableSize(std::uint32_t& width, std::uint32_t& height) const {
-    if (window == nullptr) {
-        width = 0;
-        height = 0;
-        return;
-    }
-    int drawableWidth = 0;
-    int drawableHeight = 0;
-    SDL_Vulkan_GetDrawableSize(window, &drawableWidth, &drawableHeight);
-    width = drawableWidth > 0 ? static_cast<std::uint32_t>(drawableWidth) : 0;
-    height = drawableHeight > 0 ? static_cast<std::uint32_t>(drawableHeight) : 0;
 }
 
 void DisplayWindow::UpdateTitle() {

@@ -28,7 +28,6 @@ public:
     void Move(int deltaX, int deltaY);
     void Advance(double seconds);
     void Reset();
-    double Speed() const;
     double ReportRate() const;
     double SmoothingMs() const;
     std::array<double, 2> Deflection() const;

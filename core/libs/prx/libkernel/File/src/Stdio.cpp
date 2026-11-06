@@ -75,14 +75,6 @@ template <typename TCall> static auto WithoutParameterHandler(TCall call) {
     _set_thread_local_invalid_parameter_handler(previous);
     return result;
 }
-static int NativeRmdir(const std::filesystem::path& path) {
-    std::error_code error;
-    const auto verbatim = NativeVerbatimPath_nid_no_patch(path, error, WindowsMaxDirectoryPathLength);
-    const auto& target = error ? path : verbatim;
-    if (::RemoveDirectoryW(target.c_str())) return 0;
-    errno = WindowsOpenError_nid_no_patch(GetLastError());
-    return -1;
-}
 static bool IsDirectoryEmpty(const std::filesystem::path& path) {
     if (path.empty()) return true;
     const auto search = (path.native().back() == L'\\' || path.native().back() == L'/') ? (path.native() + L"*") : (path.native() + L"\\*");
@@ -444,9 +436,6 @@ static std::int64_t NativePwrite(int descriptor, const void* buf, std::size_t nb
 #ifdef __APPLE__
 extern "C" ssize_t __getdirentries64(int fd, void* buffer, size_t bytes, off_t* base);
 #endif
-static int NativeRmdir(const std::filesystem::path& path) {
-    return ::rmdir(path.c_str());
-}
 static bool RemoveEmptyDirectory(const std::filesystem::path& path) {
     std::error_code error;
     return std::filesystem::remove(path, error);

@@ -95,10 +95,6 @@ void Pad::MouseStick::Reset() {
     idleSeconds = 0.0;
 }
 
-double Pad::MouseStick::Speed() const {
-    return std::hypot(speedX, speedY);
-}
-
 std::array<double, 2> Pad::MouseStick::Deflection() const {
     const double speed = std::hypot(speedX, speedY);
     if (speed <= 0.0) return {0.0, 0.0};

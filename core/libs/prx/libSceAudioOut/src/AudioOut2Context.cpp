@@ -44,8 +44,6 @@ static constexpr std::uint16_t DEVICE_SAMPLES = 512;
 // intro cutscene (2.1 measured); the device takes float and clips hard, so the mix is attenuated
 // and clamped.
 static constexpr float MASTER_GAIN = 0.5f;
-static constexpr std::size_t OUTPUT_FRAME_BYTES = AUDIO_OUT2_OUTPUT_CHANNELS * sizeof(float);
-static constexpr std::uint32_t OUTPUT_BYTES_PER_MS = AUDIO_OUT2_SAMPLE_RATE * OUTPUT_FRAME_BYTES / 1000;
 static constexpr std::chrono::seconds PAD_PROBE_INTERVAL{2};
 static constexpr std::uint32_t PAD_SLACK_GRAINS = 2;
 
@@ -74,10 +72,6 @@ AudioOut2Context* AudioOut2FindContext(AudioOut2ContextHandle ctx) {
 
 static Clock::duration GrainDuration(const AudioOut2Context& context) {
     return std::chrono::duration_cast<Clock::duration>(std::chrono::duration<double>(static_cast<double>(context.grain) / AUDIO_OUT2_SAMPLE_RATE));
-}
-
-static std::uint32_t GrainBytes(const AudioOut2Context& context) {
-    return static_cast<std::uint32_t>(context.grain * OUTPUT_FRAME_BYTES);
 }
 
 static std::uint32_t CushionGrains(const AudioOut2Context& context) {
