@@ -170,12 +170,6 @@ std::vector<std::byte> dmaSourceBytes(std::span<const std::uint32_t> packet) {
     return copySource(GdsAddress() + packet[2], bytes, false);
 }
 
-void copyMemory(std::uint64_t source, std::uint64_t destination, std::size_t bytes, bool immediate) {
-    if (bytes == 0) return;
-    GuestMemory::CheckRange(reinterpret_cast<void*>(destination), bytes, 1, true);
-    GuestMemory::Write(destination, copySource(source, bytes, immediate));
-}
-
 constexpr std::uint32_t CopyDataRegisterSource = 0;
 constexpr std::uint32_t CopyDataCachePolicy = (3u << 13u) | (3u << 25u);
 constexpr std::uint32_t ShaderRegisterBase = 0x2c00;

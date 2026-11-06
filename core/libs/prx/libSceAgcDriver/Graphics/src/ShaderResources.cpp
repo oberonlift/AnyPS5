@@ -1887,14 +1887,6 @@ VkDescriptorSetLayout CreateSetLayout(const Context& context, std::span<const Vk
     return layout;
 }
 
-std::vector<VkDescriptorPoolSize> PoolSizes(std::span<const VkDescriptorSetLayoutBinding> bindings) {
-    std::map<VkDescriptorType, std::uint32_t> counts;
-    for (const auto& binding : bindings) counts[binding.descriptorType] += binding.descriptorCount;
-    std::vector<VkDescriptorPoolSize> sizes;
-    for (const auto& [type, count] : counts) sizes.push_back({type, count});
-    return sizes;
-}
-
 VkDescriptorPool CreateSetPool(const Context& context, std::span<const VkDescriptorPoolSize> sizes, bool updateAfterBind) {
     VkDescriptorPoolCreateInfo info{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
     info.flags = updateAfterBind ? VK_DESCRIPTOR_POOL_CREATE_UPDATE_AFTER_BIND_BIT : 0;
@@ -6012,10 +6004,6 @@ std::vector<VkDescriptorSetLayoutBinding> ShaderResources::LayoutBindings() cons
     std::vector<VkDescriptorSetLayoutBinding> result;
     for (const auto& binding : bindings) result.push_back(binding.layout);
     return result;
-}
-
-bool ShaderResources::LayoutUpdateAfterBind() const {
-    return updateAfterBind;
 }
 
 ShaderResources::DrawBindings::~DrawBindings() {

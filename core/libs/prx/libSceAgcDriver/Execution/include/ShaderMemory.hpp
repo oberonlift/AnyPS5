@@ -108,7 +108,6 @@ private:
         void ClearMask(const WordMask& other) {
             for (std::size_t i = 0; i < bits.size(); ++i) bits[i] &= ~other.bits[i];
         }
-        void SetAll() { bits.fill(~std::uint64_t{0}); }
         void SetBlock(std::size_t index) { bits[index / 64u] |= ((std::uint64_t{1} << BlockWords) - 1u) << (index % 64u / BlockWords * BlockWords); }
         void Reset() { bits.fill(0u); }
         void SetRun(std::size_t first, std::size_t count);

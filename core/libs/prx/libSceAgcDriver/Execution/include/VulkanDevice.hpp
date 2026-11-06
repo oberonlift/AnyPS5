@@ -89,7 +89,6 @@ public:
     std::optional<ShaderRecompiler::GeometryStageLimits> GeometryLimits() const;
     std::uint32_t MaxFragmentInputComponents() const;
     const std::uint32_t* WorkGroupCountLimit() const;
-    std::uint32_t VendorId() const;
     ShaderRecompiler::SpirvTarget ComputeTarget(std::uint32_t waveSize) const;
     bool ComputeFullSubgroups() const;
     // Distinguishes this device from every earlier one in the process (a memo keyed by the device
@@ -227,7 +226,6 @@ public:
         std::uint64_t checked, exact, moved, refused, filtered, rebuilt, kept, served;
     };
     static DispatchMoveCount DispatchMoveCounts();
-    void ResolveMemory(std::uint64_t address, std::size_t bytes, bool writable);
     void* Window() const;
     void Resize(std::uint32_t width, std::uint32_t height);
     void SelectDynamicRange(const DisplayBuffer* buffer);
@@ -235,7 +233,6 @@ public:
     bool DualSrcBlend() const;
     bool PrimitiveListRestart() const;
     bool SamplerFilterMinmax() const;
-    bool SamplerMirrorClampToEdge() const;
     bool ConservativeRasterization() const;
     VkShaderStageFlags SubgroupStages() const;
     bool ProvokingVertexLast() const;
@@ -372,7 +369,6 @@ public:
         bool count;
     };
     IndirectDrawSupport DrawIndirectSupport() const;
-    void EnqueueDraw(const Graphics::State& graphics, const Pm4::DrawParameters& draw, std::span<const Graphics::CompiledShader> shaders, std::span<const Graphics::GuestMemorySnapshot> snapshots = {});
     bool PrebuildGraphicsLibraries(const Graphics::ShaderStages& stages, std::span<const Graphics::CompiledShader> shaders);
 
 public:

@@ -88,10 +88,6 @@ std::array<std::uint32_t, LoadThreads> LoadRow(AgcDriver::VulkanDevice& device, 
     return output;
 }
 
-bool RowHolds(const std::array<std::uint32_t, LoadThreads>& row, float depth) {
-    return std::all_of(row.begin(), row.end(), [&](std::uint32_t bits) { return bits == std::bit_cast<std::uint32_t>(depth); });
-}
-
 std::size_t Holding(std::span<const float> plane, float depth) {
     return static_cast<std::size_t>(std::count(plane.begin(), plane.end(), depth));
 }

@@ -255,14 +255,6 @@ public:
     void PrepareSampleSlot();
     void EndPassSamples();
     void RecordUncounted(const std::function<void(VkCommandBuffer)>& record);
-    struct SampleDumpStatistics {
-        std::uint64_t queued;
-        std::uint64_t queuedInPass;
-        std::uint64_t recordedAtOnce;
-        std::uint64_t segments;
-        std::uint64_t folds;
-    };
-    static SampleDumpStatistics SampleDumpCounts();
     struct QueuedWrite {
         std::uint64_t begin;
         std::uint64_t end;

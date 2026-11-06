@@ -80,17 +80,6 @@ void TraceMaterializationFailure(std::uint64_t token, const Submission& submissi
     }
 }
 
-void TraceSubmissionFailure(std::uint64_t token, const Submission& submission, std::size_t packetOffset, std::size_t completedSubdraws, const std::exception_ptr& failure) {
-    if (token == 0) return;
-    try {
-        const auto reason = ExceptionReason(failure);
-        AgcDriver::CaptureTrace::Log("draw-submission-failed token=%llu submission=%llu queue=%x offset=%zu exception=%s reason=%.256s completedSubdraws=%zu",
-                static_cast<unsigned long long>(token), static_cast<unsigned long long>(submission.serial), submission.queue, packetOffset, ExceptionType(failure), reason.c_str(), completedSubdraws);
-    } catch (...) {
-
-    }
-}
-
 void TraceDrawAttemptFailure(std::uint64_t token, const char* phase, const char* outcome, std::uint64_t submission, std::uint32_t queue, std::size_t packetOffset, std::string_view reason, std::string_view exceptionType = "none") {
     if (token == 0) return;
         AgcDriver::CaptureTrace::LogBestEffort("draw-attempt-failed token=%llu phase=%s outcome=%s submission=%llu queue=%x offset=%zu exception=%s reason=%.256s",
@@ -104,20 +93,6 @@ void TraceDrawAttemptException(std::uint64_t token, const char* phase, std::uint
 
     }
 }
-
-const char* DrawVerdictName(DrawVerdict verdict) {
-    switch (verdict) {
-        case DrawVerdict::Drawn: return "Drawn";
-        case DrawVerdict::Nothing: return "Nothing";
-        case DrawVerdict::Rejected: return "Rejected";
-    }
-    return "Unknown";
-}
-
-std::string_view TrimmedReason(std::string_view reason) {
-    if (reason.size() > 200) reason = reason.substr(0, 200);
-    return reason;
-    }
 
 }
 

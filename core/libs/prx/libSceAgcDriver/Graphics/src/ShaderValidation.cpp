@@ -743,11 +743,4 @@ std::set<std::uint32_t> ValidateShaders(std::span<const CompiledShader> shaders,
     return locations;
 }
 
-void ValidateShaderPair(const ShaderRecompiler::RecompileResult& vertex, const ShaderRecompiler::RecompileResult& fragment) {
-    const std::array<CompiledShader, 2> shaders{{{ShaderRecompiler::ShaderStage::Vertex, &vertex, 0}, {ShaderRecompiler::ShaderStage::Fragment, &fragment, static_cast<std::uint32_t>(vertex.pushConstants.size())}}};
-    State state{};
-    state.stages.path = ShaderPath::Vertex;
-    ValidateShaders(shaders, state, VkPhysicalDeviceSubgroupProperties{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SUBGROUP_PROPERTIES}, false);
-}
-
 }

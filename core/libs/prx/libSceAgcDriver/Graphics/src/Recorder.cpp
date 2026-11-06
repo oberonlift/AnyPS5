@@ -2711,10 +2711,6 @@ bool Recorder::QueuesSampleDumps() const {
     return segmentMode() && LabelRunsPerBatch();
 }
 
-Recorder::SampleDumpStatistics Recorder::SampleDumpCounts() {
-    return SampleDumpStatistics{dumpsQueued.load(std::memory_order_relaxed), dumpsQueuedInPass.load(std::memory_order_relaxed), dumpsAtOnce.load(std::memory_order_relaxed), segmentsClosed.load(std::memory_order_relaxed), dumpFolds.load(std::memory_order_relaxed)};
-}
-
 bool Recorder::segmentSlotReady(const Batch& batch) const {
     return batch.segmentActive || (batch.segments != VK_NULL_HANDLE && batch.segmentNext < SegmentSlots);
 }

@@ -4548,10 +4548,6 @@ const std::uint32_t* VulkanDevice::WorkGroupCountLimit() const {
     return state->properties.limits.maxComputeWorkGroupCount;
 }
 
-std::uint32_t VulkanDevice::VendorId() const {
-    return state->properties.vendorID;
-}
-
 bool VulkanDevice::SupportsImageFormat(VkFormat format, VkImageUsageFlags usage) const {
     VkImageFormatProperties properties{};
     const auto query = state->InstanceFunction<PFN_vkGetPhysicalDeviceImageFormatProperties>("vkGetPhysicalDeviceImageFormatProperties");
@@ -4629,10 +4625,6 @@ bool VulkanDevice::DualSrcBlend() const {
 
 bool VulkanDevice::SamplerFilterMinmax() const {
     return state->samplerFilterMinmax;
-}
-
-bool VulkanDevice::SamplerMirrorClampToEdge() const {
-    return state->samplerMirrorClampToEdge;
 }
 
 bool VulkanDevice::ConservativeRasterization() const {

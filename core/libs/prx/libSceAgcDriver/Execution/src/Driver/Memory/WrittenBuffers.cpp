@@ -40,10 +40,6 @@ void Driver::forEachWrittenBuffer(const ShaderRecompiler::RecompileResult& compi
     visitWrittenBuffers(compiled, std::forward<TVisit>(visit));
 }
 
-void Driver::appendWrittenRanges(const ShaderRecompiler::RecompileResult& compiled, std::vector<std::pair<std::uint64_t, std::uint64_t>>& ranges) {
-    forEachWrittenBuffer(compiled, [&](std::uint32_t, std::uint64_t begin, std::uint64_t end, bool) { ranges.emplace_back(begin, end); });
-}
-
 void Driver::noteWrittenBuffers(std::uint64_t program, std::uint32_t queue, const ShaderRecompiler::RecompileResult& compiled) {
     std::lock_guard lock(writtenBuffersMutex);
     const auto serial = ++writtenBufferSerial;
