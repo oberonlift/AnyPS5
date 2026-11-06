@@ -14,7 +14,6 @@ void WriteU16(std::vector<std::uint8_t>& buf, std::size_t offset, std::uint16_t 
 void WriteU32(std::vector<std::uint8_t>& buf, std::size_t offset, std::uint32_t v);
 void WriteU64(std::vector<std::uint8_t>& buf, std::size_t offset, std::uint64_t v);
 
-void AppendU8(std::vector<std::uint8_t>& buf, std::uint8_t v);
 void AppendU16(std::vector<std::uint8_t>& buf, std::uint16_t v);
 void AppendU32(std::vector<std::uint8_t>& buf, std::uint32_t v);
 void AppendU64(std::vector<std::uint8_t>& buf, std::uint64_t v);
