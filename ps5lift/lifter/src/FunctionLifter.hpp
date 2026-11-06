@@ -105,6 +105,8 @@ private:
     std::size_t MmxOffset(const int index) const;
     bool HasRegisterOperand(int (*index)(ZydisRegister)) const;
     void EnterMmx();
+    void LeaveMmx();
+    void RaisePendingX87();
     llvm::Value* ReadRegister(const ZydisRegister reg);
     void WriteRegister(const ZydisRegister reg, llvm::Value* value);
     llvm::Value* Address(const ZydisDecodedOperand& operand, const bool applySegment = true);
@@ -326,6 +328,7 @@ private:
     void MinimumPosition();
     void PermuteVariable(const unsigned element);
     void MaskedMove(const unsigned element);
+    void LoadMxcsrOperand();
     void LoadMxcsr(llvm::Value* value);
     void StoreMxcsr();
     void DuplicateSingles(const bool high);
@@ -334,6 +337,7 @@ private:
     void PermuteDoubles();
     void InsertSingle();
     llvm::Value* CallX87(const std::uint32_t operation, const std::uint32_t format, llvm::Value* address, const std::uint32_t index);
+    llvm::Value* EmitX87Call(const std::uint32_t operation, const std::uint32_t format, llvm::Value* address, llvm::Value* index);
     static bool IsStackRegister(const ZydisDecodedOperand& operand);
     static std::uint32_t StackIndex(const ZydisDecodedOperand& operand);
     std::uint32_t X87Format(const bool integer) const;
@@ -343,9 +347,12 @@ private:
     llvm::Value* X87Address();
     void X87Arithmetic(const std::uint32_t operation, const bool integer, const bool pop);
     void X87StoreStatus();
-    void X87Environment(const bool store);
+    void X87Environment(const std::uint32_t operation);
     void X87SaveState();
     void X87RestoreState();
+    llvm::Value* RequestedComponents();
+    void XsaveState(const std::uint32_t form);
+    void XrstorState();
     void X87ConditionalMove(const ZydisMnemonic mnemonic);
     void CheckAlignment();
     llvm::Align CheckedAlignment() const;
@@ -362,7 +369,6 @@ private:
     llvm::Value* FlagImage(const unsigned bits);
     void SetFlagsFromImage(llvm::Value* image);
     void PopFlags();
-    void LeaveMmx();
     void CacheLine(const char* function);
     void ClearCacheLine();
     void Cpuid();

@@ -92,16 +92,35 @@ enum Ps5LiftX87Operation {
     PS5LIFT_X87_DECREMENT_TOP,
     PS5LIFT_X87_INITIALIZE,
     PS5LIFT_X87_CLEAR_EXCEPTIONS,
-    PS5LIFT_X87_WAIT,
     PS5LIFT_X87_STORE_STATUS,
     PS5LIFT_X87_STORE_CONTROL,
     PS5LIFT_X87_LOAD_CONTROL,
     PS5LIFT_X87_STORE_ENVIRONMENT,
     PS5LIFT_X87_LOAD_ENVIRONMENT,
     PS5LIFT_X87_LOAD_CONSTANT,
-    PS5LIFT_X87_MOVE_REGISTER,
+    PS5LIFT_X87_CONDITIONAL_MOVE,
     PS5LIFT_X87_SAVE_STATE,
-    PS5LIFT_X87_RESTORE_STATE
+    PS5LIFT_X87_RESTORE_STATE,
+    PS5LIFT_X87_STORE_STATE,
+    PS5LIFT_X87_LOAD_STATE,
+    PS5LIFT_X87_EXTRACT,
+    PS5LIFT_X87_XSAVE,
+    PS5LIFT_X87_XRSTOR_VALID,
+    PS5LIFT_X87_XRSTOR,
+    PS5LIFT_X87_SINE,
+    PS5LIFT_X87_COSINE,
+    PS5LIFT_X87_SINE_COSINE,
+    PS5LIFT_X87_TANGENT,
+    PS5LIFT_X87_ARCTANGENT,
+    PS5LIFT_X87_POWER_MINUS_ONE,
+    PS5LIFT_X87_LOGARITHM,
+    PS5LIFT_X87_LOGARITHM_PLUS_ONE
+};
+
+enum Ps5LiftXsaveForm {
+    PS5LIFT_XSAVE_STANDARD = 0,
+    PS5LIFT_XSAVE_OPTIMIZED = 1,
+    PS5LIFT_XSAVE_COMPACTED = 2
 };
 
 enum Ps5LiftX87Format {
@@ -112,10 +131,13 @@ enum Ps5LiftX87Format {
     PS5LIFT_X87_INTEGER16 = 4,
     PS5LIFT_X87_INTEGER32 = 5,
     PS5LIFT_X87_INTEGER64 = 6,
+    PS5LIFT_X87_PACKED_BCD = 7,
     PS5LIFT_X87_TRUNCATE = 8,
     PS5LIFT_X87_POP = 16,
     PS5LIFT_X87_POP_TWICE = 32,
-    PS5LIFT_X87_TO_REGISTER = 64
+    PS5LIFT_X87_TO_REGISTER = 64,
+    PS5LIFT_X87_SHORT_ENVIRONMENT = 128,
+    PS5LIFT_X87_UNCHECKED = 256
 };
 
 enum Ps5LiftX87Constant {
@@ -155,7 +177,8 @@ enum Ps5LiftStopKind {
     PS5LIFT_STOP_MISSING_TRANSLATION = 5,
     PS5LIFT_STOP_SEGMENT_TABLES = 6,
     PS5LIFT_STOP_PAGE_FAULT = 7,
-    PS5LIFT_STOP_NEEDS_EXACT_FLOAT = 8
+    PS5LIFT_STOP_NEEDS_EXACT_FLOAT = 8,
+    PS5LIFT_STOP_X87_FLOATING_POINT = 9
 };
 
 enum Ps5LiftInvalidOpcode {
@@ -238,7 +261,6 @@ typedef struct Ps5LiftProgram {
 void ps5lift_use_program(const Ps5LiftProgram* program);
 
 void ps5lift_dispatch(Ps5LiftState* state, uint64_t target);
-Ps5LiftFunction ps5lift_resolve(Ps5LiftState* state, uint64_t target);
 Ps5LiftFunction ps5lift_resolve_jump(Ps5LiftState* state, uint64_t target);
 [[noreturn]] void ps5lift_fail_unresumed(const Ps5LiftState* state, const char* frames);
 #define PS5LIFT_MXCSR_MASK 0x2ffffu
@@ -246,9 +268,11 @@ Ps5LiftFunction ps5lift_resolve_jump(Ps5LiftState* state, uint64_t target);
 
 void ps5lift_load_mxcsr(Ps5LiftState* state, uint32_t value, uint64_t address, const char* loader);
 uint32_t ps5lift_read_mxcsr(Ps5LiftState* state);
+#define PS5LIFT_X87_EXCEPTIONS 0x3fu
+#define PS5LIFT_X87_SUMMARY 0x80u
+#define PS5LIFT_X87_BUSY 0x8000u
 uint32_t ps5lift_x87(Ps5LiftState* state, uint32_t operation, uint32_t format, uint64_t address, uint32_t index);
 void ps5lift_extended_operation(Ps5LiftState* state, uint32_t operation, const void* left, const void* right, void* result);
-void ps5lift_extended_load(Ps5LiftState* state, uint32_t format, const void* source, void* result);
 void ps5lift_extended_store(Ps5LiftState* state, uint32_t format, const void* value, void* destination);
 #if LDBL_MANT_DIG == 64 || LDBL_MANT_DIG == 113
 #define PS5LIFT_HOST_LONG_DOUBLE_HOLDS_EXTENDED

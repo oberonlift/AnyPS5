@@ -5,14 +5,19 @@ either side of the sign and carry boundaries. Shift and rotate counts take 0, 1,
 more, the 5-bit and 6-bit mask boundaries and 255. Each floating-point format takes both zeros, both signs of the
 smallest and largest denormal and normal, both infinities, a quiet and a signalling NaN with payloads, 1.0, the value
 after 1.0 and half an ulp of 1.0, whose sum with 1.0 is a rounding tie. A conversion adds the values either side of
-its integer format's limits or the narrower format's range.
+its integer format's limits or the narrower format's range. `reduction_values` gives the extended values either side
+of k·π/2 for k from 1 to 8, 1000, 2^20, 2^40 and 2^62, where a trigonometric reduction with too short a π loses every
+bit; k·π/2 is computed with `decimal` at `tolerance.DIGITS` digits.
 
 `Values` cycles an edge list through the lanes of a value: lane j of the value that starts at s takes edge (s + j) mod
 n. `Random` is the one source of randomness: splitmix64 keyed by a seed and integer identifiers, so the same seed and
 identifiers always give the same values."""
 import functools
 from dataclasses import dataclass
+from decimal import localcontext
 from fractions import Fraction
+
+from . import tolerance
 
 MASK64 = (1 << 64) - 1
 _GOLDEN = 0x9E3779B97F4A7C15
@@ -21,6 +26,7 @@ _COUNT_EDGES = (0, 1, 31, 32, 63, 64, 255)
 _WIDE_COUNTS = (1 << 32, 1 << 63)
 _PAYLOADS = (0x123456789, 0x987654321)
 _RANDOM_COUNT_LIMIT = 256
+_REDUCTION_MULTIPLES = (1, 2, 3, 4, 5, 6, 7, 8, 1000, 1 << 20, 1 << 40, 1 << 62)
 
 
 def _mix64(value):
@@ -148,21 +154,35 @@ class FloatFormat:
         integer = 1 << self.fraction_bits if self.integer_bit and exponent else 0
         return negative << self.bits - 1 | exponent << self.bits - 1 - self.exponent_bits | integer | fraction
 
-    def exact(self, value):
-        magnitude = abs(value)
-        if magnitude == 0:
-            return self.pack(int(value < 0), 0, 0)
+    def _fields(self, magnitude):
         exponent = magnitude.numerator.bit_length() - magnitude.denominator.bit_length()
         if Fraction(2) ** exponent > magnitude:
             exponent -= 1
         biased = exponent + self.bias
         if biased <= 0:
-            field, scaled = 0, magnitude * Fraction(2) ** (self.bias - 1 + self.fraction_bits)
-        else:
-            field, scaled = biased, (magnitude / Fraction(2) ** exponent - 1) * 2**self.fraction_bits
+            return 0, magnitude * Fraction(2) ** (self.bias - 1 + self.fraction_bits)
+        return biased, (magnitude / Fraction(2) ** exponent - 1) * 2**self.fraction_bits
+
+    def exact(self, value):
+        magnitude = abs(value)
+        if magnitude == 0:
+            return self.pack(int(value < 0), 0, 0)
+        field, scaled = self._fields(magnitude)
         if scaled.denominator != 1 or field >= self.top_exponent:
             raise ValueError(f"{value} is not exact in {self.bits}-bit floating point")
         return self.pack(int(value < 0), field, int(scaled))
+
+    def neighbours(self, value):
+        if value <= 0:
+            raise ValueError(f"{value} is not positive")
+        field, scaled = self._fields(value)
+        if scaled.denominator == 1:
+            raise ValueError(f"{value} is exact in {self.bits}-bit floating point, so it has no neighbours either side")
+        fraction = scaled.numerator // scaled.denominator
+        above = (field, fraction + 1) if fraction + 1 < 1 << self.fraction_bits else (field + 1, 0)
+        if above[0] >= self.top_exponent:
+            raise ValueError(f"{value} lies past the largest finite {self.bits}-bit value")
+        return self.pack(0, field, fraction), self.pack(0, *above)
 
 
 FLOAT_FORMATS = {
@@ -207,6 +227,15 @@ def narrowing_edges(bits, narrower_bits):
     smallest_normal = Fraction(2) ** (1 - narrow.bias)
     smallest = Fraction(2) ** (1 - narrow.bias - narrow.fraction_bits)
     return tuple(form.exact(value) for value in (largest, smallest_normal, smallest, smallest / 2))
+
+
+@functools.lru_cache(maxsize=None)
+def reduction_values():
+    with localcontext() as context:
+        context.prec = tolerance.DIGITS
+        half_pi = tolerance.pi() / 2
+        multiples = [Fraction(multiple * half_pi) for multiple in _REDUCTION_MULTIPLES]
+    return tuple(value for multiple in multiples for value in FLOAT_FORMATS[80].neighbours(multiple))
 
 
 def random_float80(random):

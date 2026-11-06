@@ -1,0 +1,4 @@
+fcomp of a quiet NaN: fsw 0xf581
+fcomip of a quiet NaN: fsw 0xb081, SF ZF AF PF CF 0x47, OF 0
+before fsqrt
+after fsqrt

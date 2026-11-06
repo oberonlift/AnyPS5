@@ -298,9 +298,22 @@ bool FunctionLifter::HasRegisterOperand(int (*index)(ZydisRegister)) const {
 }
 
 void FunctionLifter::EnterMmx() {
+    RaisePendingX87();
     constexpr std::uint16_t Top = 7 << 11;
     StateStore(_builder.CreateAnd(StateLoad(_builder.getInt16Ty(), offsetof(Ps5LiftState, X87Status)), _builder.getInt16(static_cast<std::uint16_t>(~Top))), offsetof(Ps5LiftState, X87Status));
     StateStore(_builder.getInt8(0xff), offsetof(Ps5LiftState, X87Valid));
+}
+
+void FunctionLifter::LeaveMmx() {
+    RaisePendingX87();
+    StateStore(_builder.getInt8(0), offsetof(Ps5LiftState, X87Valid));
+}
+
+void FunctionLifter::RaisePendingX87() {
+    auto* status = StateLoad(_builder.getInt16Ty(), offsetof(Ps5LiftState, X87Status));
+    auto* control = StateLoad(_builder.getInt16Ty(), offsetof(Ps5LiftState, X87Control));
+    auto* pending = _builder.CreateAnd(_builder.CreateAnd(status, _builder.CreateNot(control)), _builder.getInt16(PS5LIFT_X87_EXCEPTIONS));
+    StopIf(_builder.CreateICmpNE(pending, _builder.getInt16(0)), PS5LIFT_STOP_X87_FLOATING_POINT, 0, Mnemonic() + " with an unmasked x87 exception pending");
 }
 
 llvm::Value* FunctionLifter::ReadRegister(const ZydisRegister reg) {
@@ -855,6 +868,7 @@ void FunctionLifter::EmitInstruction(const Instruction& instruction) {
     case InstructionGroup::SegmentTables:
         return StopSegmentTables();
     }
+    if (WaitsForX87(instruction.Info)) RaisePendingX87();
     try {
         CheckAlignment();
         EmitSemantics(instruction.Info.mnemonic);

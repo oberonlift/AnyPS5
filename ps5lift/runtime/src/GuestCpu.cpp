@@ -23,7 +23,7 @@ extern "C" std::uint16_t GuestCpuX87Control_nid_no_patch(void) {
 }
 
 extern "C" void GuestCpuSetX87Control_nid_no_patch(const std::uint16_t value) {
-    ps5lift_current_state()->X87Control = value;
+    Ps5Lift::LoadX87Control(*ps5lift_current_state(), value);
 }
 
 extern "C" std::uint16_t GuestCpuX87Status_nid_no_patch(void) {
@@ -31,7 +31,8 @@ extern "C" std::uint16_t GuestCpuX87Status_nid_no_patch(void) {
 }
 
 extern "C" void GuestCpuSetX87Status_nid_no_patch(const std::uint16_t value) {
-    ps5lift_current_state()->X87Status = value;
+    auto* state = ps5lift_current_state();
+    state->X87Status = Ps5Lift::X87StatusWithSummary(value, state->X87Control);
 }
 
 extern "C" void GuestCpuX87Wait_nid_no_patch(void) {
@@ -257,7 +258,7 @@ extern "C" void GuestCpuSaveFiber_nid_no_patch(std::uint64_t* context) {
 extern "C" void GuestCpuRestoreFiber_nid_no_patch(const std::uint64_t* context) {
     auto* state = ps5lift_current_state();
     for (int i = 0; i < 7; ++i) state->Gpr[FiberRegisters[i]] = context[i];
-    state->X87Control = static_cast<std::uint16_t>(context[7] >> 32);
+    Ps5Lift::LoadX87Control(*state, static_cast<std::uint16_t>(context[7] >> 32));
     state->Unwinding = 0;
     ps5lift_load_mxcsr(state, static_cast<std::uint32_t>(context[7]), state->Rip, "a fiber switch");
 }

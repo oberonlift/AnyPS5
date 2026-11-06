@@ -1,3 +1,4 @@
+import bisect
 import dataclasses
 import os
 import re
@@ -6,6 +7,8 @@ import subprocess
 import tempfile
 import unittest
 from collections import defaultdict
+from decimal import Decimal
+from fractions import Fraction
 from pathlib import Path
 
 from instructions import cases, database, decoder, program, records, suite, values
@@ -24,6 +27,9 @@ MEMORY_TYPES = frozenset({"mem", "mem_vsibx", "mem_vsiby", "moffs", "implicit_me
 X87_ELEMENTS = frozenset({"float80", "bcd80"})
 X87_STATE_FLAGS = frozenset({"fpu_state_cr", "fpu_state_cw"})
 X87_CONTROL_PAIRS = frozenset((precision, rounding) for precision in (0, 2, 3) for rounding in range(4))
+FX_DEFAULT_FCW = 0x037F
+MMX_PENDING_FCW = 0x037E
+MMX_PENDING_FSW = 0x8081
 STACK_MARGIN = 512
 IMPLICIT_BASES = {"si": 6, "di": 7, "bx": 3, "bp": 5, "sp": 4}
 MASK64 = 2**64 - 1
@@ -38,6 +44,15 @@ MXCSR_INITIAL = 0x1F80
 COMPACTED = 1 << 63
 XSAVE_HEADER = 512
 XSAVE_IMAGE = 576
+TRIGONOMETRY = ("fsin", "fcos", "fsincos", "fptan")
+REDUCTION_MULTIPLES = (1, 2, 3, 4, 5, 6, 7, 8, 1000, 2**20, 2**40, 2**62)
+PI = Decimal(
+    "3.1415926535897932384626433832795028841971693993751058209749445923078164062862089986280348253421170679"
+)
+EXTENDED_BIAS = 16383
+EXTENDED_TOP_EXPONENT = 0x7FFF
+EXTENDED_INTEGER_BIT = 1 << 63
+X87_PRECISION_AND_ROUNDING = 0xF00
 
 
 def _ieee_edges(bits, exponent_bits):
@@ -102,13 +117,45 @@ def _accesses_memory(form):
     )
 
 
-def _is_x87(form):
+def _is_mmx(form):
     definition = form.definition
-    types = {operand["operand_type"] for operand in definition.operands}
-    elements = {operand.get("element_type") for operand in definition.operands}
-    if definition.extension == "MMX" or "mmx" in types:
+    return definition.extension == "MMX" or any(operand["operand_type"] == "mmx" for operand in definition.operands)
+
+
+def _is_x87(form):
+    if _is_mmx(form):
         return False
+    definition = form.definition
+    elements = {operand.get("element_type") for operand in definition.operands}
     return definition.extension == "X87" or bool(elements & X87_ELEMENTS) or bool(definition.flags & X87_STATE_FLAGS)
+
+
+def _precision_and_rounding(spec):
+    return struct.unpack_from("<H", spec.x87, records.FX_FCW)[0] & X87_PRECISION_AND_ROUNDING
+
+
+def _st0(spec):
+    offset = records.fx_st_offset(0)
+    return int.from_bytes(spec.x87[offset:offset + 10], "little")
+
+
+def _positive_normal_extended(bits):
+    exponent = bits >> 64
+    significand = bits & MASK64
+    if not 0 < exponent < EXTENDED_TOP_EXPONENT or not significand & EXTENDED_INTEGER_BIT:
+        return None
+    return Fraction(significand) * Fraction(2) ** (exponent - EXTENDED_BIAS - 63)
+
+
+def _extended_ordinal(bits):
+    return bits >> 64 << 63 | bits & EXTENDED_INTEGER_BIT - 1
+
+
+def _form_schedules(instances, group, group_specs):
+    schedules = defaultdict(list)
+    for spec in group_specs:
+        schedules[instances[group][spec.instance].form.key].append(spec)
+    return schedules
 
 
 def _set_groups(instances, specs):
@@ -331,10 +378,7 @@ class CasesTest(unittest.TestCase):
         forms, instances, specs = generated()
         checked = 0
         for group, group_specs in _set_groups(instances, specs):
-            schedules = defaultdict(list)
-            for spec in group_specs:
-                schedules[instances[group][spec.instance].form.key].append(spec)
-            for key, schedule in schedules.items():
+            for key, schedule in _form_schedules(instances, group, group_specs).items():
                 if not _is_x87(instances[group][schedule[0].instance].form):
                     continue
                 checked += 1
@@ -343,6 +387,38 @@ class CasesTest(unittest.TestCase):
                 controls = {(control >> 8 & 3, control >> 10 & 3) for control, _ in states}
                 self.assertEqual(controls, X87_CONTROL_PAIRS, key)
         self.assertGreater(checked, 0)
+
+    def test_mmx_forms_run_one_pending_case(self):
+        forms, instances, specs = generated()
+        checked = 0
+        for group, group_specs in _set_groups(instances, specs):
+            for key, schedule in _form_schedules(instances, group, group_specs).items():
+                if not _is_mmx(instances[group][schedule[0].instance].form):
+                    continue
+                checked += 1
+                states = [struct.unpack_from("<HH", spec.x87, records.FX_FCW) for spec in schedule]
+                others = [state for state in states if state != (FX_DEFAULT_FCW, 0)]
+                self.assertEqual(others, [(MMX_PENDING_FCW, MMX_PENDING_FSW)], key)
+        self.assertGreater(checked, 0)
+
+    def test_trigonometry_brackets_multiples_of_half_pi(self):
+        for mnemonic in TRIGONOMETRY:
+            schedule = self.specs_of(self.form(mnemonic))
+            first = _precision_and_rounding(schedule[0])
+            operands = {}
+            for spec in schedule:
+                bits = _st0(spec)
+                value = _positive_normal_extended(bits)
+                if value is not None and _precision_and_rounding(spec) == first:
+                    operands[value] = bits
+            ordered = sorted(operands)
+            for multiple in REDUCTION_MULTIPLES:
+                position = bisect.bisect(ordered, Fraction(PI) * multiple / 2)
+                with self.subTest(mnemonic=mnemonic, multiple=multiple):
+                    self.assertTrue(0 < position < len(ordered), "no operands either side")
+                    below, above = operands[ordered[position - 1]], operands[ordered[position]]
+                    self.assertEqual(_extended_ordinal(above) - _extended_ordinal(below), 1,
+                                     f"{below:#x} and {above:#x} are not adjacent")
 
     def test_unknown_implicit_register_names_the_form(self):
         cpuid = self.form("cpuid")

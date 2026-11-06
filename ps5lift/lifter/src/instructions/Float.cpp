@@ -345,13 +345,21 @@ void FunctionLifter::Convert(const ZydisMnemonic mnemonic) {
         Write(0, FloatBits(_builder.CreateSIToFP(AsVector(ReadAs(1, width), 32), llvm::FixedVectorType::get(FloatType(32), width / 32))));
         return;
     }
-    case ZYDIS_MNEMONIC_CVTTPS2DQ: case ZYDIS_MNEMONIC_VCVTTPS2DQ: case ZYDIS_MNEMONIC_CVTPS2DQ: case ZYDIS_MNEMONIC_VCVTPS2DQ: {
+    case ZYDIS_MNEMONIC_CVTPI2PS: {
+        auto* converted = _builder.CreateSIToFP(AsVector(ReadAs(1, 64), 32), llvm::FixedVectorType::get(FloatType(32), 2));
+        llvm::Value* destination = AsFloats(ReadVector(0, 128), 32);
+        for (unsigned lane = 0; lane < 2; ++lane) destination = _builder.CreateInsertElement(destination, _builder.CreateExtractElement(converted, lane), lane);
+        Write(0, FloatBits(destination));
+        return;
+    }
+    case ZYDIS_MNEMONIC_CVTTPS2DQ: case ZYDIS_MNEMONIC_VCVTTPS2DQ: case ZYDIS_MNEMONIC_CVTPS2DQ: case ZYDIS_MNEMONIC_VCVTPS2DQ:
+    case ZYDIS_MNEMONIC_CVTTPS2PI: case ZYDIS_MNEMONIC_CVTPS2PI: {
         const auto width = Bits(0);
-        const bool truncate = mnemonic == ZYDIS_MNEMONIC_CVTTPS2DQ || mnemonic == ZYDIS_MNEMONIC_VCVTTPS2DQ;
+        const bool truncate = mnemonic == ZYDIS_MNEMONIC_CVTTPS2DQ || mnemonic == ZYDIS_MNEMONIC_VCVTTPS2DQ || mnemonic == ZYDIS_MNEMONIC_CVTTPS2PI;
         Write(0, AsInteger(FloatToInteger(AsFloats(ReadAs(1, width), 32), 32, truncate)));
         return;
     }
-    case ZYDIS_MNEMONIC_CVTDQ2PD: case ZYDIS_MNEMONIC_VCVTDQ2PD: {
+    case ZYDIS_MNEMONIC_CVTDQ2PD: case ZYDIS_MNEMONIC_VCVTDQ2PD: case ZYDIS_MNEMONIC_CVTPI2PD: {
         const auto count = Bits(0) / 64;
         auto* source = AsVector(_builder.CreateZExtOrTrunc(ReadRegisterOrMemory(1, count * 32), Int(count * 32)), 32);
         Write(0, FloatBits(_builder.CreateSIToFP(source, llvm::FixedVectorType::get(FloatType(64), count))));
@@ -364,14 +372,15 @@ void FunctionLifter::Convert(const ZydisMnemonic mnemonic) {
         return;
     }
     case ZYDIS_MNEMONIC_CVTPD2PS: case ZYDIS_MNEMONIC_VCVTPD2PS:
-    case ZYDIS_MNEMONIC_CVTPD2DQ: case ZYDIS_MNEMONIC_VCVTPD2DQ: case ZYDIS_MNEMONIC_CVTTPD2DQ: case ZYDIS_MNEMONIC_VCVTTPD2DQ: {
+    case ZYDIS_MNEMONIC_CVTPD2DQ: case ZYDIS_MNEMONIC_VCVTPD2DQ: case ZYDIS_MNEMONIC_CVTTPD2DQ: case ZYDIS_MNEMONIC_VCVTTPD2DQ:
+    case ZYDIS_MNEMONIC_CVTPD2PI: case ZYDIS_MNEMONIC_CVTTPD2PI: {
         const auto sourceBits = Bits(1);
         const auto count = sourceBits / 64;
         auto* source = AsFloats(ReadAs(1, sourceBits), 64);
         llvm::Value* converted = nullptr;
         if (mnemonic == ZYDIS_MNEMONIC_CVTPD2PS || mnemonic == ZYDIS_MNEMONIC_VCVTPD2PS) converted = ConvertNan(source, _builder.CreateFPTrunc(source, llvm::FixedVectorType::get(FloatType(32), count)));
-        else converted = FloatToInteger(source, 32, mnemonic == ZYDIS_MNEMONIC_CVTTPD2DQ || mnemonic == ZYDIS_MNEMONIC_VCVTTPD2DQ);
-        WriteVectorLow(0, converted, 128);
+        else converted = FloatToInteger(source, 32, mnemonic == ZYDIS_MNEMONIC_CVTTPD2DQ || mnemonic == ZYDIS_MNEMONIC_VCVTTPD2DQ || mnemonic == ZYDIS_MNEMONIC_CVTTPD2PI);
+        WriteVectorLow(0, converted, Bits(0));
         return;
     }
     case ZYDIS_MNEMONIC_VCVTPH2PS: {
@@ -427,6 +436,11 @@ void FunctionLifter::DotProduct(const unsigned element) {
         }
     }
     Write(0, FloatBits(result));
+}
+
+void FunctionLifter::LoadMxcsrOperand() {
+    Flush();
+    LoadMxcsr(Read(0));
 }
 
 void FunctionLifter::LoadMxcsr(llvm::Value* value) {

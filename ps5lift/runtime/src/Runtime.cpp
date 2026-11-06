@@ -106,6 +106,8 @@ void DefaultStopHandler(Ps5LiftState* state, const std::uint32_t kind, const std
         ps5lift_fail("page fault at 0x%" PRIx64 ": %s from unmapped memory", address, text);
     case PS5LIFT_STOP_NEEDS_EXACT_FLOAT:
         ps5lift_fail("--float fast stops at 0x%" PRIx64 ": %s", address, text);
+    case PS5LIFT_STOP_X87_FLOATING_POINT:
+        ps5lift_fail("x87 floating-point exception at 0x%" PRIx64 ": %s", address, text);
     default:
         ps5lift_fail("unknown stop kind %" PRIu32 " at 0x%" PRIx64, kind, address);
     }
@@ -443,16 +445,12 @@ void StopIfUnmapped(Ps5LiftState* state, const std::uint64_t address) {
     ps5lift_stop(state, PS5LIFT_STOP_PAGE_FAULT, address, 0, "fetch");
 }
 
-}
-
-extern "C" Ps5LiftFunction ps5lift_resolve(Ps5LiftState* state, const std::uint64_t target) {
+Ps5LiftFunction Resolve(Ps5LiftState* state, const std::uint64_t target) {
     const auto function = Ps5Lift::LookupFunction(target);
     if (function != nullptr) return function;
     StopIfUnmapped(state, target);
     ps5lift_fail("indirect branch to 0x%" PRIx64 ", which was not lifted", target);
 }
-
-namespace {
 
 struct ReturnJump {
     std::uint64_t Rip = 0;
@@ -485,7 +483,7 @@ extern "C" void ps5lift_fail_unresumed(const Ps5LiftState* state, const char* fr
 }
 
 extern "C" void ps5lift_dispatch(Ps5LiftState* state, const std::uint64_t target) {
-    ps5lift_resolve(state, target)(state);
+    Resolve(state, target)(state);
 }
 
 extern "C" void ps5lift_fail(const char* format, ...) {

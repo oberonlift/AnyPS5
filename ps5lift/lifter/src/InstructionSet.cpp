@@ -50,6 +50,18 @@ InstructionGroup ClassifyInstruction(const ZydisDecodedInstruction& instruction,
     return InstructionGroup::Set;
 }
 
+bool WaitsForX87(const ZydisDecodedInstruction& instruction) {
+    switch (instruction.mnemonic) {
+    case ZYDIS_MNEMONIC_FNINIT: case ZYDIS_MNEMONIC_FNCLEX: case ZYDIS_MNEMONIC_FNSTCW: case ZYDIS_MNEMONIC_FNSTSW: case ZYDIS_MNEMONIC_FNSTENV: case ZYDIS_MNEMONIC_FNSAVE:
+    case ZYDIS_MNEMONIC_FDISI8087_NOP: case ZYDIS_MNEMONIC_FENI8087_NOP: case ZYDIS_MNEMONIC_FSETPM287_NOP:
+        return false;
+    case ZYDIS_MNEMONIC_FISTTP:
+        return true;
+    default:
+        return instruction.meta.isa_ext == ZYDIS_ISA_EXT_X87;
+    }
+}
+
 const ZydisDecodedOperand* MemoryOperand(const ZydisDecodedInstruction& instruction, const ZydisDecodedOperand* operands) {
     for (std::uint8_t i = 0; i < instruction.operand_count_visible; ++i) {
         if (operands[i].type == ZYDIS_OPERAND_TYPE_MEMORY) return &operands[i];
@@ -64,6 +76,9 @@ AlignmentRule RequiredAlignment(const ZydisDecodedInstruction& instruction, cons
     switch (instruction.mnemonic) {
     case ZYDIS_MNEMONIC_CMPXCHG16B: case ZYDIS_MNEMONIC_FXSAVE: case ZYDIS_MNEMONIC_FXSAVE64: case ZYDIS_MNEMONIC_FXRSTOR: case ZYDIS_MNEMONIC_FXRSTOR64:
         return {16, false};
+    case ZYDIS_MNEMONIC_XSAVE: case ZYDIS_MNEMONIC_XSAVE64: case ZYDIS_MNEMONIC_XSAVEOPT: case ZYDIS_MNEMONIC_XSAVEOPT64:
+    case ZYDIS_MNEMONIC_XSAVEC: case ZYDIS_MNEMONIC_XSAVEC64: case ZYDIS_MNEMONIC_XRSTOR: case ZYDIS_MNEMONIC_XRSTOR64:
+        return {64, false};
     case ZYDIS_MNEMONIC_CVTPD2PI: case ZYDIS_MNEMONIC_CVTTPD2PI:
         return {16, true};
     case ZYDIS_MNEMONIC_MOVUPS: case ZYDIS_MNEMONIC_MOVUPD: case ZYDIS_MNEMONIC_MOVDQU: case ZYDIS_MNEMONIC_LDDQU:

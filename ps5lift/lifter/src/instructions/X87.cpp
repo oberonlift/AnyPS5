@@ -3,11 +3,15 @@
 namespace Ps5Lift::Lifting {
 
 llvm::Value* FunctionLifter::CallX87(const std::uint32_t operation, const std::uint32_t format, llvm::Value* address, const std::uint32_t index) {
+    return EmitX87Call(operation, format, address, _builder.getInt32(index));
+}
+
+llvm::Value* FunctionLifter::EmitX87Call(const std::uint32_t operation, const std::uint32_t format, llvm::Value* address, llvm::Value* index) {
     const auto* memory = address ? MemoryOperand() : nullptr;
     const bool ordered = memory != nullptr && _module.Options().Memory == MemoryModel::Tso && !InPrivateFrame(*memory) && !InReadOnlySegment(*memory, memory->size);
     if (ordered) _builder.CreateFence(llvm::AtomicOrdering::SequentiallyConsistent);
     auto callee = _module.Runtime("ps5lift_x87", llvm::FunctionType::get(_builder.getInt32Ty(), {_module.Pointer(), _builder.getInt32Ty(), _builder.getInt32Ty(), I64(), _builder.getInt32Ty()}, false));
-    auto* result = _builder.CreateCall(callee, {_state, _builder.getInt32(operation), _builder.getInt32(format), address ? address : _builder.getInt64(0), _builder.getInt32(index)});
+    auto* result = _builder.CreateCall(callee, {_state, _builder.getInt32(operation), _builder.getInt32(format), address ? address : _builder.getInt64(0), index});
     if (ordered) _builder.CreateFence(llvm::AtomicOrdering::SequentiallyConsistent);
     return result;
 }
@@ -70,9 +74,14 @@ void FunctionLifter::X87StoreStatus() {
     Write(0, _builder.CreateTrunc(CallX87(PS5LIFT_X87_STORE_STATUS, 0, nullptr, 0), _builder.getInt16Ty()));
 }
 
-void FunctionLifter::X87Environment(const bool store) {
-    if (Operand(0).size != 224) throw UnsupportedInstruction("16-bit environment");
-    CallX87(store ? PS5LIFT_X87_STORE_ENVIRONMENT : PS5LIFT_X87_LOAD_ENVIRONMENT, 0, X87Address(), 0);
+void FunctionLifter::X87Environment(const std::uint32_t operation) {
+    std::uint32_t format = 0;
+    switch (Operand(0).size) {
+    case 112: case 752: format = PS5LIFT_X87_SHORT_ENVIRONMENT; break;
+    case 224: case 864: break;
+    default: throw UnsupportedInstruction("x87 environment size");
+    }
+    CallX87(operation, format, X87Address(), 0);
 }
 
 void FunctionLifter::X87SaveState() {
@@ -83,6 +92,24 @@ void FunctionLifter::X87SaveState() {
 void FunctionLifter::X87RestoreState() {
     Flush();
     LoadMxcsr(CallX87(PS5LIFT_X87_RESTORE_STATE, 0, X87Address(), 0));
+    Reload();
+}
+
+llvm::Value* FunctionLifter::RequestedComponents() {
+    return _builder.CreateTrunc(Gpr(PS5LIFT_RAX), _builder.getInt32Ty());
+}
+
+void FunctionLifter::XsaveState(const std::uint32_t form) {
+    Flush();
+    EmitX87Call(PS5LIFT_X87_XSAVE, form, X87Address(), RequestedComponents());
+}
+
+void FunctionLifter::XrstorState() {
+    Flush();
+    auto* address = X87Address();
+    auto* requested = RequestedComponents();
+    StopIf(_builder.CreateICmpEQ(EmitX87Call(PS5LIFT_X87_XRSTOR_VALID, 0, address, requested), _builder.getInt32(0)), PS5LIFT_STOP_GENERAL_PROTECTION, 0, "xrstor with an invalid XSAVE header");
+    LoadMxcsr(EmitX87Call(PS5LIFT_X87_XRSTOR, 0, address, requested));
     Reload();
 }
 
@@ -99,13 +126,7 @@ void FunctionLifter::X87ConditionalMove(const ZydisMnemonic mnemonic) {
     case ZYDIS_MNEMONIC_FCMOVNU: condition = _builder.CreateNot(Flag(PS5LIFT_PF)); break;
     default: UnexpectedMnemonic("X87ConditionalMove", mnemonic);
     }
-    auto* move = llvm::BasicBlock::Create(Context(), "fcmov", _host);
-    auto* after = llvm::BasicBlock::Create(Context(), "fcmov_done", _host);
-    _builder.CreateCondBr(condition, move, after);
-    _builder.SetInsertPoint(move);
-    CallX87(PS5LIFT_X87_MOVE_REGISTER, 0, nullptr, X87Index(1));
-    _builder.CreateBr(after);
-    _builder.SetInsertPoint(after);
+    CallX87(PS5LIFT_X87_CONDITIONAL_MOVE, 0, _builder.CreateZExt(condition, I64()), X87Index(1));
 }
 
 }

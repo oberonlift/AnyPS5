@@ -1,7 +1,6 @@
 #include "../FunctionLifter.hpp"
 
 #include <algorithm>
-#include <cstddef>
 #include <stdexcept>
 #include <vector>
 
@@ -343,10 +342,6 @@ void FunctionLifter::InsertSingle() {
         if ((control >> i) & 1) result = _builder.CreateInsertElement(result, _builder.getInt32(0), _builder.getInt64(i));
     }
     Write(0, AsInteger(result));
-}
-
-void FunctionLifter::LeaveMmx() {
-    StateStore(_builder.getInt8(0), offsetof(Ps5LiftState, X87Valid));
 }
 
 void FunctionLifter::MergeScalar(const unsigned element) {

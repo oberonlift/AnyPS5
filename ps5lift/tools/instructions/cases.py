@@ -16,8 +16,9 @@ and AVX floating-point instances, and those that read MXCSR, run their base case
 `machine.MXCSR_STATES`, and an FTZ-only or DAZ-only case names the console-state case with the same inputs as its twin.
 x87 instances cycle TOP, the tags, precision and rounding, the exception masks and pending exceptions through their base
 cases, of which they have at least as many as the longest of those cycles, and add an all-empty, an all-valid and a
-pending-unmasked case. A form that accesses memory adds, for each memory operand, a case misaligned by one, one that
-ends at the block's end and one that crosses into the guard by one byte; for an operand that must be aligned (XED's
+pending-unmasked case. MMX instances add the pending-unmasked case alone, and their other cases have no exception
+pending. A form that accesses memory adds, for each memory operand, a case misaligned by one, one that ends at the
+block's end and one that crosses into the guard by one byte; for an operand that must be aligned (XED's
 REQUIRES_ALIGNMENT), which cannot cross a page, that last case is an aligned access at the guard's first byte. A return
 gets none of these: the code that calls it writes the stack slot it reads first. Each variant runs base case 0 and one
 random case. `rules` gives what particular mnemonics need of their inputs, including extra cases built on given base
@@ -129,8 +130,12 @@ _RANDOM_CASES = 4
 
 _X87_SUMMARY = 0x80 | 0x8000
 _X87_INVALID = 0x01
+_X87_EXCEPTION_MASKS = 0x3F
+_X87_PENDING_MASKS = _X87_EXCEPTION_MASKS & ~_X87_INVALID
+_X87_PENDING_STATUS = _X87_INVALID | _X87_SUMMARY
 _X87_CONDITION_BITS = (8, 9, 10, 14)
 _X87_OVERRIDES = ("empty", "full", "pending")
+_MMX_OVERRIDES = ("pending",)
 _X87_CYCLE = max(8, len(X87_CONTROLS), len(X87_MASKS), len(X87_PENDING))
 _REQUIRES_ALIGNMENT = "REQUIRES_ALIGNMENT"
 
@@ -481,6 +486,12 @@ def _base_case_count(model):
     return max(model.base_cases, _X87_CYCLE) if model.x87 else model.base_cases
 
 
+def _x87_overrides(model):
+    if model.x87:
+        return _X87_OVERRIDES
+    return _MMX_OVERRIDES if model.mmx else ()
+
+
 def _moffs_plans(model, primary):
     moffs = [operand for operand in model.explicit if operand.category == "moffs"]
     if not moffs or not model.accesses_memory:
@@ -784,6 +795,9 @@ def _x87_state(case, state, override):
     model = case.model
     if model.mmx:
         case.valid = 0xFF if state % 2 else 0
+        if override == "pending":
+            case.fcw = case.fcw & ~_X87_EXCEPTION_MASKS | _X87_PENDING_MASKS
+            case.fsw = _X87_PENDING_STATUS
         return
     if not model.x87:
         return
@@ -797,11 +811,11 @@ def _x87_state(case, state, override):
     elif override == "full":
         valid = 0xFF
     elif override == "pending":
-        masks, pending = 0x3F & ~_X87_INVALID, _X87_INVALID | _X87_SUMMARY
+        masks, pending = _X87_PENDING_MASKS, _X87_PENDING_STATUS
     condition = sum((state >> bit & 1) << position for bit, position in enumerate(_X87_CONDITION_BITS))
     case.top = state % 8
     case.valid = valid
-    case.fcw = x87_control_word(state) & ~0x3F | masks
+    case.fcw = x87_control_word(state) & ~_X87_EXCEPTION_MASKS | masks
     case.fsw = case.top << 11 | pending | condition
 
 
@@ -933,9 +947,8 @@ def _form_specs(model, members, first_index):
             index = add(_build(layout, (_BASE, case), base=case, mxcsr=mxcsr, state=case), twin)
             if mxcsr == CONSOLE_MXCSR:
                 console[case] = index
-    if model.x87:
-        for number, override in enumerate(_X87_OVERRIDES):
-            add(_build(first, (_X87_CASE, number), base=0, x87=override))
+    for override in _x87_overrides(model):
+        add(_build(first, (_X87_CASE, _X87_OVERRIDES.index(override)), base=0, x87=override))
     for number in range(_RANDOM_CASES):
         add(_build(primaries[number % len(primaries)], (_RANDOM, number), state=count + number))
     if model.accesses_memory and model.shape is not Shape.RETURN:

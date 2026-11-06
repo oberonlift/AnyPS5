@@ -3,7 +3,7 @@ find_package(Python3 REQUIRED COMPONENTS Interpreter)
 option(PS5LIFT_QEMU_TESTS "On an x86-64 host, also lift the fixtures for aarch64 and run them under qemu-aarch64" OFF)
 
 set(PS5LIFT_FIXTURES basic vector float threads callbacks x87 setjmp cpu mmx modules strings sse41 avx stop stop_not_on_ps5 stop_privileged
-        stop_segment_tables stop_console_kernel stop_syscall stop_page_fault stop_popf misaligned_sse split_lock gather)
+        stop_segment_tables stop_console_kernel stop_syscall stop_page_fault stop_popf stop_x87 misaligned_sse split_lock gather x87_environment x87_rescaled xsave)
 
 if(NOT CMAKE_SYSTEM_NAME STREQUAL "Linux")
     set(PS5LIFT_X86_64_SYSROOT "" CACHE PATH "x86-64 Linux sysroot that the fixture guests and the instruction tests' native driver build against")
@@ -112,7 +112,7 @@ endforeach()
 set(PS5LIFT_INSTRUCTION_GROUPS
         outside-not-on-ps5 outside-privileged outside-segment-tables outside-console-kernel
         adox_adcx amd3dnow_prefetch avxaes bmi1 clflushopt clfsh clwb clzero hint lzcnt monitorx movbe pause rdpid rdrand rdseed rdtscp sse4a
-        aes avx2 avx2gather base bmi2 longmode mmx pclmulqdq sha ssse3)
+        aes avx2 avx2gather base bmi2 longmode mmx pclmulqdq sha ssse3 x87 xsave xsavec xsaveopt)
 foreach(triple IN LISTS PS5LIFT_TEST_TRIPLES)
     string(REGEX REPLACE "-.*" "" arch ${triple})
     foreach(group IN LISTS PS5LIFT_INSTRUCTION_GROUPS)

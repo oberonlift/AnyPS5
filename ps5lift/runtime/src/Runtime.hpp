@@ -15,6 +15,10 @@ Ps5LiftState* BoundState();
 
 void InstallNativeCalls();
 
+std::uint16_t X87StatusWithSummary(std::uint16_t status, std::uint16_t control);
+
+void LoadX87Control(Ps5LiftState& state, std::uint16_t control);
+
 void RequireNoPendingX87Exceptions(const Ps5LiftState& state);
 
 }

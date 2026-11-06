@@ -9,7 +9,10 @@ that loads MXCSR with its misaligned-SSE bit (MM) in the standard format with ev
 Intel refuses.
 
 `clzero` points rax into the block: at the start, inside and at the end of a cache line, and into the block's first and
-last lines. One more case points it at the guard's first byte, where the line it zeroes faults."""
+last lines. One more case points it at the guard's first byte, where the line it zeroes faults.
+
+`fsin`, `fcos`, `fsincos` and `fptan` add, for each of `values.reduction_values` (the extended values next to multiples
+of π/2), a case that puts it in ST(0) on base case 0, and so under that case's precision and rounding control."""
 import struct
 from dataclasses import replace
 
@@ -44,7 +47,16 @@ from .model import (
     set_operand,
     signed,
 )
-from .values import MASK64, Values, choice_values, float_edges, integer_edges, integer_values, random_bits
+from .values import (
+    MASK64,
+    Values,
+    choice_values,
+    float_edges,
+    integer_edges,
+    integer_values,
+    random_bits,
+    reduction_values,
+)
 
 _RESERVED_MXCSR = 1 << 31
 _MISALIGNED_SSE_LOAD = CONSOLE_MXCSR | records.MXCSR_MISALIGNED_SSE
@@ -75,6 +87,7 @@ _XSAVE_FAMILY = frozenset("xsave xsave64 xsavec xsavec64 xsaveopt xsaveopt64 xrs
 XRSTOR = frozenset({"xrstor", "xrstor64"})
 _MASKED_STORES = frozenset("maskmovq maskmovdqu vmaskmovdqu".split())
 _MASKED_MOVES = frozenset("vmaskmovps vmaskmovpd vpmaskmovd vpmaskmovq".split())
+_TRIGONOMETRY = frozenset("fsin fcos fsincos fptan".split())
 _CPUID_QUERIES = (
     (0x0, None), (0x1, None), (0x2, None), (0x3, None), (0x4, None), (0x7, 0), (0x7, 1), (0x8, None), (0x9, None),
     (0xA, None), (0xB, None), (0xC, None), (0xD, 0), (0xD, 1), (0xD, 2), (0xD, 3), (0x80000000, None),
@@ -424,6 +437,18 @@ def _mxcsr_inputs(model, inputs):
     return _replacing(inputs, "operand 0", values=choice_values(_MXCSR_LOADS), apply=apply)
 
 
+def _reduction_case(position, value):
+    return lambda case: case.set_operand(position, value)
+
+
+def _reduction_extras(model):
+    position = next(
+        operand.position for operand in model.operands
+        if operand.category == "implicit_reg" and model.implicit_name(operand) == "st0"
+    )
+    return tuple((0, _reduction_case(position, value)) for value in reduction_values())
+
+
 def _bit_offset_in_memory(model):
     return model.explicit[0].category == "memory" and model.explicit[1].category == "register"
 
@@ -547,6 +572,7 @@ _RULES = {
     **{mnemonic: Rule(case=_masked_store_case) for mnemonic in _MASKED_STORES},
     **{mnemonic: Rule(case=_masked_move_case) for mnemonic in _MASKED_MOVES},
     "clzero": Rule(pins=(_RAX,), inputs=_clzero_inputs, extras=_clzero_extras),
+    **{mnemonic: Rule(extras=_reduction_extras) for mnemonic in _TRIGONOMETRY},
 }
 
 

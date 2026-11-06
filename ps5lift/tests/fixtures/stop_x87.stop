@@ -1,0 +1,2 @@
+x87 floating-point exception at 0x
+fld1 with an unmasked x87 exception pending
