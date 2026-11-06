@@ -1,0 +1,2 @@
+ps5lift: lar at 0x
+depends on the console's segment descriptor tables

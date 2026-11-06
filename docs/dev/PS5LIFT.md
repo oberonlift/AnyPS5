@@ -23,7 +23,7 @@ When the tests run lifted code natively they lift it and build the runtime for t
 On an Apple Silicon Mac `ps5lift` builds and lifts for Linux, but what it lifts still runs on Linux only. Xcode's command-line tools and Homebrew's `llvm` and `lld` are the toolchain. The tests lift every fixture for aarch64 and x86-64 Linux without running the result, and leave out AnyPS5's build and the tests that use its libraries. The x86-64 guests that use threads or libc build against an x86-64 Linux sysroot: a directory holding `usr/x86_64-linux-gnu` and `usr/lib/gcc-cross/x86_64-linux-gnu` as Ubuntu's `g++-x86-64-linux-gnu` installs them, copied from such a machine.
 
 ```sh
-git submodule update --init --recursive 3rdparty/zydis 3rdparty/softfloat
+git submodule update --init --recursive 3rdparty/zydis 3rdparty/zydis-db 3rdparty/softfloat
 cd ps5lift
 cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DLLVM_DIR=$(brew --prefix llvm)/lib/cmake/llvm -DPS5LIFT_X86_64_SYSROOT=<sysroot>
 ninja -C build
@@ -51,7 +51,7 @@ The runtime is a shared library, which AnyPS5's libraries link too, so they reac
 
 `ps5lift` also lifts the modules the executable names in `DT_NEEDED` as `$ORIGIN/<path>`, such as the `app0/sce_module/*.guest.prx` files the relinker writes beside `app.elf`, and the runtime initializes them before the executable starts; see [the design](PS5LIFT_DESIGN.md#images). The output is a static archive with one object per part of the program: the functions in address order, about 50000 instructions to a part, and a last part with the image's segments and tables. Each part is lifted, optimized and compiled on a thread of its own, and calls between parts are relocations the linker resolves, with range-extension thunks where a call is too far for a direct branch. The parts depend only on the program, so the output does not depend on `--jobs`.
 
-The lifter prints how many functions and instructions it lifted, how many jump tables it recovered and how many of them it sized by the data around them, and lists every unsupported instruction it found. Reaching one at run time stops the program with its address.
+The lifter prints how many functions and instructions it lifted; how many instructions it has no translation for (`missing`) and how many lie outside the PS5's instruction set, counted apart: not on the PS5's CPU, privileged or I/O, dependent on the console's segment tables, and the console kernel's; and how many jump tables it recovered and how many of them it sized by the data around them. Then it lists each of those instructions by group and mnemonic. Reaching one at run time stops the program with its address: a missing translation as such, and an instruction outside the set as the console stops it, with an invalid opcode, a general-protection fault, or a stop that names the segment tables or the kernel.
 
 ## Use
 
@@ -84,6 +84,26 @@ Function-pointer parameters become native thunks that call back into the guest (
 Several libraries can go into one file (`ps5lift.py bridges libc libkernel --anyps5-build build/anyps5 -o bridges.cpp`); a NID that more than one exports gets the first one's bridge. `tools/ps5lift.py survey --anyps5-build build/anyps5` generates the bridges of every AnyPS5 library and reports how many exports each covers (`--json` keeps the details).
 
 The bridges call AnyPS5's libraries as AnyPS5's own CMake build makes them with `ANYPS5_GUEST_LIFTED`: the test build builds AnyPS5 in `build/anyps5`, whose `core/libs/libs/unpatched` holds each library as a shared object before NID patching. `tools/ps5lift.py libc-tests` runs upstream's libc, socket and resolver tests against those libraries, and `tools/ps5lift.py libc-fixture` lifts a guest that calls the libraries through the generated bridges; ctest runs both.
+
+## Instruction tests
+
+The instruction suite ([the design](PS5LIFT_INSTRUCTION_TESTS.md)) generates cases for every instruction of the PS5's CPU, runs them on x86-64 hardware to record the expected results, and runs the same guest programs lifted to compare. `tools/ps5lift.py instructions` runs the lifted side; it needs `ps5lift`, the compilers and `ps5lift_decode`, the decoder tool that tests build, whose path is in `PS5LIFT_DECODE`:
+
+```sh
+PS5LIFT_DECODE=build/tests/ps5lift_decode python3 tools/ps5lift.py instructions \
+    --ps5lift build/lifter/ps5lift --clang clang --clangxx clang++ --triple aarch64-unknown-linux-gnu
+```
+
+It prints one `PASS` or `FAIL` line per form, then the failing cases, and exits 0 only when every case passes. With no other option it runs every test group in both floating-point modes. The suite reads Zydis's instruction database from `3rdparty/zydis-db`, which must stay at the revision that generated the tables of the `3rdparty/zydis` submodule: the two submodules move together. `--group` runs one group and can be repeated; the groups are the extension names in lower case (`base`, `x87`, `sse`, `avx2`, `fma` and so on), `hint`, `sse4a`, and the four groups outside the set, `outside-not-on-ps5`, `outside-privileged`, `outside-segment-tables` and `outside-console-kernel`. `--float exact` or `--float fast` runs one floating-point mode, and `--unoptimized-lift` lifts with `-O0`. `--keep` keeps the work directory, with each group's guest program, inputs, lifted programs and results, and prints its path. `--guest-sysroot` builds the x86-64 guest programs and the native driver against an x86-64 Linux sysroot, which a host without x86-64 Linux headers needs; `instructions-bundle` takes it too. ctest registers only the groups whose every case passes in all four modes (exact and fast, lifted with and without optimization), as `instructions_<group>_<optimized|unoptimized>_<exact|fast>_<arch>` (`PS5LIFT_INSTRUCTION_GROUPS` in `tests/CMakeLists.txt`); [TechnicalDebt.md](TechnicalDebt.md) lists the others.
+
+The recordings are made on an x86-64 Linux host and committed in `tests/instructions/recordings`:
+
+1. `python3 tools/ps5lift.py instructions-bundle --output DIR --clang clang` links every group's guest program and the native driver for x86-64 and writes them with the inputs, the recorder and the self-test into `DIR`, a new directory. `--group` limits the groups.
+2. Copy `DIR` to the recording host. There, `python3 DIR/record.py --self-test` runs the self-test, a small guest program whose results only a working driver on a working host gives; it records nothing.
+3. `python3 DIR/record.py` records every group in the bundle (`--group` limits them) and writes `DIR/results`. It first runs the self-test, and it refuses, naming the flags, a group that needs a `/proc/cpuinfo` flag the host lacks; nothing is recorded until `--group` leaves that group out.
+4. Copy `DIR/results` back into `DIR` on the development machine and run `python3 tools/ps5lift.py instructions-import DIR`. It checks each group's results against the bundle (fingerprints of the program and inputs, one result per case, none crashed or timed out) and only then writes `tests/instructions/recordings/<group>.results.txt`.
+
+A recording holds the fingerprints of the guest program's assembly and of the case inputs, and the lifted run refuses a recording whose fingerprints differ from its own program's. The inputs hold addresses in the linked guest program (the slots, the block and the branch targets), so their fingerprint depends on the linker's layout as well as on the generator: a change of linker, of its version or of the link options can change the layout and require recording again.
 
 ## Benchmark
 

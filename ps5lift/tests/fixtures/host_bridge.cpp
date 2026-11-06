@@ -25,6 +25,10 @@ extern "C" void ps5lift_import_host__exit(Ps5LiftState* state) {
     std::_Exit(static_cast<int>(state->Gpr[PS5LIFT_RDI]));
 }
 
+extern "C" void ps5lift_import_host__clear__fs__base(Ps5LiftState* state) {
+    state->FsBase = 0;
+}
+
 extern "C" void ps5lift_import_host__ticks(Ps5LiftState* state) {
     timespec time{};
     clock_gettime(CLOCK_MONOTONIC, &time);

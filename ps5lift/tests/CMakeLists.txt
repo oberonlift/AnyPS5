@@ -2,15 +2,29 @@ find_package(Python3 REQUIRED COMPONENTS Interpreter)
 
 option(PS5LIFT_QEMU_TESTS "On an x86-64 host, also lift the fixtures for aarch64 and run them under qemu-aarch64" OFF)
 
-set(PS5LIFT_FIXTURES basic vector float threads callbacks x87 setjmp cpu mmx modules strings sse41 avx)
+set(PS5LIFT_FIXTURES basic vector float threads callbacks x87 setjmp cpu mmx modules strings sse41 avx stop stop_not_on_ps5 stop_privileged
+        stop_segment_tables stop_console_kernel stop_syscall)
 
 if(NOT CMAKE_SYSTEM_NAME STREQUAL "Linux")
-    set(PS5LIFT_X86_64_SYSROOT "" CACHE PATH "x86-64 Linux sysroot that the fixture guests build against")
+    set(PS5LIFT_X86_64_SYSROOT "" CACHE PATH "x86-64 Linux sysroot that the fixture guests and the instruction tests' native driver build against")
     if(NOT IS_DIRECTORY "${PS5LIFT_X86_64_SYSROOT}/usr/x86_64-linux-gnu" OR NOT IS_DIRECTORY "${PS5LIFT_X86_64_SYSROOT}/usr/lib/gcc-cross/x86_64-linux-gnu")
-        message(FATAL_ERROR "The fixture guests need an x86-64 Linux sysroot on ${CMAKE_SYSTEM_NAME}: set PS5LIFT_X86_64_SYSROOT to a directory "
-                "with usr/x86_64-linux-gnu and usr/lib/gcc-cross/x86_64-linux-gnu, as Ubuntu's g++-x86-64-linux-gnu installs them, "
-                "or configure with -DBUILD_TESTING=OFF.")
+        message(FATAL_ERROR "The fixture guests and the instruction tests' native driver need an x86-64 Linux sysroot on ${CMAKE_SYSTEM_NAME}: set "
+                "PS5LIFT_X86_64_SYSROOT to a directory with usr/x86_64-linux-gnu and usr/lib/gcc-cross/x86_64-linux-gnu, as Ubuntu's "
+                "g++-x86-64-linux-gnu installs them, or configure with -DBUILD_TESTING=OFF.")
     endif()
+endif()
+
+add_executable(ps5lift_decode instructions/Decode.cpp)
+target_link_libraries(ps5lift_decode PRIVATE ps5lift_decoder)
+add_test(NAME instructions_unit
+        COMMAND ${Python3_EXECUTABLE} -m unittest discover -s ${CMAKE_SOURCE_DIR}/tools/instructions/tests -t ${CMAKE_SOURCE_DIR}/tools)
+set(PS5LIFT_INSTRUCTIONS_UNIT_ENVIRONMENT "PS5LIFT_DECODE=$<TARGET_FILE:ps5lift_decode>" "PS5LIFT_CLANG=${CMAKE_C_COMPILER}")
+if(PS5LIFT_X86_64_SYSROOT)
+    list(APPEND PS5LIFT_INSTRUCTIONS_UNIT_ENVIRONMENT "PS5LIFT_X86_64_SYSROOT=${PS5LIFT_X86_64_SYSROOT}")
+endif()
+set_tests_properties(instructions_unit PROPERTIES ENVIRONMENT "${PS5LIFT_INSTRUCTIONS_UNIT_ENVIRONMENT}")
+
+if(NOT CMAKE_SYSTEM_NAME STREQUAL "Linux")
     foreach(triple aarch64-unknown-linux-gnu x86_64-unknown-linux-gnu)
         string(REGEX REPLACE "-.*" "" arch ${triple})
         foreach(fixture IN LISTS PS5LIFT_FIXTURES)
@@ -93,6 +107,34 @@ foreach(triple IN LISTS PS5LIFT_TEST_TRIPLES)
                         --clang ${CMAKE_C_COMPILER}
                         --clangxx ${CMAKE_CXX_COMPILER})
     endif()
+endforeach()
+
+set(PS5LIFT_INSTRUCTION_GROUPS
+        outside-not-on-ps5 outside-privileged outside-segment-tables outside-console-kernel
+        adox_adcx amd3dnow_prefetch avxaes bmi1 clflushopt clfsh clwb hint lzcnt monitorx movbe pause rdpid rdrand rdseed rdtscp)
+foreach(triple IN LISTS PS5LIFT_TEST_TRIPLES)
+    string(REGEX REPLACE "-.*" "" arch ${triple})
+    foreach(group IN LISTS PS5LIFT_INSTRUCTION_GROUPS)
+        foreach(lift optimized unoptimized)
+            set(lift_option)
+            if(lift STREQUAL "unoptimized")
+                set(lift_option --unoptimized-lift)
+            endif()
+            foreach(float exact fast)
+                add_test(NAME instructions_${group}_${lift}_${float}_${arch}
+                        COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tools/ps5lift.py instructions
+                                --ps5lift $<TARGET_FILE:ps5lift>
+                                --clang ${CMAKE_C_COMPILER}
+                                --clangxx ${CMAKE_CXX_COMPILER}
+                                --triple ${triple}
+                                --group ${group}
+                                --float ${float}
+                                ${lift_option})
+                set_tests_properties(instructions_${group}_${lift}_${float}_${arch} PROPERTIES
+                        ENVIRONMENT PS5LIFT_DECODE=$<TARGET_FILE:ps5lift_decode>)
+            endforeach()
+        endforeach()
+    endforeach()
 endforeach()
 
 include(ExternalProject)

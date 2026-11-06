@@ -95,8 +95,11 @@ int main(int argc, char** argv) {
         const auto report = Ps5Lift::CompileProgram(program, functions, lift, target, compile);
 
         std::cerr << "ps5lift: " << report.Functions << " functions, " << report.Instructions << " instructions";
-        std::size_t unsupported = 0;
-        for (const auto& [mnemonic, count] : report.Unsupported) unsupported += count;
+        for (const auto& group : Ps5Lift::LiftReportGroups) {
+            std::size_t total = 0;
+            for (const auto& [mnemonic, count] : report.*group.Counts) total += count;
+            std::cerr << ", " << total << " " << group.Name;
+        }
         std::size_t tables = 0;
         std::size_t unguarded = 0;
         std::size_t closed = 0;
@@ -107,8 +110,10 @@ int main(int argc, char** argv) {
                 closed += function.ClosedJumpTables.size();
             }
         }
-        std::cerr << ", " << unsupported << " unsupported, " << tables << " jump tables (" << unguarded << " sized by layout, " << closed << " closed)\n";
-        for (const auto& [mnemonic, count] : report.Unsupported) std::cerr << "  unsupported " << mnemonic << ": " << count << "\n";
+        std::cerr << ", " << tables << " jump tables (" << unguarded << " sized by layout, " << closed << " closed)\n";
+        for (const auto& group : Ps5Lift::LiftReportGroups) {
+            for (const auto& [mnemonic, count] : report.*group.Counts) std::cerr << "  " << group.Name << " " << mnemonic << ": " << count << "\n";
+        }
     } catch (const std::exception& error) {
         std::cerr << "ps5lift: " << error.what() << "\n";
         return 1;

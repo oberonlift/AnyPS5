@@ -17,11 +17,15 @@ import platform
 import re
 import shlex
 import shutil
+import signal
 import struct
 import subprocess
 import sys
 import tempfile
 from pathlib import Path
+
+from instructions import lifted, suite
+from instructions.compare import FLOAT_MODES
 
 ROOT = Path(__file__).resolve().parent.parent
 ANYPS5 = ROOT.parent
@@ -43,7 +47,7 @@ GUEST_FLAGS = [
 ]
 
 GUEST_BASE = 0xFC00000000
-CONSOLE_OUTPUT = {"cpu"}
+CONSOLE_ONLY = {"cpu", "stop_not_on_ps5", "stop_privileged", "stop_segment_tables", "stop_console_kernel", "stop_syscall"}
 SSE4A_FIXTURES = {"basic"}
 PROGRAM_TIMEOUT = 300
 GUEST_MODULES = {"modules": ("guestmodule", "module.c")}
@@ -86,6 +90,10 @@ def host_has_sse4a():
     return False
 
 
+def native_run_matches_console(fixture):
+    return fixture not in CONSOLE_ONLY and (fixture not in SSE4A_FIXTURES or host_has_sse4a())
+
+
 def lifted_cpu(runner, cpu):
     return "native" if cpu is None and not runner else cpu
 
@@ -104,6 +112,25 @@ def compare(expected, actual, label):
     sys.stderr.write(f"{label}: output differs\n")
     sys.stderr.writelines(difflib.unified_diff(expected.splitlines(True), actual.splitlines(True), "expected", label))
     return False
+
+
+def stop_matches(result, stop, native):
+    if stop is None:
+        return result.returncode == 0
+    if native:
+        return result.returncode < 0
+    return result.returncode in (70, -signal.SIGABRT) and all(line in result.stderr for line in stop)
+
+
+def stop_expectation(stop, native):
+    if stop is None:
+        return "exit code 0"
+    return "death by a signal" if native else f"exit code 70 or SIGABRT with {' and '.join(map(repr, stop))} in stderr"
+
+
+def read_stop(fixture):
+    stop_file = FIXTURES / f"{fixture}.stop"
+    return tuple(stop_file.read_text().strip().splitlines()) if stop_file.exists() else None
 
 
 def configured_compilers(build):
@@ -929,7 +956,10 @@ def game_command(args):
         (out / "lift.log").write_text(result.stderr)
         if result.returncode != 0:
             raise SystemExit(f"lifting failed with exit code {result.returncode}; see {out / 'lift.log'}")
-        print(result.stderr.strip().splitlines()[-1] if result.stderr.strip() else "lifted")
+        summary = [line for line in result.stderr.splitlines() if line.startswith("ps5lift: ")]
+        if len(summary) != 1:
+            raise SystemExit(f"the lifter printed {len(summary)} summary lines, not 1; see {out / 'lift.log'}")
+        print(f"{summary[0]}; see {out / 'lift.log'}")
     triple = host_triple()
     runtime, main_library = build_runtime(triple, None, runtime_directory(build, triple, None), clang, clangxx, args.jobs or os.cpu_count())
     anyps5_build = AnyPS5Build(anyps5)
@@ -964,8 +994,8 @@ def lift(ps5lift, guest, lifted, triple, flags):
     return run([ps5lift, guest, "-o", lifted, "--triple", triple, *flags]).stderr.strip()
 
 
-def link_lifted(clangxx, triple, program, inputs, runtime):
-    run([clangxx, f"--target={triple}", "-std=c++20", "-O1", f"-I{ROOT / 'runtime' / 'include'}", "-fuse-ld=lld", *inputs, *runtime, "-pthread", "-o", program])
+def link_lifted(clangxx, triple, program, inputs, runtime, flags=()):
+    run([clangxx, f"--target={triple}", "-std=c++20", "-O1", f"-I{ROOT / 'runtime' / 'include'}", "-fuse-ld=lld", *flags, *inputs, *runtime, "-pthread", "-o", program])
 
 
 def run_lifted(runner, program, label, timeout=PROGRAM_TIMEOUT, cwd=None):
@@ -1008,6 +1038,7 @@ def build_guest(clang, work, name, optimization, defines=(), vectorize=False, su
 def fixture_command(args):
     optimizations = args.optimization or ["-O0", "-O1", "-O2", "-O3"]
     memories = args.memory or ["tso", "relaxed"]
+    stop = read_stop(args.fixture)
 
     def expected_for(optimization):
         specific = FIXTURES / f"{args.fixture}{optimization}.expected"
@@ -1025,9 +1056,12 @@ def fixture_command(args):
         for optimization in optimizations:
             expected = expected_for(optimization)
             guest = build_guest(args.clang, work, args.fixture, optimization, ["-DPS5LIFT_EMULATED"] if runner else [], sysroot=args.guest_sysroot)
-            if not args.lift_only and platform.machine() == "x86_64" and args.fixture not in CONSOLE_OUTPUT and (args.fixture not in SSE4A_FIXTURES or host_has_sse4a()):
-                native = run([guest], env={**os.environ, "LD_LIBRARY_PATH": str(work)}).stdout
-                failures += not compare(expected, native, f"native {optimization}")
+            if not args.lift_only and platform.machine() == "x86_64" and native_run_matches_console(args.fixture):
+                native = subprocess.run([guest], env={**os.environ, "LD_LIBRARY_PATH": str(work)}, capture_output=True, text=True)
+                ended = stop_matches(native, stop, True)
+                if not ended:
+                    sys.stderr.write(f"native {optimization}: exit code {native.returncode}, expected {stop_expectation(stop, True)}\n{native.stderr}")
+                failures += not (ended and compare(expected, native.stdout, f"native {optimization}"))
             for memory in memories:
                 label = f"{args.triple} {optimization} {memory}{' unoptimized lift' if args.unoptimized_lift else ''}"
                 lifted = work / f"{guest.name}-{memory}.a"
@@ -1038,9 +1072,10 @@ def fixture_command(args):
                 program = work / f"{guest.name}-{memory}"
                 link_lifted(args.clangxx, args.triple, program, [FIXTURES / "host_bridge.cpp", lifted], runtime_link_arguments(args.ps5lift, args.triple, lifted_cpu(runner, args.cpu), args.clang, args.clangxx))
                 result = run_lifted(runner, program, label)
-                ok = result is not None and result.returncode == 0 and compare(expected, result.stdout, label)
-                if result is not None and result.returncode != 0:
-                    sys.stderr.write(f"{label}: exit code {result.returncode}\n{result.stderr}")
+                ended = result is not None and stop_matches(result, stop, False)
+                ok = ended and compare(expected, result.stdout, label)
+                if result is not None and not ended:
+                    sys.stderr.write(f"{label}: exit code {result.returncode}, expected {stop_expectation(stop, False)}\n{result.stderr}")
                 print(f"{'PASS' if ok else 'FAIL'} {label}: {report}")
                 failures += not ok
     finally:
@@ -1130,8 +1165,7 @@ def libc_fixture_command(args):
     runner = runner_for(triple)
     cpu = lifted_cpu(runner, None)
     expected = (FIXTURES / f"{args.fixture}.expected").read_text()
-    stop_file = FIXTURES / f"{args.fixture}.stop"
-    stop = stop_file.read_text().strip() if stop_file.exists() else None
+    stop = read_stop(args.fixture)
     work = Path(tempfile.mkdtemp(prefix=f"ps5lift-{args.fixture}-"))
     failures = 0
     try:
@@ -1152,11 +1186,10 @@ def libc_fixture_command(args):
             program = work / f"{guest.name}-lifted"
             link_lifted(args.clangxx, triple, program, [lifted, *host_sources, *linked], runtime)
             result = run_lifted(runner, program, label, LIBRARY_PROGRAM_TIMEOUT, work)
-            ended = result is not None and (result.returncode == 0 if stop is None else result.returncode != 0 and stop in result.stderr)
+            ended = result is not None and stop_matches(result, stop, False)
             ok = ended and compare(expected, LOG_LINE.sub("", result.stdout), label)
             if result is not None and not ended:
-                expectation = "exit code 0" if stop is None else f"a stop with {stop!r}"
-                sys.stderr.write(f"{label}: exit code {result.returncode}, expected {expectation}\n{result.stderr}")
+                sys.stderr.write(f"{label}: exit code {result.returncode}, expected {stop_expectation(stop, False)}\n{result.stderr}")
             print(f"{'PASS' if ok else 'FAIL'} {args.fixture} {label}: {report}")
             failures += not ok
     finally:
@@ -1450,6 +1483,17 @@ def survey_command(args):
     return 0
 
 
+def instructions_command(args):
+    runner = runner_for(args.triple)
+    cpu = lifted_cpu(runner, None)
+    toolchain = lifted.Toolchain(
+        ps5lift=Path(args.ps5lift), clang=args.clang, guest_sysroot=args.guest_sysroot, clangxx=args.clangxx, triple=args.triple, guest_flags=tuple(GUEST_FLAGS),
+        guest_base=GUEST_BASE, runner=tuple(runner), lift_flags=tuple(lifter_target(args.triple, runner, cpu)),
+        runtime=tuple(runtime_link_arguments(args.ps5lift, args.triple, cpu, args.clang, args.clangxx)), lift=lift, link=link_lifted,
+    )
+    return lifted.instructions_command(args, toolchain)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     commands = parser.add_subparsers(dest="command", required=True)
@@ -1578,6 +1622,29 @@ def main():
     survey.add_argument("--library", action="append")
     survey.add_argument("--json", help="also write the results to this file")
     survey.set_defaults(handler=survey_command)
+
+    bundle = commands.add_parser("instructions-bundle", help="pack the instruction cases for a recording host", description="Generate every instruction test group, link its guest program and the native driver for x86-64, and write them with their inputs, the self-test, record.py and groups.json into OUTPUT, a new directory to copy to an x86-64 Linux host and run record.py there. ps5lift_decode comes from PS5LIFT_DECODE.")
+    bundle.add_argument("--output", type=Path, required=True)
+    bundle.add_argument("--clang", required=True)
+    bundle.add_argument("--guest-sysroot", help="x86-64 Linux sysroot to build the guest programs and the native driver against; the compiler's own by default")
+    bundle.add_argument("--group", action="append", help="a test group to bundle; every group with cases to record by default")
+    bundle.set_defaults(handler=lambda args: suite.bundle_command(args, GUEST_FLAGS, GUEST_BASE))
+
+    importer = commands.add_parser("instructions-import", help="check a recording and store it as text in the repository", description="Check the results record.py wrote into BUNDLE/results against the bundle, and write each group's as tests/instructions/recordings/GROUP.results.txt")
+    importer.add_argument("bundle", type=Path, help="the bundle directory, with the recording host's results/ copied into it")
+    importer.set_defaults(handler=suite.import_command)
+
+    instructions = commands.add_parser("instructions", help="test: run the instruction cases lifted and judge them", description="Generate instruction test groups, link each guest program as the recording host ran it, lift it for --triple in each --float mode, link it with the lifted driver and the runtime, run every case and judge it against its recording. Prints one PASS or FAIL line per form, then the failing cases, and exits 0 only when every case passes. ps5lift_decode comes from PS5LIFT_DECODE.")
+    instructions.add_argument("--ps5lift", required=True)
+    instructions.add_argument("--clang", required=True)
+    instructions.add_argument("--clangxx", required=True)
+    instructions.add_argument("--guest-sysroot", help="x86-64 Linux sysroot to build the guest programs and the native driver against; the compiler's own by default")
+    instructions.add_argument("--triple", default=host_triple())
+    instructions.add_argument("--group", action="append", help="a test group to run; every group by default")
+    instructions.add_argument("--float", action="append", choices=FLOAT_MODES, help="a floating-point mode to lift with; both by default")
+    instructions.add_argument("--unoptimized-lift", action="store_true", help="lift with ps5lift -O0, which skips LLVM's optimizations")
+    instructions.add_argument("--keep", action="store_true", help="keep the work directory")
+    instructions.set_defaults(handler=instructions_command)
 
     args = parser.parse_args()
     return args.handler(args)

@@ -3,6 +3,7 @@
 #include "LlvmCompatibility.hpp"
 
 #include <lifter/Hex.hpp>
+#include <lifter/InstructionSet.hpp>
 
 #include <llvm/IR/MDBuilder.h>
 
@@ -672,21 +673,45 @@ llvm::BasicBlock* FunctionLifter::Target(const std::uint64_t target) {
     return block;
 }
 
-void FunctionLifter::Unsupported(const std::string& what) {
-    const std::string mnemonic = ZydisMnemonicGetString(_instruction->Info.mnemonic);
-    ++_module.Report().Unsupported[mnemonic + (what.empty() ? "" : " (" + what + ")")];
+void FunctionLifter::Stop(const Ps5LiftStopKind kind, const std::uint64_t detail, const std::string& mnemonic) {
     Flush();
-    auto callee = _module.Runtime("ps5lift_unsupported", llvm::FunctionType::get(_builder.getVoidTy(), {_module.Pointer(), I64(), _module.Pointer()}, false));
-    auto* call = _builder.CreateCall(callee, {_state, _builder.getInt64(_instruction->Address), _builder.CreateGlobalString(mnemonic)});
+    auto callee = _module.Runtime("ps5lift_stop", llvm::FunctionType::get(_builder.getVoidTy(), {_module.Pointer(), _builder.getInt32Ty(), I64(), I64(), _module.Pointer()}, false));
+    auto* call = _builder.CreateCall(callee, {_state, _builder.getInt32(kind), _builder.getInt64(_instruction->Address), _builder.getInt64(detail), _builder.CreateGlobalString(mnemonic)});
     call->setDoesNotReturn();
     _builder.CreateUnreachable();
 }
 
-void FunctionLifter::Trap() {
-    Flush();
-    auto callee = _module.Runtime("ps5lift_trap", llvm::FunctionType::get(_builder.getVoidTy(), {_module.Pointer(), I64()}, false));
-    _builder.CreateCall(callee, {_state, _builder.getInt64(_instruction->Address)})->setDoesNotReturn();
-    _builder.CreateUnreachable();
+std::string FunctionLifter::Mnemonic() const {
+    return ZydisMnemonicGetString(_instruction->Info.mnemonic);
+}
+
+void FunctionLifter::Unsupported(const std::string& what) {
+    const auto mnemonic = Mnemonic();
+    ++_module.Report().Missing[mnemonic + (what.empty() ? "" : " (" + what + ")")];
+    Stop(PS5LIFT_STOP_MISSING_TRANSLATION, 0, mnemonic);
+}
+
+void FunctionLifter::StopOutside(const Ps5LiftStopKind kind, MnemonicCounts& counts, const std::uint64_t detail, const std::string& text) {
+    ++counts[Mnemonic()];
+    Stop(kind, detail, text);
+}
+
+void FunctionLifter::StopNotOnPs5() {
+    StopOutside(PS5LIFT_STOP_INVALID_OPCODE, _module.Report().NotOnPs5, PS5LIFT_INVALID_OPCODE_NOT_ON_PS5, Mnemonic());
+}
+
+void FunctionLifter::StopPrivileged() {
+    StopOutside(PS5LIFT_STOP_GENERAL_PROTECTION, _module.Report().Privileged, 0, Mnemonic());
+}
+
+void FunctionLifter::StopSegmentTables() {
+    StopOutside(PS5LIFT_STOP_SEGMENT_TABLES, _module.Report().SegmentTables, 0, Mnemonic());
+}
+
+void FunctionLifter::StopConsoleKernel() {
+    if (_instruction->Info.operand_count_visible == 0) return StopOutside(PS5LIFT_STOP_CONSOLE_KERNEL, _module.Report().ConsoleKernel, 0, Mnemonic());
+    const auto vector = Immediate(0);
+    StopOutside(PS5LIFT_STOP_CONSOLE_KERNEL, _module.Report().ConsoleKernel, vector, Mnemonic() + " 0x" + Hex(vector));
 }
 
 bool FunctionLifter::Locked() const {
@@ -712,7 +737,7 @@ ZydisRegister FunctionLifter::HiddenRegister(std::initializer_list<ZydisRegister
         const auto& operand = Operand(i);
         if (operand.type == ZYDIS_OPERAND_TYPE_REGISTER && std::find(candidates.begin(), candidates.end(), operand.reg.value) != candidates.end()) return operand.reg.value;
     }
-    throw std::logic_error(std::string(ZydisMnemonicGetString(_instruction->Info.mnemonic)) + " at 0x" + Hex(_instruction->Address) + " has no such hidden register operand");
+    throw std::logic_error(Mnemonic() + " at 0x" + Hex(_instruction->Address) + " has no such hidden register operand");
 }
 
 llvm::Value* FunctionLifter::ReadRegisterOrMemory(const int index, const unsigned bits) {
@@ -722,6 +747,16 @@ llvm::Value* FunctionLifter::ReadRegisterOrMemory(const int index, const unsigne
 }
 
 void FunctionLifter::EmitInstruction(const Instruction& instruction) {
+    switch (ClassifyInstruction(instruction.Info, instruction.Operands.data())) {
+    case InstructionGroup::Set:
+        break;
+    case InstructionGroup::NotOnPs5:
+        return StopNotOnPs5();
+    case InstructionGroup::Privileged:
+        return StopPrivileged();
+    case InstructionGroup::SegmentTables:
+        return StopSegmentTables();
+    }
     try {
         EmitSemantics(instruction.Info.mnemonic);
     } catch (const UnsupportedInstruction& error) {

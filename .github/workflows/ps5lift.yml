@@ -102,3 +102,38 @@ jobs:
         with:
           path: .ccache
           key: ps5lift-ccache-${{ github.sha }}
+
+  lifter-x86-64:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    env:
+      CCACHE_DIR: ${{ github.workspace }}/.ccache
+      CCACHE_MAXSIZE: 2G
+      CMAKE_C_COMPILER_LAUNCHER: ccache
+      CMAKE_CXX_COMPILER_LAUNCHER: ccache
+    steps:
+      - uses: actions/checkout@v7
+      - name: Check out Zydis, its database and SoftFloat
+        run: git submodule update --init --recursive --depth 1 3rdparty/zydis 3rdparty/zydis-db 3rdparty/softfloat
+      - name: Install the toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends cmake ninja-build ccache python3 clang-18 lld-18 llvm-18-dev libzstd-dev zlib1g-dev python3-clang-18
+      - uses: actions/cache/restore@v6
+        with:
+          path: .ccache
+          key: ps5lift-x86-64-ccache-${{ github.sha }}
+          restore-keys: ps5lift-x86-64-ccache-
+      - name: Configure
+        run: cmake -S ps5lift -B ps5lift/build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER=/usr/lib/llvm-18/bin/clang -DCMAKE_CXX_COMPILER=/usr/lib/llvm-18/bin/clang++ -DLLVM_DIR=/usr/lib/llvm-18/lib/cmake/llvm
+      - name: Build ps5lift and its decoder
+        run: cmake --build ps5lift/build --target ps5lift ps5lift_decode --parallel 4
+      - name: Run the instruction tests lifted for x86-64
+        run: ctest --test-dir ps5lift/build -R '^instructions_' --output-on-failure --parallel 4
+      - if: always()
+        run: ccache --show-stats
+      - if: always()
+        uses: actions/cache/save@v6
+        with:
+          path: .ccache
+          key: ps5lift-x86-64-ccache-${{ github.sha }}

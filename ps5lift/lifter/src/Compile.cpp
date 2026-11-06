@@ -94,7 +94,9 @@ LiftReport CompileProgram(const GuestProgram& program, const std::vector<std::ma
     for (const auto& part : reports) {
         report.Functions += part.Functions;
         report.Instructions += part.Instructions;
-        for (const auto& [mnemonic, count] : part.Unsupported) report.Unsupported[mnemonic] += count;
+        for (const auto& group : LiftReportGroups) {
+            for (const auto& [mnemonic, count] : part.*group.Counts) (report.*group.Counts)[mnemonic] += count;
+        }
     }
     return report;
 }

@@ -1,0 +1,2 @@
+ps5lift: syscall at 0x
+enters the console's kernel
