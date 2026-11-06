@@ -1,5 +1,4 @@
 #include "prx/libkernel/DirectMemory/DirectMemory.hpp"
-#include "prx/libkernel/DirectMemory/MemoryPool.hpp"
 #include "prx/libkernel/KernelErrors.hpp"
 #include <cstdint>
 #include <cstdio>
@@ -7,10 +6,6 @@
 #include <cstring>
 #include <new>
 #include <stdexcept>
-
-bool DirectMemoryCheckedFree(int64_t start, size_t len);
-void DirectMemoryRetype(int64_t start, size_t len, int memoryType);
-size_t DirectMemoryFreeRun(uint64_t offset, uint64_t limit);
 
 namespace {
 
