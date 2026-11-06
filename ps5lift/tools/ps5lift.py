@@ -427,7 +427,11 @@ BRIDGE_LONG_DOUBLE = "Ps5Lift::Bridge::LongDouble"
 DISAMBIGUATION = re.compile(r"_nid_disambig\d+$")
 GUEST_POINTER_SLOTS = {
     **{name: (1,) for name in ("strtol", "strtoul", "strtoll", "strtoull", "strtoimax", "strtoumax", "strtod", "strtof", "strtold", "wcstol", "wcstoul", "wcstoll",
-                               "wcstoull", "wcstod", "wcstof", "wcstold", "_Stoul", "_Stoull", "_Stoll", "_Stod", "_Stof", "_Stold", "_Stodx", "_Stofx", "_Stoldx")},
+                               "wcstoull", "wcstod", "wcstof", "wcstold", "_Stoul", "_Stoull", "_Stoll", "_Stod", "_Stof", "_Stold", "_Stodx", "_Stofx", "_Stoldx",
+                               "_Stolx", "_Stoulx", "_Stollx", "_Stoullx", "_WStod", "_WStof", "_WStold", "_WStoll", "_WStoul", "_WStoull", "wcstoimax", "wcstoumax",
+                               "strtoq", "strtouq", "sceLibcMspacePosixMemalign", "sceLibcPafMspacePosixMemalign", "sceKernelGetPrtAperture")},
+    "_Stopfx": (0, 1), "_WStopfx": (0, 1), "strtonum": (3,), "readdir_r": (2,), "fopen_s": (0,), "freopen_s": (0,),
+    "sceHttpParseResponseHeader": (3,), "sceHttpParseStatusLine": (5,), "sceKernelIsStack": (1, 2), "sceKernelGetLibkernelTextLocation": (0,),
     "strtok_r": (2,), "strsep": (0,), "posix_memalign": (0,), "pthread_attr_getstack": (1,), "pthread_attr_getstackaddr": (1,),
     "asprintf": (0,), "vasprintf": (0,), "wcstok": (2,), "wcstok_s": (3,), "mbsrtowcs": (1,), "mbsrtowcs_s": (3,), "wcsrtombs": (1,), "wcsrtombs_s": (3,),
     "sceKernelQueryMemoryProtection": (1, 2), "sceKernelMemoryPoolReserve": (4,), "sceKernelJitMapSharedMemory": (2,), "sceKernelDlsym": (2,),
