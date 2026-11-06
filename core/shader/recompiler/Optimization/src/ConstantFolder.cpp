@@ -1348,7 +1348,7 @@ void ConstantFolder::Fold(IrProgram& program, std::span<IrBlock* const> blocks) 
     OperandFacts facts;
     for (IrBlock* block : blocks) {
         for (IrValue* inst : block->Instructions()) {
-            const auto success = tryFoldValue(program, *inst, facts);
+            tryFoldValue(program, *inst, facts);
         }
     }
     std::vector<IrValue*> phis;

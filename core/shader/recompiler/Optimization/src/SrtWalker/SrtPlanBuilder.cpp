@@ -138,7 +138,7 @@ void PlanBuilder::PatchReads() {
             if (memory < _program.Resources().memoryInfo.size()) {
                 _program.Resources().memoryInfo[memory].planningOnly = true;
             }
-            const auto& irVal = builder.Emit(IrOpcode::ReferenceU32, IrType::Void, {patch.inst});
+            static_cast<void>(builder.Emit(IrOpcode::ReferenceU32, IrType::Void, {patch.inst}));
         }
     }
 }
