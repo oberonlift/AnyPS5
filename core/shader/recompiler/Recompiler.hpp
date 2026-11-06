@@ -240,6 +240,8 @@ struct ShaderPixelStageInfo {
     std::array<std::uint8_t, 32> sampleLocations{};
     std::vector<TargetMerge> targetMerges{};
     std::array<std::uint32_t, 4> sampleOrder{};
+    // The depth target's T# when the pixel shader runs the depth bounds test against the stored depth.
+    std::optional<std::array<std::uint32_t, 8>> depthBoundsSource{};
 };
 
 struct ShaderVertexBufferResource {
@@ -423,6 +425,8 @@ inline constexpr std::uint32_t TessellationLevelPushOffsetBytes = 120;
 inline constexpr std::uint32_t TessellationLevelPushBytes = 8;
 inline constexpr std::uint32_t DepthRemapPushOffsetBytes = 104;
 inline constexpr std::uint32_t DepthRemapPushBytes = 8;
+inline constexpr std::uint32_t DepthBoundsPushOffsetBytes = 120;
+inline constexpr std::uint32_t DepthBoundsPushBytes = 8;
 inline constexpr std::uint32_t MeshArgumentAddressDword = 4;
 inline constexpr std::uint32_t MeshArgumentIndexCountDword = 3;
 inline constexpr std::uint32_t MeshArgumentFirstIndexDword = 4;
@@ -812,6 +816,7 @@ struct ShaderInvocation {
     std::vector<DescriptorBinding> bindings;
     std::vector<std::byte> pushConstants;
     bool readsDepthRemapPush = false;
+    bool readsDepthBoundsPush = false;
     std::vector<VertexAttribute> vertexAttributes;
     std::uint64_t userDataRegisterReads = 0;
     std::uint32_t poisonedSrtReads = 0;
@@ -820,6 +825,9 @@ struct ShaderInvocation {
     std::vector<std::vector<std::pair<std::uint64_t, std::uint64_t>>> imageTableReadRanges;
     std::uint64_t imageTableShader = 0;
     std::uint32_t imageTableFaults = 0;
+
+    // Words the draw itself writes into the stage's push slot, beside the stage's own push constants.
+    [[nodiscard]] bool ReadsDrawPush() const { return readsDepthRemapPush || readsDepthBoundsPush; }
 };
 
 // What a Vulkan pipeline built from a result depends on besides the fixed-function state and the

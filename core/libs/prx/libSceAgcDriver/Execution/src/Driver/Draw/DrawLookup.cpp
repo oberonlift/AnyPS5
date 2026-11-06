@@ -112,6 +112,10 @@ void Driver::lookupDraw(const Submission& submission, const std::shared_ptr<Vulk
             mix(static_cast<std::uint64_t>(pixel.positionLocation));
             for (const auto location : pixel.sampleLocations) mix(location);
             for (const auto order : pixel.sampleOrder) mix(order);
+            mix(pixel.depthBoundsSource.has_value());
+            if (pixel.depthBoundsSource) {
+                for (const auto word : *pixel.depthBoundsSource) mix(word);
+            }
             std::lock_guard cacheLock(drawCacheMutex);
             ++drawEntryCounters.lookups;
             const auto found = drawCache.find(drawKey);

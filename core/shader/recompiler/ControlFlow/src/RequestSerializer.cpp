@@ -9,6 +9,7 @@ namespace {
 constexpr std::uint32_t TargetBlendFlag = 0x10000u;
 constexpr std::uint32_t FurtherMergeShift = 17u;
 constexpr std::uint32_t FurtherMergeMask = 7u << FurtherMergeShift;
+constexpr std::uint32_t DepthBoundsSourceFlag = 1u << 20u;
 
 constexpr char kBase64Alphabet[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
@@ -366,7 +367,7 @@ void writePixelInfo(Writer& writer, const ShaderPixelStageInfo& info) {
     for (std::uint32_t index = 0; index <= further; ++index) {
         const auto& merge = info.targetMerges.empty() ? TargetMerge{} : info.targetMerges[index];
         writer.WriteU8(merge.target);
-        writer.WriteU32(static_cast<std::uint32_t>(merge.mask) | (merge.blend.enabled ? TargetBlendFlag : 0u) | (index == 0u ? further << FurtherMergeShift : 0u));
+        writer.WriteU32(static_cast<std::uint32_t>(merge.mask) | (merge.blend.enabled ? TargetBlendFlag : 0u) | (index == 0u ? (further << FurtherMergeShift) | (info.depthBoundsSource ? DepthBoundsSourceFlag : 0u) : 0u));
         writer.WriteU8(merge.samples);
         for (const std::uint32_t word : merge.descriptor) writer.WriteU32(word);
         writer.WriteBool(merge.depthStencilWrites);
@@ -386,6 +387,9 @@ void writePixelInfo(Writer& writer, const ShaderPixelStageInfo& info) {
     if (info.depthExportEnable) {
         writer.WriteU32(std::bit_cast<std::uint32_t>(info.depthExportMin));
         writer.WriteU32(std::bit_cast<std::uint32_t>(info.depthExportMax));
+    }
+    if (info.depthBoundsSource) {
+        for (const std::uint32_t word : *info.depthBoundsSource) writer.WriteU32(word);
     }
 }
 
@@ -463,12 +467,14 @@ ShaderPixelStageInfo readPixelInfo(Reader& reader, std::uint32_t version) {
     if (version >= 42u) {
         for (std::uint32_t& order : info.sampleOrder) order = reader.ReadU32();
     }
+    bool depthBoundsSource = false;
     for (std::uint32_t index = 0, count = version >= 46u ? 1u : 0u; index < count; ++index) {
         TargetMerge merge;
         merge.target = reader.ReadU8();
         const auto word = reader.ReadU32();
-        if ((word & ~(0xffffu | TargetBlendFlag | (index == 0u ? FurtherMergeMask : 0u))) != 0u) throw std::runtime_error("invalid recompile request target merge mask");
+        if ((word & ~(0xffffu | TargetBlendFlag | (index == 0u ? FurtherMergeMask | (version >= 56u ? DepthBoundsSourceFlag : 0u) : 0u))) != 0u) throw std::runtime_error("invalid recompile request target merge mask");
         count += (word & FurtherMergeMask) >> FurtherMergeShift;
+        if (index == 0u) depthBoundsSource = (word & DepthBoundsSourceFlag) != 0u;
         merge.mask = static_cast<std::uint16_t>(word & 0xffffu);
         merge.samples = reader.ReadU8();
         for (std::uint32_t& descriptor : merge.descriptor) descriptor = reader.ReadU32();
@@ -493,6 +499,10 @@ ShaderPixelStageInfo readPixelInfo(Reader& reader, std::uint32_t version) {
     if (version >= 49u && info.depthExportEnable) {
         info.depthExportMin = std::bit_cast<float>(reader.ReadU32());
         info.depthExportMax = std::bit_cast<float>(reader.ReadU32());
+    }
+    if (depthBoundsSource) {
+        auto& words = info.depthBoundsSource.emplace();
+        for (std::uint32_t& word : words) word = reader.ReadU32();
     }
     if (version < 5u) {
         const auto input = [](PixelInput value, bool present) { return present ? PixelInputBit(value) : 0u; };
@@ -898,7 +908,7 @@ std::string RequestSerializer::Serialize(const RecompileRequest& request) const 
     std::string buffer;
     Writer writer(buffer);
     writer.WriteU32(0x41505335u);
-    writer.WriteU32(55u);
+    writer.WriteU32(56u);
     writeShaderBinary(writer, request.shader);
     writeGuestContext(writer, request.context);
     writeSpirvTarget(writer, request.target);
@@ -953,7 +963,7 @@ DeserializedRequest RequestSerializer::Deserialize(std::string_view text) const 
     Reader reader(decoded);
     if (reader.ReadU32() != 0x41505335u) throw std::runtime_error("invalid recompile request signature");
     const auto version = reader.ReadU32();
-    if (version < 1u || version > 55u || version == 50u) throw std::runtime_error("unsupported recompile request serialization version");
+    if (version < 1u || version > 56u || version == 50u) throw std::runtime_error("unsupported recompile request serialization version");
     DeserializedRequest result{};
     result.request.shader = readShaderBinary(reader, result.shaderCode, result.shaderHeader);
     result.request.context = readGuestContext(reader, result, version);

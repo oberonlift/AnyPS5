@@ -5069,14 +5069,14 @@ void DepthBoundsEmulationTests() {
     base.depthBoundsTest = true;
     base.depthBias = true;
     base.depthBiasConstant = 4.0f;
-    const ShaderRecompiler::ShaderPixelStageInfo pixel{};
+    ShaderRecompiler::ShaderPixelStageInfo pixel{};
     const AgcDriver::Graphics::Context emulating{};
     const auto emulated = [&](float minBound, float maxBound) {
         auto state = base;
         state.minDepthBounds = minBound;
         state.maxDepthBounds = maxBound;
-        AgcDriver::Graphics::ApplyDepthBoundsEmulation(emulating, state, pixel);
-        Require(!state.depthBoundsTest && state.depthTest && !state.depthWrite && !state.depthBias && state.viewport.x == base.viewport.x && state.viewport.width == base.viewport.width && state.viewport.height == base.viewport.height, "an emulated depth bounds test did not become a read-only depth test over the same coverage");
+        AgcDriver::Graphics::ApplyDepthBoundsEmulation(emulating, state, pixel, false);
+        Require(!pixel.depthBoundsSource && !state.depthBoundsTest && state.depthTest && !state.depthWrite && !state.depthBias && state.viewport.x == base.viewport.x && state.viewport.width == base.viewport.width && state.viewport.height == base.viewport.height, "an emulated depth bounds test did not become a read-only depth test over the same coverage");
         return state;
     };
     const auto upper = emulated(0.0f, 0.000125f);
@@ -5088,29 +5088,48 @@ void DepthBoundsEmulationTests() {
     AgcDriver::Graphics::Context native{};
     native.depthBounds = true;
     auto kept = base;
-    AgcDriver::Graphics::ApplyDepthBoundsEmulation(native, kept, pixel);
+    AgcDriver::Graphics::ApplyDepthBoundsEmulation(native, kept, pixel, false);
     Require(kept.depthBoundsTest && !kept.depthTest && kept.depthBias && kept.viewport.minDepth == base.viewport.minDepth, "a device with the depth bounds test had it emulated");
     auto absent = base;
     absent.depth.reset();
-    AgcDriver::Graphics::ApplyDepthBoundsEmulation(emulating, absent, pixel);
+    AgcDriver::Graphics::ApplyDepthBoundsEmulation(emulating, absent, pixel, false);
     Require(absent.depthBoundsTest && !absent.depthTest, "a draw without a depth target had its depth bounds emulated");
-    const auto refuses = [&](const char* expected, auto change) {
+    const auto shaded = [&](auto change) {
         auto state = base;
         state.minDepthBounds = 0.0f;
         state.maxDepthBounds = 0.5f;
         auto context = emulating;
         auto program = pixel;
         change(state, context, program);
-        expectFailure([&] { AgcDriver::Graphics::ApplyDepthBoundsEmulation(context, state, program); }, expected);
+        const auto before = state;
+        AgcDriver::Graphics::ApplyDepthBoundsEmulation(context, state, program, false);
+        Require(!state.depthBoundsTest && state.depthTest == before.depthTest && state.depthCompare == before.depthCompare && state.depthBias && state.viewport.minDepth == before.viewport.minDepth && state.viewport.maxDepth == before.viewport.maxDepth && state.minDepthBounds == before.minDepthBounds && state.maxDepthBounds == before.maxDepthBounds, "a depth bounds test run in the pixel shader changed the draw's depth state");
+        Require(program.depthBoundsSource == AgcDriver::Graphics::DepthCopySourceWords(*state.depth), "a depth bounds test run in the pixel shader does not read the bound depth target");
     };
-    refuses("both bounds inside", [](auto& state, auto&, auto&) { state.minDepthBounds = 0.25f; });
-    refuses("with depth testing", [](auto& state, auto&, auto&) { state.depthTest = true; });
-    refuses("reads or exports depth", [](auto&, auto&, auto& program) { program.posZ = true; });
-    refuses("reads or exports depth", [](auto&, auto&, auto& program) { program.depthExportEnable = true; });
+    shaded([](auto& state, auto&, auto&) { state.minDepthBounds = 0.25f; });
+    shaded([](auto& state, auto&, auto&) {
+        state.depthTest = true;
+        state.depthCompare = VK_COMPARE_OP_GREATER_OR_EQUAL;
+    });
+    shaded([](auto&, auto&, auto& program) { program.posZ = true; });
+    shaded([](auto&, auto& context, auto&) { context.depthRangeUnrestricted = true; });
+    const auto refuses = [&](const char* expected, auto change, bool skipped = false) {
+        auto state = base;
+        state.minDepthBounds = 0.25f;
+        state.maxDepthBounds = 0.5f;
+        auto context = emulating;
+        auto program = pixel;
+        change(state, context, program);
+        expectFailure([&] { AgcDriver::Graphics::ApplyDepthBoundsEmulation(context, state, program, skipped); }, expected);
+    };
+    refuses("writes depth or stencil", [](auto& state, auto&, auto&) { state.depthTest = state.depthWrite = true; });
+    refuses("exports depth or stencil", [](auto&, auto&, auto& program) { program.depthExportEnable = true; });
+    refuses("exports depth or stencil", [](auto&, auto&, auto& program) { program.stencilRefExportEnable = true; });
+    refuses("multisampled depth target", [](auto& state, auto&, auto&) { state.depth->samples = 4u; });
+    refuses("without a pixel program", [](auto&, auto&, auto&) {}, true);
     refuses("normalized depth target", [](auto& state, auto&, auto&) { state.depth->format = VK_FORMAT_D16_UNORM; });
-    refuses("stays in [0, 1]", [](auto&, auto& context, auto&) { context.depthRangeUnrestricted = true; });
     refuses("depth bounds outside [0, 1]", [](auto& state, auto&, auto&) { state.maxDepthBounds = 1.5f; });
-    refuses("writes on a failed test", [](auto& state, auto&, auto&) {
+    refuses("writes depth or stencil", [](auto& state, auto&, auto&) {
         state.stencilTest = true;
         state.stencilFront.writeMask = 0xffu;
         state.stencilFront.failOp = VK_STENCIL_OP_REPLACE;
@@ -5120,8 +5139,8 @@ void DepthBoundsEmulationTests() {
     stencil.stencilFront.writeMask = stencil.stencilBack.writeMask = 0xffu;
     stencil.stencilFront.passOp = stencil.stencilBack.passOp = VK_STENCIL_OP_REPLACE;
     stencil.maxDepthBounds = 0.5f;
-    AgcDriver::Graphics::ApplyDepthBoundsEmulation(emulating, stencil, pixel);
-    Require(stencil.depthTest && stencil.stencilTest, "a stencil test that writes only on a pass refused the depth bounds emulation");
+    AgcDriver::Graphics::ApplyDepthBoundsEmulation(emulating, stencil, pixel, false);
+    Require(stencil.depthTest && stencil.stencilTest && !pixel.depthBoundsSource, "a stencil test that writes only on a pass refused the depth bounds emulation");
 }
 
 void UnusedViewportDepthTests() {

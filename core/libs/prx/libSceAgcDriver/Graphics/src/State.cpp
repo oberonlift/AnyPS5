@@ -1339,11 +1339,11 @@ std::optional<ShaderRecompiler::MeshConfiguration> StageMeshConfiguration(const 
     return std::nullopt;
 }
 
-std::uint32_t StagePushLimit(const ShaderStages& stages, std::uint32_t pushOffset, bool depthRemap) {
+std::uint32_t StagePushLimit(const ShaderStages& stages, std::uint32_t pushOffset, bool depthRemap, bool depthBounds) {
     const bool preRasterization = pushOffset < PipelinePushSlotBytes;
     if (stages.mesh || (stages.tessellationGeometry && preRasterization)) return ShaderRecompiler::MeshDrawPushOffsetBytes;
     if (stages.tessellation && preRasterization) return ShaderRecompiler::TessellationLevelPushOffsetBytes;
-    return depthRemap ? ShaderRecompiler::DepthRemapPushOffsetBytes : PipelinePushSlotBytes;
+    return depthRemap ? ShaderRecompiler::DepthRemapPushOffsetBytes : depthBounds ? ShaderRecompiler::DepthBoundsPushOffsetBytes : PipelinePushSlotBytes;
 }
 
 bool DepthResummarizeDrawsNothing(const QueueState& queue) {
@@ -1425,17 +1425,24 @@ ReversedBlend TranslateReversedBlend(std::uint32_t blendControl, std::uint8_t co
     return {blend, routing->code};
 }
 
-void ApplyDepthBoundsEmulation(const Context& context, State& state, const ShaderRecompiler::ShaderPixelStageInfo& pixel) {
+// Without the depthBounds feature, a one-sided test of a draw without depth testing becomes a depth test against the
+// bound; any other draw that cannot change the stored depth runs the test in its pixel shader (DepthBoundsPushOffsetBytes).
+void ApplyDepthBoundsEmulation(const Context& context, State& state, ShaderRecompiler::ShaderPixelStageInfo& pixel, bool pixelProgramSkipped) {
     if (!state.depthBoundsTest || !state.depth || context.depthBounds) return;
     ValidateDepthBounds(context, state);
-    Require(!context.depthRangeUnrestricted, "the depth bounds test without the depthBounds feature is emulated only where stored depth stays in [0, 1]");
     Require(state.depth->format == VK_FORMAT_D32_SFLOAT || state.depth->format == VK_FORMAT_D32_SFLOAT_S8_UINT, "the depth bounds test on a normalized depth target needs the depthBounds feature");
-    Require(!state.depthTest && !state.depthWrite, "the depth bounds test with depth testing needs the depthBounds feature");
-    Require(!pixel.posZ && !pixel.depthExportEnable, "the depth bounds test from a pixel program that reads or exports depth needs the depthBounds feature");
     const auto keepsOnFail = [](const VkStencilOpState& face) { return (face.writeMask & 0xffu) == 0 || (face.failOp == VK_STENCIL_OP_KEEP && face.depthFailOp == VK_STENCIL_OP_KEEP); };
-    Require(!state.stencilTest || (keepsOnFail(state.stencilFront) && keepsOnFail(state.stencilBack)), "the depth bounds test with a stencil test that writes on a failed test needs the depthBounds feature");
     const bool upper = state.minDepthBounds <= 0.0f;
-    Require(upper || state.maxDepthBounds >= 1.0f, "the depth bounds test with both bounds inside (0, 1) needs the depthBounds feature");
+    const bool oneSided = upper || state.maxDepthBounds >= 1.0f;
+    if (!oneSided || state.depthTest || state.depthWrite || context.depthRangeUnrestricted || pixel.posZ || pixel.depthExportEnable || (state.stencilTest && !(keepsOnFail(state.stencilFront) && keepsOnFail(state.stencilBack)))) {
+        Require(!DepthStencilWrites(state), "the depth bounds test of a draw that writes depth or stencil needs the depthBounds feature");
+        Require(!pixel.depthExportEnable && !pixel.stencilRefExportEnable, "the depth bounds test from a pixel program that exports depth or stencil needs the depthBounds feature");
+        Require(state.depth->samples == 1u, "the depth bounds test on a multisampled depth target needs the depthBounds feature");
+        Require(!pixelProgramSkipped, "the depth bounds test of a draw without a pixel program needs the depthBounds feature");
+        pixel.depthBoundsSource = DepthCopySourceWords(*state.depth);
+        state.depthBoundsTest = false;
+        return;
+    }
     const float bound = upper ? state.maxDepthBounds : state.minDepthBounds;
     state.depthBoundsTest = false;
     state.depthTest = true;

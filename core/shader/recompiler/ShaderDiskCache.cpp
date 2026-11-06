@@ -143,7 +143,7 @@ constexpr std::size_t fieldCount() {
 
 static_assert(fieldCount<ShaderInfo>() == 24, "ShaderInfo changed: update the info encoder");
 static_assert(fieldCount<BufferResource>() == 12, "BufferResource changed: update the info encoder");
-static_assert(fieldCount<ImageResource>() == 50, "ImageResource changed: update the info encoder");
+static_assert(fieldCount<ImageResource>() == 51, "ImageResource changed: update the info encoder");
 static_assert(fieldCount<SamplerResource>() == 8, "SamplerResource changed: update the info encoder");
 static_assert(fieldCount<SampledResourcePair>() == 4, "SampledResourcePair changed: update the info encoder");
 static_assert(fieldCount<StageInput>() == 5, "StageInput changed: update the info encoder");
@@ -661,6 +661,7 @@ void encodeInvocation(Writer& writer, const ShaderInvocation& invocation) {
     writer.Value<std::uint64_t>(invocation.pushConstants.size());
     for (const auto byte : invocation.pushConstants) writer.Value(static_cast<std::uint8_t>(byte));
     writer.Value(invocation.readsDepthRemapPush);
+    writer.Value(invocation.readsDepthBoundsPush);
     writer.List(invocation.vertexAttributes, [](Writer& out, const VertexAttribute& attribute) {
         out.Value(attribute.location);
         out.Value(attribute.components);
@@ -702,6 +703,7 @@ void decodeInvocation(Reader& reader, ShaderInvocation& invocation) {
     invocation.pushConstants.resize(pushConstants.size());
     if (!pushConstants.empty()) std::memcpy(invocation.pushConstants.data(), pushConstants.data(), pushConstants.size());
     reader.Value(invocation.readsDepthRemapPush);
+    reader.Value(invocation.readsDepthBoundsPush);
     reader.List(invocation.vertexAttributes, 32, [](Reader& in, VertexAttribute& attribute) {
         in.Value(attribute.location);
         in.Value(attribute.components);
@@ -829,6 +831,7 @@ void encodeShaderInfo(Writer& writer, const ShaderInfo& info) {
         out.Value(image.table);
         out.Value(image.tableOperation);
         out.Value(image.targetMerge);
+        out.Value(image.depthBounds);
     });
     writer.Value(!info.runtimeImageModes.empty());
     writer.List(info.samplers, [](Writer& out, const SamplerResource& sampler) {
@@ -945,6 +948,7 @@ void decodeShaderInfo(Reader& reader, ShaderInfo& info) {
         in.Value(image.table);
         in.Value(image.tableOperation);
         in.Value(image.targetMerge);
+        in.Value(image.depthBounds);
     });
     bool preparedImageModes = false;
     reader.Value(preparedImageModes);

@@ -1113,22 +1113,26 @@ SpecializedSpirv specializeModule(const CompiledShaderArtifact& artifact, std::s
     return {entry->module, std::move(built)};
 }
 
-const ResourceSnapshot& mergeTargetImage(const CompiledVariant& variant, const RecompileRequest& request, const ResourceSnapshot& snapshot, bool registrationDefaults, ResourceSnapshot& merged) {
+// The pixel stage's target images (color target merges, then the depth bounds source) follow the captured images.
+const ResourceSnapshot& appendPixelTargetImages(const CompiledVariant& variant, const RecompileRequest& request, const ResourceSnapshot& snapshot, bool registrationDefaults, ResourceSnapshot& merged) {
     const auto& images = variant.info.info.images;
-    const auto mergeImage = [](const ImageResource& candidate) { return candidate.targetMerge; };
-    const auto image = std::ranges::find_if(images, mergeImage);
+    const auto targetImage = [](const ImageResource& candidate) { return candidate.targetMerge || candidate.depthBounds; };
+    const auto image = std::ranges::find_if(images, targetImage);
     if (image == images.end() || registrationDefaults) return snapshot;
-    if (!request.context.pixel || request.context.pixel->targetMerges.empty()) throw std::runtime_error("ShaderRecompiler: a color target merge variant was materialized without the merged target");
-    const auto& merges = request.context.pixel->targetMerges;
-    if (static_cast<std::size_t>(image - images.begin()) != snapshot.images.size() || snapshot.images.size() + merges.size() != images.size() || !std::all_of(image, images.end(), mergeImage)) throw std::runtime_error("ShaderRecompiler: the captured images do not precede the color target merge images");
+    const auto mergeImages = static_cast<std::size_t>(std::ranges::count_if(images, [](const ImageResource& candidate) { return candidate.targetMerge; }));
+    const bool depthBounds = images.back().depthBounds;
+    if (!request.context.pixel || request.context.pixel->targetMerges.size() != mergeImages || request.context.pixel->depthBoundsSource.has_value() != depthBounds) throw std::runtime_error("ShaderRecompiler: a pixel variant with target images was materialized without its targets");
+    if (static_cast<std::size_t>(image - images.begin()) != snapshot.images.size() || snapshot.images.size() + mergeImages + (depthBounds ? 1u : 0u) != images.size() || !std::all_of(image, images.end(), targetImage)) throw std::runtime_error("ShaderRecompiler: the captured images do not precede the pixel stage's target images");
     merged = snapshot;
-    for (const auto& merge : merges) {
+    const auto append = [&](const std::array<std::uint32_t, 8>& words) {
         DescriptorValue descriptor;
-        std::ranges::copy(merge.descriptor, descriptor.dwords.begin());
+        std::ranges::copy(words, descriptor.dwords.begin());
         descriptor.dwordCount = 8u;
         descriptor.availableDwordMask = 0xffu;
         merged.images.push_back(descriptor);
-    }
+    };
+    for (const auto& merge : request.context.pixel->targetMerges) append(merge.descriptor);
+    if (depthBounds) append(*request.context.pixel->depthBoundsSource);
     return merged;
 }
 
@@ -1157,7 +1161,7 @@ RecompileResult materializeResult(const CompiledVariant& variant, const Recompil
     const auto localSubstitutes = substituteSnapshot == nullptr && bufferSubstitutesEnabled() && variant.substitutes != nullptr ? variant.substitutes->Slots() : std::vector<BufferSubstitute>{};
     const auto substitutes = substituteSnapshot != nullptr ? std::span<const BufferSubstitute>(*substituteSnapshot) : std::span<const BufferSubstitute>(localSubstitutes);
     ResourceSnapshot merged;
-    const auto& snapshot = mergeTargetImage(variant, request, captured, registrationDefaults, merged);
+    const auto& snapshot = appendPixelTargetImages(variant, request, captured, registrationDefaults, merged);
     RecompileResult result;
     const auto& artifact = variant.artifact;
     static_cast<CompiledShaderArtifact&>(result) = {
@@ -1220,6 +1224,10 @@ RecompileResult materializeResult(const CompiledVariant& variant, const Recompil
             throw std::runtime_error("a remapped raster shader's push data must end before the depth remap words");
         }
         moduleKey.push_back(request.context.vertex->depthRemapMode);
+    }
+    const bool depthBounds = request.context.pixel && request.context.pixel->depthBoundsSource.has_value();
+    if (depthBounds && request.layout.pushConstantOffsetBytes % (RuntimeAbi::PushConstantDwords * 4u) + request.layout.pushConstantSizeBytes > DepthBoundsPushOffsetBytes) {
+        throw std::runtime_error("a pixel shader that runs the depth bounds test must end its push data before the depth bounds words");
     }
     result.vertexAttributes.reserve(result.vertexInputs.size());
     std::array<std::uint32_t, ShaderVertexStageInfo::MaxResources> vertexClasses{};
@@ -1332,6 +1340,7 @@ RecompileResult materializeResult(const CompiledVariant& variant, const Recompil
     if (std::ranges::none_of(result.bindings, [](const DescriptorBinding& binding) { return binding.role == DescriptorRole::BdaPagetable || binding.role == DescriptorRole::FaultBuffer; })) result.bdaAbiVersion = 0u;
     result.pushConstants = std::move(bindings.pushConstants);
     result.readsDepthRemapPush = depthRemap;
+    result.readsDepthBoundsPush = depthBounds;
     if (request.shader.stage == ShaderStage::Compute) {
         for (std::uint32_t component = 0; component < PipelineSpecialization::WorkgroupOffsetWords; ++component) result.specialization.push_back({PipelineSpecialization::WorkgroupOffsetBase + component, 0u});
     }
@@ -1884,6 +1893,10 @@ std::uint64_t snapshotHash(const RecompileRequest& request, const ResourceSnapsh
             mix(merge.blend.alphaOperation);
             mix(merge.blend.writeMask);
             for (const auto word : merge.blend.constants) mix(word);
+        }
+        mix(request.context.pixel->depthBoundsSource.has_value());
+        if (const auto& source = request.context.pixel->depthBoundsSource) {
+            for (const auto word : *source) mix(word);
         }
     }
     if (request.context.vertex) {

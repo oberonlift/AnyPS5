@@ -198,6 +198,7 @@ struct ShaderPixelInputInfo {
     bool mergeDepthStencilWrites = false;
     bool mergeDepthStencilTests = false;
     std::array<std::uint32_t, 4> sampleOrder{};
+    bool depthBounds = false;
 
     bool HasPositionInput() const {
         return psPosX || psPosY || psPosZ || psPosW;

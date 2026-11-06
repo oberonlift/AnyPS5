@@ -190,10 +190,11 @@ std::shared_ptr<DrawDecode> Driver::decodeDraw(const QueueState& queue, const Su
     product->state = Graphics::DecodeState(queue, VertexWorkgroupRequired(queue, *submission.shaders));
     DecodeGraphicsPrograms(*product, queue, *submission.shaders, false, true);
     product->state.depthCopySource = std::ranges::any_of(product->programs, [](const DrawProgram& program) { return program.binary.codeAddress == DepthCopyPixelProgramAddress(true); });
-    product->pixel = Graphics::DecodePixelStageInfo(queue.context, Graphics::ExportMappings(product->state), Graphics::PixelProgramSkipped(queue));
+    const bool pixelProgramSkipped = Graphics::PixelProgramSkipped(queue);
+    product->pixel = Graphics::DecodePixelStageInfo(queue.context, Graphics::ExportMappings(product->state), pixelProgramSkipped);
     Graphics::NormalizeUnusedViewportDepth(product->state, product->pixel);
     Graphics::ApplyDepthRemap(context, product->state);
-    Graphics::ApplyDepthBoundsEmulation(context, product->state, product->pixel);
+    Graphics::ApplyDepthBoundsEmulation(context, product->state, product->pixel, pixelProgramSkipped);
     product->pixel.targetExportPacking = Graphics::ExportPackings(product->state);
     product->pixel.dualSourceBlend = product->state.dualSourceBlend;
     product->pixel.reversedBlend = product->state.reversedBlend;

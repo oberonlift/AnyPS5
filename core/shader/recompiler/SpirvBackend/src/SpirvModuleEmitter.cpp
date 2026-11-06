@@ -235,9 +235,9 @@ std::uint32_t EmitBuiltinU32(SpirvEmitterState& state, StageInputKind kind, std:
         auto value = state.module.AllocateId();
         const auto bits = state.module.AllocateId();
         state.module.AddFunction(spv::OpLoad, TypeBool(state), value, variable);
-        if (state.quadPixelUncovered != 0u) {
+        if (state.pixelUncovered != 0u) {
             const auto helper = state.module.AllocateId();
-            state.module.AddFunction(spv::OpLogicalOr, TypeBool(state), helper, value, state.quadPixelUncovered);
+            state.module.AddFunction(spv::OpLogicalOr, TypeBool(state), helper, value, state.pixelUncovered);
             value = helper;
         }
         state.module.AddFunction(spv::OpSelect, TypeU32(state), bits, value, ConstantU32(state, 1u), ConstantU32(state, 0u));
@@ -488,6 +488,15 @@ struct MergeTexel {
     std::uint32_t sample;
 };
 
+std::uint32_t FragmentTexel(SpirvEmitterState& state) {
+    const auto position = [&](std::uint32_t component) { return Unary(state, spv::OpConvertFToU, TypeU32(state), Unary(state, spv::OpBitcast, TypeF32(state), EmitBuiltinU32(state, StageInputKind::FragCoord, component))); };
+    const auto x = position(0u);
+    const auto y = position(1u);
+    const auto coord = state.module.AllocateId();
+    state.module.AddFunction(spv::OpCompositeConstruct, TypeU32Vector(state, 2u), coord, x, y);
+    return coord;
+}
+
 MergeTexel MergeTargetTexel(SpirvEmitterState& state, std::size_t entry) {
     const auto& pixel = PixelInfo(state);
     const auto& images = state.program.Info().images;
@@ -495,12 +504,7 @@ MergeTexel MergeTargetTexel(SpirvEmitterState& state, std::size_t entry) {
     if (index >= images.size() || !images[index].targetMerge) FailEmit("the color target merge image was not collected");
     if (InputVariableForKind(state, StageInputKind::FragCoord) == 0u || (pixel.mergeSamples > 1u && InputVariableForKind(state, StageInputKind::SampleId) == 0u)) FailEmit("the color target merge inputs were not declared");
     if (entry >= state.mergeValueVariables.size() || entry >= state.mergePendingVariables.size()) FailEmit("the color target merge variables were not declared");
-    const auto position = [&](std::uint32_t component) { return Unary(state, spv::OpConvertFToU, TypeU32(state), Unary(state, spv::OpBitcast, TypeF32(state), EmitBuiltinU32(state, StageInputKind::FragCoord, component))); };
-    const auto x = position(0u);
-    const auto y = position(1u);
-    const auto coord = state.module.AllocateId();
-    state.module.AddFunction(spv::OpCompositeConstruct, TypeU32Vector(state, 2u), coord, x, y);
-    return {static_cast<std::uint32_t>(index), coord, pixel.mergeSamples > 1u ? EmitBuiltinU32(state, StageInputKind::SampleId, 0u) : 0u};
+    return {static_cast<std::uint32_t>(index), FragmentTexel(state), pixel.mergeSamples > 1u ? EmitBuiltinU32(state, StageInputKind::SampleId, 0u) : 0u};
 }
 
 std::uint32_t BlendComponent(SpirvEmitterState& state, std::uint32_t vector, std::uint32_t index) {
@@ -879,6 +883,57 @@ std::uint32_t ConvertClipCoordinate(SpirvEmitterState& state, std::uint32_t coor
     return ndc;
 }
 
+std::uint32_t LoadPushFloat(SpirvEmitterState& state, std::uint32_t dword) {
+    const auto pointer = state.module.AllocateId();
+    state.module.AddFunction(spv::OpAccessChain, TypePushConstantElementPointer(state), pointer, state.pushConstantVariable, ConstantU32(state, 0u), ConstantU32(state, dword));
+    const auto bits = state.module.AllocateId();
+    state.module.AddFunction(spv::OpLoad, TypeU32(state), bits, pointer);
+    return Unary(state, spv::OpBitcast, TypeF32(state), bits);
+}
+
+std::uint32_t QuadPixelUncovered(SpirvEmitterState& state) {
+    const auto& pixel = *state.inputInfo.pixel;
+    const auto quad = EmitQuadPixel(state);
+    auto bit = EmitBinaryU32(state, spv::OpBitwiseAnd, EmitBinaryU32(state, spv::OpShiftRightLogical, ConstantU32(state, pixel.quadPixelMask), quad), ConstantU32(state, 1u));
+    if (pixel.QuadSampleMaskPartial()) {
+        const auto top = ConstantU32(state, static_cast<std::uint32_t>(pixel.quadSampleMask[0]) | (static_cast<std::uint32_t>(pixel.quadSampleMask[1]) << 16u));
+        const auto bottom = ConstantU32(state, static_cast<std::uint32_t>(pixel.quadSampleMask[2]) | (static_cast<std::uint32_t>(pixel.quadSampleMask[3]) << 16u));
+        const auto lower = EmitCompareU32Constant(state, spv::OpIEqual, EmitBinaryU32(state, spv::OpBitwiseAnd, quad, ConstantU32(state, 2u)), 2u);
+        const auto row = Select(state, TypeU32(state), lower, bottom, top);
+        const auto shift = EmitBinaryU32(state, spv::OpShiftLeftLogical, EmitBinaryU32(state, spv::OpBitwiseAnd, quad, ConstantU32(state, 1u)), ConstantU32(state, 4u));
+        const auto covered = EmitBinaryU32(state, spv::OpBitwiseAnd, EmitBinaryU32(state, spv::OpShiftRightLogical, row, shift), ConstantU32(state, 0xffffu));
+        const auto pointer = state.module.AllocateId();
+        state.module.AddFunction(spv::OpAccessChain, TypePointer(state, spv::StorageClassInput, TypeI32(state)), pointer, state.sampleMaskInputVariable, ConstantU32(state, 0u));
+        const auto rasterized = state.module.AllocateId();
+        state.module.AddFunction(spv::OpLoad, TypeI32(state), rasterized, pointer);
+        auto guestRasterized = Unary(state, spv::OpBitcast, TypeU32(state), rasterized);
+        if (state.sampleOrderWord != 0u) guestRasterized = ReorderedSampleBits(state, guestRasterized, false);
+        bit = EmitBinaryU32(state, spv::OpBitwiseAnd, guestRasterized, covered);
+        state.quadSampleCoverage = Unary(state, spv::OpBitcast, TypeI32(state), covered);
+    }
+    return EmitCompareU32Constant(state, spv::OpIEqual, bit, 0u);
+}
+
+// The console's depth bounds test reads the depth stored at the pixel; a draw that cannot change it reads it from the
+// bound depth target. NaN stored depth fails, as both comparisons are ordered.
+std::uint32_t DepthBoundsFailed(SpirvEmitterState& state) {
+    const auto& images = state.program.Info().images;
+    const auto image = std::ranges::find_if(images, [](const ImageResource& candidate) { return candidate.depthBounds; });
+    if (image == images.end()) FailEmit("the depth bounds source image was not collected");
+    if (InputVariableForKind(state, StageInputKind::FragCoord) == 0u) FailEmit("the depth bounds test input was not declared");
+    if (state.pushConstantVariable == 0u) FailEmit("the depth bounds push constants were not declared");
+    const auto f32 = TypeF32(state);
+    const auto boolean = TypeBool(state);
+    const auto descriptor = LoadSampledImageDescriptor(state, static_cast<std::uint32_t>(image - images.begin()));
+    const auto texel = state.module.AllocateId();
+    state.module.AddFunction(spv::OpImageFetch, TypeF32Vector(state, 4u), texel, descriptor, FragmentTexel(state), spv::ImageOperandsLodMask, ConstantU32(state, 0u));
+    const auto stored = state.module.AllocateId();
+    state.module.AddFunction(spv::OpCompositeExtract, f32, stored, texel, 0u);
+    const auto above = Binary(state, spv::OpFOrdGreaterThanEqual, boolean, stored, LoadPushFloat(state, DepthBoundsPushOffsetBytes / 4u));
+    const auto below = Binary(state, spv::OpFOrdLessThanEqual, boolean, stored, LoadPushFloat(state, DepthBoundsPushOffsetBytes / 4u + 1u));
+    return Unary(state, spv::OpLogicalNot, boolean, Binary(state, spv::OpLogicalAnd, boolean, above, below));
+}
+
 std::uint32_t RemapPositionDepth(SpirvEmitterState& state, std::uint32_t position) {
     const auto& remap = state.inputInfo.vertex->depthRemap;
     const auto f32 = TypeF32(state);
@@ -891,17 +946,8 @@ std::uint32_t RemapPositionDepth(SpirvEmitterState& state, std::uint32_t positio
     }
     const auto mode = state.module.SpecializationConstant(u32, PipelineSpecialization::DepthRemapBase, remap.mode);
     if (state.pushConstantVariable == 0u) throw std::runtime_error("depth remap push constants were not declared");
-    const auto pushFloat = [&](std::uint32_t dword) {
-        const auto pointer = state.module.AllocateId();
-        state.module.AddFunction(spv::OpAccessChain, TypePushConstantElementPointer(state), pointer, state.pushConstantVariable, ConstantU32(state, 0u), ConstantU32(state, DepthRemapPushOffsetBytes / 4u + dword));
-        const auto bits = state.module.AllocateId();
-        state.module.AddFunction(spv::OpLoad, u32, bits, pointer);
-        const auto value = state.module.AllocateId();
-        state.module.AddFunction(spv::OpBitcast, f32, value, bits);
-        return value;
-    };
-    const auto scale = pushFloat(0u);
-    const auto offset = pushFloat(1u);
+    const auto scale = LoadPushFloat(state, DepthRemapPushOffsetBytes / 4u);
+    const auto offset = LoadPushFloat(state, DepthRemapPushOffsetBytes / 4u + 1u);
     const auto scaled = state.module.AllocateId();
     state.module.AddFunction(spv::OpFMul, f32, scaled, components[2], scale);
     const auto shifted = state.module.AllocateId();
@@ -1952,37 +1998,22 @@ void EmitProgram(SpirvEmitterState& state) {
         state.module.AddFunction(spv::OpBeginInvocationInterlockEXT);
     }
     EmitMemoryOffsets(state);
-    if (state.program.Resources().stage == IrShaderStage::Pixel && state.inputInfo.pixel != nullptr && state.inputInfo.pixel->QuadMasked()) {
+    if (state.program.Resources().stage == IrShaderStage::Pixel && state.inputInfo.pixel != nullptr && (state.inputInfo.pixel->QuadMasked() || state.inputInfo.pixel->depthBounds)) {
         const auto& pixel = *state.inputInfo.pixel;
-        const auto quad = EmitQuadPixel(state);
-        auto bit = EmitBinaryU32(state, spv::OpBitwiseAnd, EmitBinaryU32(state, spv::OpShiftRightLogical, ConstantU32(state, pixel.quadPixelMask), quad), ConstantU32(state, 1u));
-        if (pixel.QuadSampleMaskPartial()) {
-            const auto top = ConstantU32(state, static_cast<std::uint32_t>(pixel.quadSampleMask[0]) | (static_cast<std::uint32_t>(pixel.quadSampleMask[1]) << 16u));
-            const auto bottom = ConstantU32(state, static_cast<std::uint32_t>(pixel.quadSampleMask[2]) | (static_cast<std::uint32_t>(pixel.quadSampleMask[3]) << 16u));
-            const auto lower = EmitCompareU32Constant(state, spv::OpIEqual, EmitBinaryU32(state, spv::OpBitwiseAnd, quad, ConstantU32(state, 2u)), 2u);
-            const auto row = Select(state, TypeU32(state), lower, bottom, top);
-            const auto shift = EmitBinaryU32(state, spv::OpShiftLeftLogical, EmitBinaryU32(state, spv::OpBitwiseAnd, quad, ConstantU32(state, 1u)), ConstantU32(state, 4u));
-            const auto covered = EmitBinaryU32(state, spv::OpBitwiseAnd, EmitBinaryU32(state, spv::OpShiftRightLogical, row, shift), ConstantU32(state, 0xffffu));
-            const auto pointer = state.module.AllocateId();
-            state.module.AddFunction(spv::OpAccessChain, TypePointer(state, spv::StorageClassInput, TypeI32(state)), pointer, state.sampleMaskInputVariable, ConstantU32(state, 0u));
-            const auto rasterized = state.module.AllocateId();
-            state.module.AddFunction(spv::OpLoad, TypeI32(state), rasterized, pointer);
-            auto guestRasterized = Unary(state, spv::OpBitcast, TypeU32(state), rasterized);
-            if (state.sampleOrderWord != 0u) guestRasterized = ReorderedSampleBits(state, guestRasterized, false);
-            bit = EmitBinaryU32(state, spv::OpBitwiseAnd, guestRasterized, covered);
-            state.quadSampleCoverage = Unary(state, spv::OpBitcast, TypeI32(state), covered);
+        std::uint32_t uncovered = pixel.QuadMasked() ? QuadPixelUncovered(state) : 0u;
+        if (pixel.depthBounds) {
+            const auto failed = DepthBoundsFailed(state);
+            uncovered = uncovered == 0u ? failed : Binary(state, spv::OpLogicalOr, TypeBool(state), uncovered, failed);
         }
-        const auto mask = static_cast<std::uint32_t>(pixel.quadPixelMask);
         const bool demoteCapability = std::find(state.supportedCapabilities.begin(), state.supportedCapabilities.end(), static_cast<std::uint32_t>(spv::CapabilityDemoteToHelperInvocation)) != state.supportedCapabilities.end();
         const bool demoteCore = state.spirvVersion >= 0x00010600u;
         const bool demoteExtension = std::find(state.supportedExtensions.begin(), state.supportedExtensions.end(), "SPV_EXT_demote_to_helper_invocation") != state.supportedExtensions.end();
         const bool demote = demoteCapability && (demoteCore || demoteExtension);
         if (!demote && state.requirements.neighbourLaneReads) {
-            throw std::runtime_error("the PA_SC_AA_MASK quad pixel mask " + std::to_string(mask) + " leaves helper pixels whose lanes the pixel program reads (implicit-LOD sampling, whole-quad mode or cross-lane reads), which needs the device's shaderDemoteToHelperInvocation");
+            const auto cause = pixel.QuadMasked() ? "the PA_SC_AA_MASK quad pixel mask " + std::to_string(pixel.quadPixelMask) : std::string("the depth bounds test in the pixel shader");
+            throw std::runtime_error(cause + " leaves helper pixels whose lanes the pixel program reads (implicit-LOD sampling, whole-quad mode or cross-lane reads), which needs the device's shaderDemoteToHelperInvocation");
         }
-        const auto uncovered = state.module.AllocateId();
-        state.module.AddFunction(spv::OpIEqual, TypeBool(state), uncovered, bit, ConstantU32(state, 0u));
-        state.quadPixelUncovered = uncovered;
+        state.pixelUncovered = uncovered;
         const auto killLabel = state.module.AllocateId();
         const auto mergeLabel = state.module.AllocateId();
         state.module.AddFunction(spv::OpSelectionMerge, mergeLabel, spv::SelectionControlMaskNone);
