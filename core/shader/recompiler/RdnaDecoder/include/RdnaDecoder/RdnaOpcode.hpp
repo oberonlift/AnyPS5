@@ -1095,11 +1095,7 @@ enum class RdnaOpcode : std::uint16_t {
 
 [[nodiscard]] bool IsScalarAluOpcode(RdnaOpcode opcode);
 [[nodiscard]] bool IsVectorAluOpcode(RdnaOpcode opcode);
-[[nodiscard]] bool IsBranchOpcode(RdnaOpcode opcode);
-[[nodiscard]] bool IsScalarMemoryOpcode(RdnaOpcode opcode);
-[[nodiscard]] bool IsBufferMemoryOpcode(RdnaOpcode opcode);
 [[nodiscard]] bool IsImageOpcode(RdnaOpcode opcode);
-[[nodiscard]] bool IsExportOpcode(RdnaOpcode opcode);
 [[nodiscard]] bool IsSigned64BitIntegerOpcode(RdnaOpcode opcode);
 
 bool IsConditionalBranchOpcode(RdnaOpcode opcode);

@@ -710,13 +710,6 @@ void requireTwoWords(std::span<const std::uint32_t> code, std::uint32_t wordInde
     }
 }
 
-std::uint32_t toProgramCounter(std::uint32_t wordIndex) {
-    if (wordIndex > std::numeric_limits<std::uint32_t>::max() / 4u) {
-        throw std::runtime_error("memory instruction program counter overflow");
-    }
-    return wordIndex * 4u;
-}
-
 RdnaOpcode cacheControlOpcode(RdnaInstructionFamily family, std::uint32_t opcode) {
     if (family == RdnaInstructionFamily::SMEM) {
         switch (opcode) {
@@ -1055,21 +1048,6 @@ RdnaInstruction DecodeRdnaDs(std::uint32_t programCounter, std::span<const std::
         instruction.destination.kind = RdnaOperandKind::None;
     }
     return instruction;
-}
-
-RdnaInstruction DecodeRdnaMemoryOp(std::span<const std::uint32_t> code, std::uint32_t wordIndex) {
-    const auto programCounter = toProgramCounter(wordIndex);
-    if (static_cast<std::size_t>(wordIndex) >= code.size()) {
-        throw std::out_of_range("truncated memory instruction");
-    }
-    switch (code[wordIndex] >> 26u) {
-        case 0x36u: return DecodeRdnaDs(programCounter, code, wordIndex);
-        case 0x37u: return DecodeRdnaFlat(programCounter, code, wordIndex);
-        case 0x38u: return DecodeRdnaMubuf(programCounter, code, wordIndex);
-        case 0x3Au: return DecodeRdnaMtbuf(programCounter, code, wordIndex);
-        case 0x3Du: return DecodeRdnaSmem(programCounter, code, wordIndex);
-        default: throw std::runtime_error("instruction is not a memory operation");
-    }
 }
 
 }

@@ -301,35 +301,6 @@ std::uint32_t scalarDestinationDwordCount(RdnaOpcode opcode) {
 
 }
 
-RdnaInstruction DecodeRdnaScalarOp(std::span<const std::uint32_t> code, std::uint32_t wordIndex) {
-    if (wordIndex >= code.size()) {
-        throw std::out_of_range("word index is out of the code span bounds");
-    }
-
-    const std::uint32_t word = code[wordIndex];
-    if ((word & 0xc0000000u) != 0x80000000u) {
-        throw std::invalid_argument("word at the given index is not a scalar instruction");
-    }
-
-    const std::uint32_t programCounter = wordIndex * static_cast<std::uint32_t>(sizeof(std::uint32_t));
-    const std::uint32_t subOpcode = (word >> 23u) & 0x7fu;
-
-    if (subOpcode == 0x7du) {
-        return DecodeRdnaSop1(programCounter, code, wordIndex);
-    }
-    if (subOpcode == 0x7eu) {
-        return DecodeRdnaSopc(programCounter, code, wordIndex);
-    }
-    if (subOpcode == 0x7fu) {
-        return DecodeRdnaSopp(programCounter, code, wordIndex);
-    }
-    if (subOpcode >= 0x60u) {
-        return DecodeRdnaSopk(programCounter, code, wordIndex);
-    }
-
-    return DecodeRdnaSop2(programCounter, code, wordIndex);
-}
-
 RdnaInstruction DecodeRdnaSop1(std::uint32_t programCounter, std::span<const std::uint32_t> code, std::uint32_t wordIndex) {
     const std::uint32_t word = code[wordIndex];
     const std::uint32_t opcode = (word >> 8u) & 0xffu;

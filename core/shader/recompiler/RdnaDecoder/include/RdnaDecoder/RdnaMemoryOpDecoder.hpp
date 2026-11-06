@@ -7,8 +7,6 @@
 
 namespace ShaderRecompiler {
 
-[[nodiscard]] RdnaInstruction DecodeRdnaMemoryOp(std::span<const std::uint32_t> code, std::uint32_t wordIndex);
-
 RdnaInstruction DecodeRdnaSmem(std::uint32_t programCounter, std::span<const std::uint32_t> code, std::uint32_t wordIndex);
 RdnaInstruction DecodeRdnaMubuf(std::uint32_t programCounter, std::span<const std::uint32_t> code, std::uint32_t wordIndex);
 RdnaInstruction DecodeRdnaMtbuf(std::uint32_t programCounter, std::span<const std::uint32_t> code, std::uint32_t wordIndex);

@@ -73,15 +73,6 @@ RdnaProgram RdnaInstructionDecoder::Decode(std::span<const std::uint32_t> code) 
     return program;
 }
 
-RdnaInstruction RdnaInstructionDecoder::decodeAt(std::span<const std::uint32_t> code, std::uint32_t wordIndex) const {
-    if (wordIndex >= code.size()) {
-        throw std::out_of_range("word index is out of the code span bounds");
-    }
-
-    const std::uint32_t programCounter = wordIndex * static_cast<std::uint32_t>(sizeof(std::uint32_t));
-    return DecodeRdnaInstruction(programCounter, code, wordIndex);
-}
-
 RdnaInstructionFamily GetRdnaInstructionFamily(std::uint32_t word) {
     if ((word & 0x80000000u) == 0u) {
         switch ((word >> 25u) & 0x3fu) {
@@ -350,10 +341,6 @@ void ReadRdnaLiteralOperands(std::span<const std::uint32_t> code, std::uint32_t 
     SetRdnaRawWords(instruction, code, wordIndex, instruction.wordCount);
 }
 
-void SetRdnaUnsupported(RdnaInstruction& instruction, RdnaInstructionFamily family, std::uint32_t opcodeId, const char* reason) {
-    throw std::invalid_argument("unsupported RDNA instruction, family=" + std::to_string(static_cast<std::uint32_t>(family)) + " opcode=" + toHexString(opcodeId) + " reason=" + reason + " pc=" + toHexString(instruction.programCounter));
-}
-
 std::uint64_t RdnaApertureSourceValue(const RdnaOperand& operand) {
     switch (operand.kind) {
         case RdnaOperandKind::SrcSharedBase: return std::uint64_t{SharedApertureHigh} << 32u;
@@ -390,21 +377,6 @@ std::string RdnaOperandToString(const RdnaOperand& operand) {
     }
 
     throw std::invalid_argument("unsupported operand kind for string conversion");
-}
-
-const char* RdnaImageDimensionToString(RdnaImageDimension dimension) {
-    switch (dimension) {
-        case RdnaImageDimension::Unknown: return "unknown";
-        case RdnaImageDimension::Dim1D: return "1d";
-        case RdnaImageDimension::Dim1DArray: return "1d_array";
-        case RdnaImageDimension::Dim2D: return "2d";
-        case RdnaImageDimension::Dim3D: return "3d";
-        case RdnaImageDimension::Dim2DArray: return "2d_array";
-        case RdnaImageDimension::Dim2DMsaa: return "2d_msaa";
-        case RdnaImageDimension::Dim2DMsaaArray: return "2d_msaa_array";
-    }
-
-    throw std::invalid_argument("unsupported image dimension for string conversion");
 }
 
 std::string RdnaInstructionToString(const RdnaInstruction& instruction) {

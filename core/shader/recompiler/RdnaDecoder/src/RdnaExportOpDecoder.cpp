@@ -4,13 +4,6 @@
 
 namespace ShaderRecompiler {
 
-RdnaInstruction DecodeRdnaExportOp(std::span<const std::uint32_t> code, std::uint32_t wordIndex) {
-    if (wordIndex > std::numeric_limits<std::uint32_t>::max() / 4u) {
-        throw std::runtime_error("export program counter overflow");
-    }
-    return DecodeRdnaExportOp(wordIndex * 4u, code, wordIndex);
-}
-
 RdnaInstruction DecodeRdnaExportOp(std::uint32_t programCounter, std::span<const std::uint32_t> code, std::uint32_t wordIndex) {
     const std::size_t index = wordIndex;
     if (index >= code.size() || code.size() - index < 2u) {

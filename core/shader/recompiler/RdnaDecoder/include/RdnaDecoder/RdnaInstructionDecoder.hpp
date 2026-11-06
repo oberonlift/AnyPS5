@@ -14,9 +14,6 @@ inline constexpr std::uint32_t PrivateApertureHigh = 0x70000000u;
 class RdnaInstructionDecoder {
 public:
     [[nodiscard]] RdnaProgram Decode(std::span<const std::uint32_t> code) const;
-
-private:
-    [[nodiscard]] RdnaInstruction decodeAt(std::span<const std::uint32_t> code, std::uint32_t wordIndex) const;
 };
 
 RdnaInstructionFamily GetRdnaInstructionFamily(std::uint32_t word);
@@ -33,9 +30,7 @@ RdnaOperand DecodeRdnaVectorGpr(std::uint32_t reg);
 std::uint64_t RdnaApertureSourceValue(const RdnaOperand& operand);
 void ReadRdnaLiteralOperands(std::span<const std::uint32_t> code, std::uint32_t wordIndex, RdnaInstruction& instruction);
 void SetRdnaRawWords(RdnaInstruction& instruction, std::span<const std::uint32_t> code, std::uint32_t wordIndex, std::uint32_t wordCount);
-void SetRdnaUnsupported(RdnaInstruction& instruction, RdnaInstructionFamily family, std::uint32_t opcodeId, const char* reason);
 std::string RdnaOperandToString(const RdnaOperand& operand);
-const char* RdnaImageDimensionToString(RdnaImageDimension dimension);
 std::string RdnaInstructionToString(const RdnaInstruction& instruction);
 std::string RdnaProgramToString(const RdnaProgram& program);
 

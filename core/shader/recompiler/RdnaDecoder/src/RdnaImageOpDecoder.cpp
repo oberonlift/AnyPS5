@@ -282,14 +282,6 @@ RdnaOperand scalarRegister(std::uint32_t reg) {
 
 }
 
-const char* GetRdnaImageSampleOpcodeName(std::uint32_t opcode) {
-    const auto& info = lookupOpcode(opcode);
-    if (!info.sample || info.name == nullptr) {
-        throw std::runtime_error("opcode is not an image sample");
-    }
-    return info.name;
-}
-
 RdnaImageAddressComponent GetRdnaImageAddressComponentLayout(std::uint32_t flags, std::uint32_t component) {
     validateFlags(flags);
     if (component > MaxRdnaImageNsaAddressComponents) {
@@ -316,13 +308,6 @@ std::uint32_t GetRdnaImageAddressDwordCount(std::uint32_t flags, std::uint32_t c
     }
     const auto last = GetRdnaImageAddressComponentLayout(flags, components - 1u);
     return (last.bitOffset + last.bitWidth + 31u) / 32u;
-}
-
-RdnaInstruction DecodeRdnaImageOp(std::span<const std::uint32_t> code, std::uint32_t wordIndex) {
-    if (wordIndex > std::numeric_limits<std::uint32_t>::max() / 4u) {
-        throw std::runtime_error("MIMG program counter overflow");
-    }
-    return DecodeRdnaMimg(wordIndex * 4u, code, wordIndex);
 }
 
 RdnaInstruction DecodeRdnaMimg(std::uint32_t programCounter, std::span<const std::uint32_t> code, std::uint32_t wordIndex) {
