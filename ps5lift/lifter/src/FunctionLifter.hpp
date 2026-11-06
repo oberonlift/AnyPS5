@@ -346,7 +346,7 @@ private:
     llvm::Value* X87Address();
     void X87Arithmetic(const std::uint32_t operation, const bool integer, const bool pop);
     void X87StoreStatus();
-    void X87Environment(const bool store);
+    void X87Environment(const std::uint32_t operation);
     void X87SaveState();
     void X87RestoreState();
     void X87ConditionalMove(const ZydisMnemonic mnemonic);

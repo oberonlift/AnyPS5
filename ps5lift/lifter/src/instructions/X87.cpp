@@ -70,9 +70,14 @@ void FunctionLifter::X87StoreStatus() {
     Write(0, _builder.CreateTrunc(CallX87(PS5LIFT_X87_STORE_STATUS, 0, nullptr, 0), _builder.getInt16Ty()));
 }
 
-void FunctionLifter::X87Environment(const bool store) {
-    if (Operand(0).size != 224) throw UnsupportedInstruction("16-bit environment");
-    CallX87(store ? PS5LIFT_X87_STORE_ENVIRONMENT : PS5LIFT_X87_LOAD_ENVIRONMENT, 0, X87Address(), 0);
+void FunctionLifter::X87Environment(const std::uint32_t operation) {
+    std::uint32_t format = 0;
+    switch (Operand(0).size) {
+    case 112: case 752: format = PS5LIFT_X87_SHORT_ENVIRONMENT; break;
+    case 224: case 864: break;
+    default: throw UnsupportedInstruction("x87 environment size");
+    }
+    CallX87(operation, format, X87Address(), 0);
 }
 
 void FunctionLifter::X87SaveState() {

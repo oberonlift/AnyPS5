@@ -12,6 +12,7 @@ extern "C" {
 #include <cfenv>
 #include <cfloat>
 #include <cstring>
+#include <limits>
 #include <optional>
 
 namespace {
@@ -38,6 +39,11 @@ constexpr int RangeBiasAdjustment = 24576;
 constexpr int CompleteRemainderDifference = 64;
 constexpr int PartialRemainderBits = 32;
 constexpr std::size_t FxStateBytes = 416;
+constexpr std::size_t EnvironmentBytes = 28;
+constexpr std::size_t ShortEnvironmentBytes = 14;
+constexpr std::size_t RegisterBytes = 10;
+constexpr std::size_t PackedBcdDigitBytes = 9;
+constexpr std::int64_t LargestPackedBcd = 999999999999999999;
 constexpr std::uint16_t InitialControl = 0x037f;
 
 std::uint16_t UnmaskedExceptions(const std::uint16_t status, const std::uint16_t control) {
@@ -359,30 +365,56 @@ extFloat80_t LoadMemory(Fpu& fpu, const std::uint32_t format, const std::uint64_
         std::memcpy(&value, source, 8);
         return i64_to_extF80(value);
     }
+    case PS5LIFT_X87_PACKED_BCD: {
+        std::uint8_t bytes[PackedBcdDigitBytes + 1];
+        std::memcpy(bytes, source, sizeof(bytes));
+        std::int64_t magnitude = 0;
+        for (auto byte = PackedBcdDigitBytes; byte-- > 0;) magnitude = magnitude * 100 + (bytes[byte] >> 4) * 10 + (bytes[byte] & 15);
+        auto value = i64_to_extF80(magnitude);
+        if ((bytes[PackedBcdDigitBytes] & 0x80) != 0) value.signExp = static_cast<std::uint16_t>(value.signExp | 0x8000);
+        return value;
+    }
     default:
         ps5lift_fail("unknown x87 memory format 0x%x", format);
     }
 }
 
-template <typename T>
-void StoreInteger(Fpu& fpu, const extFloat80_t value, const bool truncate, void* destination) {
-    const auto rounding = truncate ? static_cast<std::uint_fast8_t>(softfloat_round_minMag) : softfloat_roundingMode;
-    T result = static_cast<T>(std::uint64_t{1} << (sizeof(T) * 8 - 1));
+std::optional<std::int64_t> RoundToInteger(Fpu& fpu, const extFloat80_t value, const bool truncate, const std::int64_t smallest, const std::int64_t largest) {
     if (IsNan(value)) {
         fpu.Raise(StatusInvalid);
-    } else {
-        const auto saved = softfloat_exceptionFlags;
-        softfloat_exceptionFlags = 0;
-        const auto wide = extF80_to_i64(value, rounding, true);
-        const auto raised = softfloat_exceptionFlags;
-        const bool fits = (raised & softfloat_flag_invalid) == 0 && wide >= INT64_C(-1) << (sizeof(T) * 8 - 1) && (sizeof(T) == 8 || wide < INT64_C(1) << (sizeof(T) * 8 - 1));
-        if (fits) {
-            result = static_cast<T>(wide);
-            if ((raised & softfloat_flag_inexact) != 0 && !truncate && extF80_to_i64(value, softfloat_round_minMag, false) != wide) fpu.SetRoundedUp();
-        }
-        softfloat_exceptionFlags = static_cast<std::uint_fast8_t>(saved | (fits ? raised : softfloat_flag_invalid));
+        return std::nullopt;
     }
-    fpu.Store(destination, result);
+    const auto rounding = truncate ? static_cast<std::uint_fast8_t>(softfloat_round_minMag) : softfloat_roundingMode;
+    const auto saved = softfloat_exceptionFlags;
+    softfloat_exceptionFlags = 0;
+    const auto wide = extF80_to_i64(value, rounding, true);
+    const auto raised = softfloat_exceptionFlags;
+    const bool fits = (raised & softfloat_flag_invalid) == 0 && wide >= smallest && wide <= largest;
+    if (fits && (raised & softfloat_flag_inexact) != 0 && !truncate && extF80_to_i64(value, softfloat_round_minMag, false) != wide) fpu.SetRoundedUp();
+    softfloat_exceptionFlags = static_cast<std::uint_fast8_t>(saved | (fits ? raised : softfloat_flag_invalid));
+    if (!fits) return std::nullopt;
+    return wide;
+}
+
+template <typename T>
+void StoreInteger(Fpu& fpu, const extFloat80_t value, const bool truncate, void* destination) {
+    const auto rounded = RoundToInteger(fpu, value, truncate, std::numeric_limits<T>::min(), std::numeric_limits<T>::max());
+    fpu.Store(destination, rounded ? static_cast<T>(*rounded) : std::numeric_limits<T>::min());
+}
+
+void StorePackedBcd(Fpu& fpu, const extFloat80_t value, void* destination) {
+    std::uint8_t bytes[PackedBcdDigitBytes + 1] = {};
+    const auto rounded = RoundToInteger(fpu, value, false, -LargestPackedBcd, LargestPackedBcd);
+    if (rounded) {
+        auto magnitude = static_cast<std::uint64_t>(*rounded < 0 ? -*rounded : *rounded);
+        for (std::size_t byte = 0; byte < PackedBcdDigitBytes; ++byte, magnitude /= 100) bytes[byte] = static_cast<std::uint8_t>(magnitude % 10 | (magnitude / 10 % 10) << 4);
+        if (IsNegative(value)) bytes[PackedBcdDigitBytes] = 0x80;
+    } else {
+        bytes[7] = 0xc0;
+        bytes[8] = 0xff;
+        bytes[9] = 0xff;
+    }
+    fpu.Store(destination, bytes);
 }
 
 void StoreMemory(Fpu& fpu, const std::uint32_t format, const std::uint64_t address, const extFloat80_t value) {
@@ -404,6 +436,7 @@ void StoreMemory(Fpu& fpu, const std::uint32_t format, const std::uint64_t addre
     case PS5LIFT_X87_INTEGER16: StoreInteger<std::int16_t>(fpu, value, truncate, destination); return;
     case PS5LIFT_X87_INTEGER32: StoreInteger<std::int32_t>(fpu, value, truncate, destination); return;
     case PS5LIFT_X87_INTEGER64: StoreInteger<std::int64_t>(fpu, value, truncate, destination); return;
+    case PS5LIFT_X87_PACKED_BCD: StorePackedBcd(fpu, value, destination); return;
     default: ps5lift_fail("unknown x87 memory format 0x%x", format);
     }
 }
@@ -712,6 +745,84 @@ std::uint16_t TagWord(const Ps5LiftState& state) {
     return tags;
 }
 
+struct Extracted {
+    extFloat80_t Exponent;
+    extFloat80_t Significand;
+};
+
+Extracted Extract(Fpu& fpu, const extFloat80_t value) {
+    const auto biased = value.signExp & 0x7fff;
+    if (biased != 0 && (value.signif >> 63) == 0) {
+        fpu.Raise(StatusInvalid);
+        return {Indefinite(), Indefinite()};
+    }
+    if (IsNan(value)) {
+        if (extF80_isSignalingNaN(value)) fpu.Raise(StatusInvalid);
+        auto quiet = value;
+        quiet.signif |= 0x4000000000000000ull;
+        return {quiet, quiet};
+    }
+    if (IsInfinity(value)) return {Infinity(false), value};
+    if (IsZero(value)) {
+        fpu.Raise(StatusZeroDivide);
+        return {Infinity(true), value};
+    }
+    if (biased == 0) fpu.Raise(StatusDenormal);
+    const auto normal = Normalize(value);
+    extFloat80_t significand;
+    significand.signExp = static_cast<std::uint16_t>((value.signExp & 0x8000) | ExtendedBias);
+    significand.signif = normal.Bits;
+    return {i32_to_extF80(normal.Exponent - ExtendedBias), significand};
+}
+
+std::size_t EnvironmentSize(const std::uint32_t format) {
+    return (format & PS5LIFT_X87_SHORT_ENVIRONMENT) != 0 ? ShortEnvironmentBytes : EnvironmentBytes;
+}
+
+void WriteEnvironment(const Ps5LiftState& state, std::uint8_t* image, const std::uint32_t format) {
+    const std::uint16_t words[3] = {state.X87Control, state.X87Status, TagWord(state)};
+    if (EnvironmentSize(format) == ShortEnvironmentBytes) {
+        std::memset(image, 0, ShortEnvironmentBytes);
+        std::memcpy(image, words, sizeof(words));
+        return;
+    }
+    const std::uint32_t environment[7] = {0xffff0000u | words[0], 0xffff0000u | words[1], 0xffff0000u | words[2], 0, 0, 0, 0xffff0000u};
+    std::memcpy(image, environment, sizeof(environment));
+}
+
+void ReadEnvironment(Ps5LiftState& state, const std::uint8_t* image, const std::uint32_t format) {
+    const std::size_t stride = EnvironmentSize(format) == ShortEnvironmentBytes ? 2 : 4;
+    std::uint16_t words[3];
+    for (std::size_t word = 0; word < 3; ++word) std::memcpy(&words[word], image + word * stride, 2);
+    state.X87Control = words[0];
+    state.X87Status = Ps5Lift::X87StatusWithSummary(words[1], words[0]);
+    std::uint8_t valid = 0;
+    for (unsigned physical = 0; physical < 8; ++physical) {
+        if (((words[2] >> (2 * physical)) & 3) != 3) valid = static_cast<std::uint8_t>(valid | (1u << physical));
+    }
+    state.X87Valid = valid;
+}
+
+void SaveRegisters(const Ps5LiftState& state, std::uint8_t* image, const std::size_t stride) {
+    const unsigned top = (state.X87Status >> TopShift) & 7;
+    for (unsigned index = 0; index < 8; ++index) std::memcpy(image + stride * index, state.X87Registers[(top + index) & 7], RegisterBytes);
+}
+
+void RestoreRegisters(Ps5LiftState& state, const std::uint8_t* image, const std::size_t stride) {
+    const unsigned top = (state.X87Status >> TopShift) & 7;
+    for (unsigned index = 0; index < 8; ++index) {
+        auto* reg = state.X87Registers[(top + index) & 7];
+        std::memcpy(reg, image + stride * index, RegisterBytes);
+        std::memset(reg + RegisterBytes, 0, sizeof(state.X87Registers[0]) - RegisterBytes);
+    }
+}
+
+void Initialize(Ps5LiftState& state) {
+    state.X87Control = InitialControl;
+    state.X87Status = 0;
+    state.X87Valid = 0;
+}
+
 std::uint32_t Execute(Fpu& fpu, const std::uint32_t operation, const std::uint32_t format, const std::uint64_t address, const std::uint32_t index) {
     const bool memory = (format & 7) != PS5LIFT_X87_REGISTER;
     switch (operation) {
@@ -728,9 +839,13 @@ std::uint32_t Execute(Fpu& fpu, const std::uint32_t operation, const std::uint32
         return 0;
     case PS5LIFT_X87_STORE: {
         fpu.ClearRoundedUp();
-        const auto value = fpu.Get(0);
-        if (memory) StoreMemory(fpu, format, address, value);
-        else fpu.Set(index, value);
+        if ((format & PS5LIFT_X87_UNCHECKED) != 0 && !fpu.Valid(0)) {
+            fpu.Free(index);
+        } else {
+            const auto value = fpu.Get(0);
+            if (memory) StoreMemory(fpu, format, address, value);
+            else fpu.Set(index, value);
+        }
         if (format & PS5LIFT_X87_POP) fpu.Pop();
         return 0;
     }
@@ -823,7 +938,20 @@ std::uint32_t Execute(Fpu& fpu, const std::uint32_t operation, const std::uint32
     }
     case PS5LIFT_X87_FREE:
         fpu.Free(index);
+        if (format & PS5LIFT_X87_POP) fpu.Pop();
         return 0;
+    case PS5LIFT_X87_EXTRACT: {
+        fpu.ClearRoundedUp();
+        if (fpu.Valid(7)) {
+            fpu.SetDestination(0, Indefinite());
+            fpu.Push(Indefinite());
+            return 0;
+        }
+        const auto extracted = Extract(fpu, fpu.Get(0));
+        fpu.SetDestination(0, extracted.Exponent);
+        fpu.Push(extracted.Significand);
+        return 0;
+    }
     case PS5LIFT_X87_INCREMENT_TOP:
         fpu.ClearRoundedUp();
         fpu.SetTop(fpu.Top() + 1);
@@ -875,9 +1003,7 @@ void Ps5Lift::RequireNoPendingX87Exceptions(const Ps5LiftState& state) {
 extern "C" std::uint32_t ps5lift_x87(Ps5LiftState* state, const std::uint32_t operation, const std::uint32_t format, const std::uint64_t address, const std::uint32_t index) {
     switch (operation) {
     case PS5LIFT_X87_INITIALIZE:
-        state->X87Control = InitialControl;
-        state->X87Status = 0;
-        state->X87Valid = 0;
+        Initialize(*state);
         return 0;
     case PS5LIFT_X87_CLEAR_EXCEPTIONS:
         state->X87Status = Ps5Lift::X87StatusWithSummary(static_cast<std::uint16_t>(state->X87Status & ~(PS5LIFT_X87_EXCEPTIONS | StatusStackFault)), state->X87Control);
@@ -894,9 +1020,19 @@ extern "C" std::uint32_t ps5lift_x87(Ps5LiftState* state, const std::uint32_t op
         return 0;
     }
     case PS5LIFT_X87_STORE_ENVIRONMENT: {
-        const std::uint32_t environment[7] = {0xffff0000u | state->X87Control, 0xffff0000u | state->X87Status, 0xffff0000u | TagWord(*state), 0, 0, 0, 0xffff0000u};
-        std::memcpy(reinterpret_cast<void*>(address), environment, sizeof(environment));
+        std::uint8_t image[EnvironmentBytes];
+        WriteEnvironment(*state, image, format);
+        std::memcpy(reinterpret_cast<void*>(address), image, EnvironmentSize(format));
         Ps5Lift::LoadX87Control(*state, static_cast<std::uint16_t>(state->X87Control | PS5LIFT_X87_EXCEPTIONS));
+        return 0;
+    }
+    case PS5LIFT_X87_STORE_STATE: {
+        std::uint8_t image[EnvironmentBytes + 8 * RegisterBytes];
+        const auto size = EnvironmentSize(format);
+        WriteEnvironment(*state, image, format);
+        SaveRegisters(*state, image + size, RegisterBytes);
+        std::memcpy(reinterpret_cast<void*>(address), image, size + 8 * RegisterBytes);
+        Initialize(*state);
         return 0;
     }
     case PS5LIFT_X87_SAVE_STATE: {
@@ -906,8 +1042,7 @@ extern "C" std::uint32_t ps5lift_x87(Ps5LiftState* state, const std::uint32_t op
         area[4] = state->X87Valid;
         const std::uint32_t mxcsr[2] = {ps5lift_read_mxcsr(state), PS5LIFT_MXCSR_MASK};
         std::memcpy(area + 24, mxcsr, sizeof(mxcsr));
-        const unsigned top = (state->X87Status >> TopShift) & 7;
-        for (unsigned index = 0; index < 8; ++index) std::memcpy(area + 32 + 16 * index, state->X87Registers[(top + index) & 7], 10);
+        SaveRegisters(*state, area + 32, 16);
         for (unsigned reg = 0; reg < 16; ++reg) std::memcpy(area + 160 + 16 * reg, state->Vector[reg], 16);
         std::memcpy(reinterpret_cast<void*>(address), area, sizeof(area));
         return 0;
@@ -922,25 +1057,22 @@ extern "C" std::uint32_t ps5lift_x87(Ps5LiftState* state, const std::uint32_t op
         std::memcpy(&status, area + 2, 2);
         state->X87Status = Ps5Lift::X87StatusWithSummary(status, state->X87Control);
         state->X87Valid = area[4];
-        const unsigned top = (state->X87Status >> TopShift) & 7;
-        for (unsigned index = 0; index < 8; ++index) {
-            auto* reg = state->X87Registers[(top + index) & 7];
-            std::memcpy(reg, area + 32 + 16 * index, 10);
-            std::memset(reg + 10, 0, sizeof(state->X87Registers[0]) - 10);
-        }
+        RestoreRegisters(*state, area + 32, 16);
         for (unsigned reg = 0; reg < 16; ++reg) std::memcpy(state->Vector[reg], area + 160 + 16 * reg, 16);
         return mxcsr;
     }
     case PS5LIFT_X87_LOAD_ENVIRONMENT: {
-        std::uint32_t environment[7];
-        std::memcpy(environment, reinterpret_cast<const void*>(address), sizeof(environment));
-        state->X87Control = static_cast<std::uint16_t>(environment[0]);
-        state->X87Status = Ps5Lift::X87StatusWithSummary(static_cast<std::uint16_t>(environment[1]), state->X87Control);
-        std::uint8_t valid = 0;
-        for (unsigned physical = 0; physical < 8; ++physical) {
-            if (((environment[2] >> (2 * physical)) & 3) != 3) valid = static_cast<std::uint8_t>(valid | (1u << physical));
-        }
-        state->X87Valid = valid;
+        std::uint8_t image[EnvironmentBytes];
+        std::memcpy(image, reinterpret_cast<const void*>(address), EnvironmentSize(format));
+        ReadEnvironment(*state, image, format);
+        return 0;
+    }
+    case PS5LIFT_X87_LOAD_STATE: {
+        std::uint8_t image[EnvironmentBytes + 8 * RegisterBytes];
+        const auto size = EnvironmentSize(format);
+        std::memcpy(image, reinterpret_cast<const void*>(address), size + 8 * RegisterBytes);
+        ReadEnvironment(*state, image, format);
+        RestoreRegisters(*state, image + size, RegisterBytes);
         return 0;
     }
     default:
