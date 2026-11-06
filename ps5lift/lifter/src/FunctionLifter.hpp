@@ -331,7 +331,9 @@ private:
     llvm::Value* RoundValue(llvm::Value* value, const std::uint64_t control);
     llvm::Value* CompareMask(llvm::Value* a, llvm::Value* b, const std::uint64_t predicate);
     llvm::Value* FusedMultiplyAdd(const FloatSpec& spec, llvm::Value* x1, llvm::Value* x2, llvm::Value* x3);
-    std::pair<llvm::Value*, llvm::Value*> ComparedOperands(llvm::Value* a, llvm::Value* b, llvm::Value* nan, const bool signaling);
+    void RaiseCompareExceptions(llvm::Value* a, llvm::Value* b, llvm::Value* nan, const bool signaling);
+    llvm::Value* OrderKey(llvm::Value* value);
+    llvm::Value* IntegerCompare(const llvm::CmpInst::Predicate relation, llvm::Value* a, llvm::Value* b, llvm::Value* nan);
     llvm::Value* LoadScalarFloat(const int index, const unsigned element);
     void FloatArithmetic(const FloatSpec& spec);
     llvm::Value* ConvertNan(llvm::Value* source, llvm::Value* converted);

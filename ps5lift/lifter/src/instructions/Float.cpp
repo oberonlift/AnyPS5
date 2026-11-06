@@ -114,15 +114,11 @@ llvm::Value* FunctionLifter::Sum(llvm::Value* a, llvm::Value* b, llvm::Value* ad
 }
 
 llvm::Value* FunctionLifter::MinMax(const FloatKind kind, llvm::Value* a, llvm::Value* b) {
-    llvm::Value* left = a;
-    llvm::Value* right = b;
-    if (ExactFloat()) {
-        RaiseSimdExceptions(_builder.CreateOr(MxcsrFlag(_builder.CreateOr(IsNan(a), IsNan(b)), PS5LIFT_MXCSR_INVALID), DenormalFlag({a, b})), _builder.getInt32(0));
-        left = DenormalsAreZero(a);
-        right = DenormalsAreZero(b);
-    }
-    auto* compare = kind == FloatKind::Min ? _builder.CreateFCmpOLT(left, right) : _builder.CreateFCmpOGT(left, right);
-    return _builder.CreateSelect(compare, left, right);
+    const auto relation = kind == FloatKind::Min ? llvm::CmpInst::FCMP_OLT : llvm::CmpInst::FCMP_OGT;
+    if (!ExactFloat()) return _builder.CreateSelect(_builder.CreateFCmp(relation, a, b), a, b);
+    auto* nan = _builder.CreateOr(IsNan(a), IsNan(b));
+    RaiseCompareExceptions(a, b, nan, true);
+    return _builder.CreateSelect(IntegerCompare(relation, a, b, nan), DenormalsAreZero(a), DenormalsAreZero(b));
 }
 
 llvm::Value* FunctionLifter::Arithmetic(const FloatKind kind, llvm::Value* a, llvm::Value* b) {
@@ -172,21 +168,35 @@ llvm::Value* FunctionLifter::CompareMask(llvm::Value* a, llvm::Value* b, const s
     llvm::Value* compare = nullptr;
     if (ExactFloat()) {
         auto* nan = _builder.CreateOr(IsNan(a), IsNan(b));
-        const auto [left, right] = ComparedOperands(a, b, nan, ((code & 3) == 1 || (code & 3) == 2) != ((code & 16) != 0));
-        auto* ordered = _builder.CreateFCmp(relation, left, right);
-        const bool unordered = (static_cast<unsigned>(relation) & llvm::CmpInst::FCMP_UNO) != 0;
-        compare = _builder.CreateSelect(nan, llvm::ConstantInt::getBool(nan->getType(), unordered), ordered);
+        RaiseCompareExceptions(a, b, nan, ((code & 3) == 1 || (code & 3) == 2) != ((code & 16) != 0));
+        compare = IntegerCompare(relation, a, b, nan);
     } else {
         compare = _builder.CreateFCmp(relation, a, b);
     }
     return _builder.CreateBitCast(_builder.CreateSExt(compare, IntegerLike(a->getType())), a->getType());
 }
 
-std::pair<llvm::Value*, llvm::Value*> FunctionLifter::ComparedOperands(llvm::Value* a, llvm::Value* b, llvm::Value* nan, const bool signaling) {
+void FunctionLifter::RaiseCompareExceptions(llvm::Value* a, llvm::Value* b, llvm::Value* nan, const bool signaling) {
     auto* invalid = signaling ? nan : _builder.CreateOr(IsSignalingNan(a), IsSignalingNan(b));
     RaiseSimdExceptions(_builder.CreateOr(MxcsrFlag(invalid, PS5LIFT_MXCSR_INVALID), DenormalFlag({a, b})), _builder.getInt32(0));
-    auto* zero = llvm::Constant::getNullValue(a->getType());
-    return {_builder.CreateSelect(nan, zero, DenormalsAreZero(a)), _builder.CreateSelect(nan, zero, DenormalsAreZero(b))};
+}
+
+llvm::Value* FunctionLifter::OrderKey(llvm::Value* value) {
+    auto* type = IntegerLike(value->getType());
+    auto* bits = _builder.CreateBitCast(DenormalsAreZero(value), type);
+    auto* negative = _builder.CreateICmpSLT(bits, llvm::Constant::getNullValue(type));
+    return _builder.CreateSelect(negative, _builder.CreateSub(llvm::ConstantInt::get(type, std::uint64_t{1} << (type->getScalarSizeInBits() - 1)), bits), bits);
+}
+
+llvm::Value* FunctionLifter::IntegerCompare(const llvm::CmpInst::Predicate relation, llvm::Value* a, llvm::Value* b, llvm::Value* nan) {
+    const auto conditions = static_cast<unsigned>(relation);
+    auto* left = OrderKey(a);
+    auto* right = OrderKey(b);
+    llvm::Value* ordered = llvm::Constant::getNullValue(nan->getType());
+    if (conditions & llvm::CmpInst::FCMP_OEQ) ordered = _builder.CreateOr(ordered, _builder.CreateICmpEQ(left, right));
+    if (conditions & llvm::CmpInst::FCMP_OGT) ordered = _builder.CreateOr(ordered, _builder.CreateICmpSGT(left, right));
+    if (conditions & llvm::CmpInst::FCMP_OLT) ordered = _builder.CreateOr(ordered, _builder.CreateICmpSLT(left, right));
+    return _builder.CreateSelect(nan, llvm::ConstantInt::getBool(nan->getType(), (conditions & llvm::CmpInst::FCMP_UNO) != 0), ordered);
 }
 
 llvm::Value* FunctionLifter::FusedMultiplyAdd(const FloatSpec& spec, llvm::Value* x1, llvm::Value* x2, llvm::Value* x3) {
@@ -513,8 +523,8 @@ void FunctionLifter::CompareScalar(const unsigned element) {
     const auto mnemonic = _instruction->Info.mnemonic;
     const bool signaling = mnemonic == ZYDIS_MNEMONIC_COMISS || mnemonic == ZYDIS_MNEMONIC_VCOMISS || mnemonic == ZYDIS_MNEMONIC_COMISD || mnemonic == ZYDIS_MNEMONIC_VCOMISD;
     auto* nan = _builder.CreateOr(IsNan(a), IsNan(b));
-    const auto [left, right] = ComparedOperands(a, b, nan, signaling);
-    ComparisonFlags(nan, [&] { return _builder.CreateOr(nan, _builder.CreateFCmpOEQ(left, right)); }, [&] { return _builder.CreateOr(nan, _builder.CreateFCmpOLT(left, right)); });
+    RaiseCompareExceptions(a, b, nan, signaling);
+    ComparisonFlags(nan, [&] { return IntegerCompare(llvm::CmpInst::FCMP_UEQ, a, b, nan); }, [&] { return IntegerCompare(llvm::CmpInst::FCMP_ULT, a, b, nan); });
 }
 
 void FunctionLifter::DotProduct(const unsigned element) {
