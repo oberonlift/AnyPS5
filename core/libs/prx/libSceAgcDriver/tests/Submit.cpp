@@ -1164,6 +1164,20 @@ int main(int argc, char** argv) {
             std::printf("The f32 denormal flush probe compared %u results, %u differ\n", probe.compared, probe.mismatches);
             return 0;
         }
+        if (argc == 2 && std::string_view(argv[1]) == "--float16-probe") {
+            const auto target = device->Target();
+            const auto supports = [&](spv::Capability capability) { return std::ranges::find(target.supportedCapabilities, static_cast<std::uint32_t>(capability)) != target.supportedCapabilities.end(); };
+            if (!supports(spv::CapabilityFloat16) || !supports(spv::CapabilityRoundingModeRTE)) {
+                LibcRunShutdown_nid_postfix();
+                std::puts("The f16 probe was skipped: the device has no f16 arithmetic with round-to-nearest-even");
+                return VulkanTestSkipped;
+            }
+            const auto probe = AgcDriver::ProbeFloat16Arithmetic(*device, target);
+            check(probe.compared != 0, "the f16 probe compared no results");
+            LibcRunShutdown_nid_postfix();
+            std::printf("The f16 probe compared %u results, %u differ\n", probe.compared, probe.mismatches);
+            return 0;
+        }
         if (argc == 2 && std::string_view(argv[1]) == "--guest-form-multi-submits") {
             testGuestFormMultiSubmits();
             LibcRunShutdown_nid_postfix();

@@ -1749,13 +1749,17 @@ std::uint32_t EmitTrigCycleF32(SpirvEmitterState& state, std::uint32_t src, bool
 
 void EmitF16DenormPreserve(SpirvEmitterState& state) {
     if (state.f16DenormPreserveEmitted) return;
+    if (std::ranges::find(state.supportedCapabilities, static_cast<std::uint32_t>(spv::CapabilityDenormPreserve)) == state.supportedCapabilities.end()) {
+        if (!state.float16Measured) FailEmit("f16 denormals need DenormPreserve or f16 arithmetic measured exact");
+        return;
+    }
     state.module.EmitCapability(spv::CapabilityDenormPreserve);
     state.module.AddExecutionMode(state.mainFunc, spv::ExecutionModeDenormPreserve, 16u);
     state.f16DenormPreserveEmitted = true;
 }
 
 static std::uint32_t UnpackF16BitsToF32(SpirvEmitterState& state, std::uint32_t bits, bool nanBits) {
-    if (!state.float16DenormPreserve) return EmitF16BitsToF32Decoded(state, bits);
+    if (!state.float16DenormPreserve && !state.float16Measured) return EmitF16BitsToF32Decoded(state, bits);
     EmitF16DenormPreserve(state);
     const auto u32 = TypeU32(state);
     const auto f32 = TypeF32(state);

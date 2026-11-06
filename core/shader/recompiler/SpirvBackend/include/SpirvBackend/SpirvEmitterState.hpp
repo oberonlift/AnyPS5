@@ -112,6 +112,7 @@ struct SpirvEmitterState {
     bool registrationModules = false;
     bool fragmentDescriptorSet = false;
     bool float16DenormPreserve = false;
+    bool float16Measured = false;
     bool robustBufferAccess2 = false;
     bool exactRobustLoads = false;
     bool float32FlushToZero = false;

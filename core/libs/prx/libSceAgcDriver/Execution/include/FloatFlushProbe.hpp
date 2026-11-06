@@ -16,6 +16,7 @@ struct FloatFlushProbeResult {
 
 FloatFlushProbeResult ProbeFloat32FlushToZero(VulkanDevice& device, const ShaderRecompiler::SpirvTarget& target);
 FloatFlushProbeResult ProbeFloat32DenormPreserve(VulkanDevice& device, const ShaderRecompiler::SpirvTarget& target);
+FloatFlushProbeResult ProbeFloat16Arithmetic(VulkanDevice& device, const ShaderRecompiler::SpirvTarget& target);
 
 }
 

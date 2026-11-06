@@ -1832,13 +1832,12 @@ static bool NativeF16Rte(const SpirvEmitterState& state) {
     const auto supported = [&](spv::Capability capability) {
         return std::find(state.supportedCapabilities.begin(), state.supportedCapabilities.end(), static_cast<std::uint32_t>(capability)) != state.supportedCapabilities.end();
     };
-    return supported(spv::CapabilityFloat16) && supported(spv::CapabilityRoundingModeRTE) && supported(spv::CapabilityDenormPreserve);
+    return (supported(spv::CapabilityFloat16) && supported(spv::CapabilityRoundingModeRTE) && supported(spv::CapabilityDenormPreserve)) || state.float16Measured;
 }
 
 static void EmitNativeF16Modes(SpirvEmitterState& state) {
     state.module.EmitCapability(spv::CapabilityFloat16);
     state.module.EmitCapability(spv::CapabilityRoundingModeRTE);
-    state.module.EmitCapability(spv::CapabilityDenormPreserve);
     if (!state.nativeF16ModesEmitted) {
         state.module.AddExecutionMode(state.mainFunc, spv::ExecutionModeRoundingModeRTE, 16u);
         EmitF16DenormPreserve(state);
@@ -1866,7 +1865,7 @@ static std::uint32_t EmitNativeF32ToF16BitsRte(SpirvEmitterState& state, std::ui
 }
 
 static std::uint32_t TypeF16x2(SpirvEmitterState& state) {
-    if (!NativeF16Rte(state)) FailEmit("packed f16 math needs Float16, RoundingModeRTE and DenormPreserve");
+    if (!NativeF16Rte(state)) FailEmit("packed f16 math needs Float16, RoundingModeRTE and DenormPreserve, or f16 arithmetic measured exact");
     EmitNativeF16Modes(state);
     return state.module.Type(spv::OpTypeVector, state.module.Type(spv::OpTypeFloat, 16u), 2u);
 }
@@ -1879,13 +1878,20 @@ std::uint32_t EmitFPAdd16x2(SpirvEmitterState& state, std::uint32_t arg0, std::u
 
 std::uint32_t EmitFPMul16x2(SpirvEmitterState& state, std::uint32_t arg0, std::uint32_t arg1) {
     const auto f16x2 = TypeF16x2(state);
-    const auto product = Binary(state, spv::OpFMul, f16x2, Unary(state, spv::OpBitcast, f16x2, arg0), Unary(state, spv::OpBitcast, f16x2, arg1));
-    return Unary(state, spv::OpBitcast, TypeU32(state), Exact(state, product));
+    const auto lhs = Unary(state, spv::OpBitcast, f16x2, arg0);
+    const auto rhs = Unary(state, spv::OpBitcast, f16x2, arg1);
+    if (state.fusedExactArithmetic) return Unary(state, spv::OpBitcast, TypeU32(state), EmitExt(state, f16x2, GLSLstd450Fma, {lhs, rhs, Unary(state, spv::OpBitcast, f16x2, ConstantU32(state, 0x80008000u))}));
+    return Unary(state, spv::OpBitcast, TypeU32(state), Exact(state, Binary(state, spv::OpFMul, f16x2, lhs, rhs)));
 }
 
 std::uint32_t EmitFPFma16x2(SpirvEmitterState& state, std::uint32_t arg0, std::uint32_t arg1, std::uint32_t arg2) {
     const auto f16x2 = TypeF16x2(state);
-    if (std::find(state.supportedCapabilities.begin(), state.supportedCapabilities.end(), static_cast<std::uint32_t>(spv::CapabilityFMAKHR)) == state.supportedCapabilities.end()) FailEmit("packed f16 fma needs FMAKHR");
+    if (std::find(state.supportedCapabilities.begin(), state.supportedCapabilities.end(), static_cast<std::uint32_t>(spv::CapabilityFMAKHR)) == state.supportedCapabilities.end()) {
+        // Vulkan does not require GLSL's Fma to be fused; the startup f16 probe measured that this device's is.
+        if (!state.float16Measured) FailEmit("packed f16 fma needs FMAKHR or f16 arithmetic measured exact");
+        const auto fused = EmitExt(state, f16x2, GLSLstd450Fma, {Unary(state, spv::OpBitcast, f16x2, arg0), Unary(state, spv::OpBitcast, f16x2, arg1), Unary(state, spv::OpBitcast, f16x2, arg2)});
+        return Unary(state, spv::OpBitcast, TypeU32(state), fused);
+    }
     state.module.EmitCapability(spv::CapabilityFMAKHR);
     state.module.EmitExtension("SPV_KHR_fma");
     const auto result = state.module.AllocateId();

@@ -277,6 +277,7 @@ std::vector<std::uint32_t> SpirvEmitter::Emit(const IrProgram& program, const Sh
     state.meshExportedLocations = target.meshExportedLocations;
     state.meshPerVertexLocations = target.meshPerVertexLocations;
     state.float16DenormPreserve = target.float16DenormPreserve;
+    state.float16Measured = target.float16Measured;
     state.robustBufferAccess2 = target.robustBufferAccess2;
     state.exactRobustLoads = target.robustBufferAccess2 && target.exactRobustLoads;
     state.float32FlushToZero = target.float32FlushToZero;

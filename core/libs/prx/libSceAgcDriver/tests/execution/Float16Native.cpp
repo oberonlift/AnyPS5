@@ -9,6 +9,7 @@
 #include <iostream>
 #include <iterator>
 #include <optional>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -22,8 +23,8 @@ constexpr std::uint32_t Inputs = 4;
 constexpr std::uint32_t Results = 16;
 constexpr std::uint32_t Stride = 16;
 constexpr std::uint32_t Batches = 32;
-alignas(256) std::array<std::uint32_t, Threads * Inputs> Input{};
-alignas(256) std::array<std::uint32_t, Threads * Stride> Output{};
+std::span<std::uint32_t> Input;
+std::span<std::uint32_t> Output;
 
 alignas(256) constexpr std::array<std::uint32_t, 41> Code{
     0x34020084, 0x34060086, 0xe0381000, 0x80000401, 0xbf8c3f70,
@@ -111,7 +112,7 @@ std::uint32_t Half() {
 }
 
 std::array<std::uint32_t, 4> BufferDescriptor(const void* data, std::uint32_t bytes) {
-    const auto address = reinterpret_cast<std::uintptr_t>(data);
+    const auto address = GuestTestAddress(data);
     return {static_cast<std::uint32_t>(address), static_cast<std::uint32_t>((address >> 32u) & 0xffffu), bytes, 0x31016facu};
 }
 
@@ -168,8 +169,8 @@ int main() {
         const auto supports = [&](spv::Capability capability) {
             return std::ranges::find(target.supportedCapabilities, static_cast<std::uint32_t>(capability)) != target.supportedCapabilities.end();
         };
-        if (!supports(spv::CapabilityFloat16) || !supports(spv::CapabilityRoundingModeRTE) || !supports(spv::CapabilityDenormPreserve)) {
-            std::puts("f16 native: skipped, the device has no native f16 with RTE rounding and kept denormals");
+        if ((!supports(spv::CapabilityFloat16) || !supports(spv::CapabilityRoundingModeRTE) || !supports(spv::CapabilityDenormPreserve)) && !target.float16Measured) {
+            std::puts("f16 native: skipped, the device has no native f16 with RTE rounding and kept denormals, declared or measured");
             return VulkanTestSkipped;
         }
         const bool fused = supports(spv::CapabilityFMAKHR);
@@ -177,7 +178,10 @@ int main() {
         std::ranges::copy_if(target.supportedCapabilities, std::back_inserter(withoutFloat16), [](std::uint32_t capability) { return capability != spv::CapabilityFloat16; });
         auto emulatedTarget = target;
         emulatedTarget.supportedCapabilities = withoutFloat16;
+        emulatedTarget.float16Measured = false;
 
+        Input = GuestTestArray<std::uint32_t>(Threads * Inputs);
+        Output = GuestTestArray<std::uint32_t>(Threads * Stride);
         const std::span<const std::uint32_t> code(Code);
         std::vector<std::uint32_t> userData(8, 0u);
         const auto input = BufferDescriptor(Input.data(), static_cast<std::uint32_t>(Input.size() * 4u));
@@ -198,10 +202,10 @@ int main() {
             return ShaderRecompiler::Recompile(request);
         };
         const auto run = [&](const auto& result) {
-            Output.fill(0xdeadbeefu);
+            std::ranges::fill(Output, 0xdeadbeefu);
             device->Dispatch(result, 1, 1, 1, {}, reinterpret_cast<std::uintptr_t>(code.data()));
             device->WaitIdle();
-            return Output;
+            return std::vector<std::uint32_t>(Output.begin(), Output.end());
         };
 
         std::uint64_t compared = 0u;
@@ -212,8 +216,11 @@ int main() {
             const auto emulated = compile(emulatedTarget, mode);
             const F16x2Math nativeMath = FindF16x2Math(native.spirv.Words());
             const F16x2Math emulatedMath = FindF16x2Math(emulated.spirv.Words());
-            Require(nativeMath.add == mode.native && nativeMath.mul == mode.native, std::string("f16 native: ") + mode.name + (mode.native ? " does not use" : " uses") + " f16vec2 add and mul");
-            Require(!nativeMath.fma, std::string("f16 native: ") + mode.name + " uses an f16vec2 Fma, which Vulkan does not require to be fused");
+            // MoltenVK's fused exact arithmetic multiplies as Fma(l, r, -0); a measured device without FMAKHR fuses with GLSL Fma.
+            const bool nativeMul = nativeMath.mul || (target.fusedExactArithmetic && nativeMath.fma);
+            const bool glslFma = mode.native && (target.fusedExactArithmetic || (target.float16Measured && !fused));
+            Require(nativeMath.add == mode.native && nativeMul == mode.native, std::string("f16 native: ") + mode.name + (mode.native ? " does not use" : " uses") + " f16vec2 add and mul");
+            Require(nativeMath.fma == glslFma, std::string("f16 native: ") + mode.name + (glslFma ? " does not use" : " uses") + " an f16vec2 GLSL Fma, which Vulkan does not require to be fused");
             Require(nativeMath.fusedFma == (fused && mode.native), std::string("f16 native: ") + mode.name + (fused && mode.native ? " does not use" : " uses") + " OpFmaKHR for the fma forms");
             Require(!emulatedMath.add && !emulatedMath.mul && !emulatedMath.fma && !emulatedMath.fusedFma, std::string("f16 native: ") + mode.name + " uses f16vec2 math without Float16");
             for (std::uint32_t batch = 0; batch < Batches; ++batch) {

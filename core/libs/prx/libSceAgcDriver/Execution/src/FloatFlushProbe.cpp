@@ -181,6 +181,52 @@ constexpr std::uint32_t TranscendentalRows[Threads][Inputs] = {
     {0x3e800000u, 0x3f8ccccdu, 0x00000000u, 0x00000000u}
 };
 
+alignas(256) constexpr std::array<std::uint32_t, 47> Float16Code{
+    0x34020084u, 0x160600ffu, 0x0000004cu, 0xe0381000u, 0x80000401u, 0xbf8c3f70u, 0xcc0f400au, 0x1a020b04u,
+    0xcc10400bu, 0x1a020b04u, 0xcc0e400cu, 0x1c1a0b04u, 0x7e1a0306u, 0x781a0b04u, 0x641c0b04u, 0x6a1e0b04u,
+    0xd74b0010u, 0x041a0b04u, 0x7e220306u, 0x6c220b04u, 0xd74b3812u, 0x041a0b04u, 0x7e261507u, 0x7e281704u,
+    0x2c100890u, 0x7e2a1708u, 0xcc0e2816u, 0x141a0b04u, 0xcc0f4117u, 0x5a020d04u, 0x7e301705u, 0x7e321506u,
+    0xcc10401au, 0x1a020d05u, 0xcc0e401bu, 0x1c120d05u, 0xe0781000u, 0x80010a03u, 0xe0781010u, 0x80010e03u,
+    0xe0781020u, 0x80011203u, 0xe0781030u, 0x80011603u, 0xe0741040u, 0x80011a03u, 0xbf810000u,
+};
+
+constexpr std::array<std::size_t, 3> Float16WideResults{10u, 11u, 14u};
+
+constexpr std::uint32_t Float16Rows[Threads][Inputs] = {
+    {0x80010001u, 0x03ff0001u, 0x80000000u, 0x33000000u},
+    {0x3c003c01u, 0x10001000u, 0x80010001u, 0x33c00000u},
+    {0x3c013c01u, 0x3c013c01u, 0xbc00bc02u, 0x477ff000u},
+    {0xfbff7bffu, 0x7bff7bffu, 0xfbff7bffu, 0x477fe000u},
+    {0x00007c00u, 0xfc000000u, 0x7e003c00u, 0x7fc00001u},
+    {0x7d017e00u, 0x3c00fe55u, 0x00017c01u, 0xff800000u},
+    {0x80008000u, 0x00008000u, 0x00008000u, 0x80000000u},
+    {0x04010400u, 0x38013800u, 0x00008001u, 0x38800000u},
+    {0x24000200u, 0x14000200u, 0x80010001u, 0x387fe000u},
+    {0x42485640u, 0xc2485640u, 0x4890f0e0u, 0x33800001u},
+    {0xb5553555u, 0x42003c00u, 0x35550000u, 0x3eaaaaabu},
+    {0x78007800u, 0x38004000u, 0x7bfffbffu, 0x47800000u},
+    {0x840003ffu, 0x3c003c00u, 0x00010001u, 0x387fc000u},
+    {0x2e661001u, 0x2e661001u, 0x80018000u, 0xc77fefffu},
+    {0xc47c00dcu, 0x00000000u, 0x7f30b95eu, 0x4502c2fdu},
+    {0xf88ecb12u, 0xe21c8000u, 0xfadcfdf9u, 0x9fdf0574u},
+    {0xb7917c06u, 0xfbe9576eu, 0x75030099u, 0x469faa6du},
+    {0x18d78dc1u, 0x00003fceu, 0x60000117u, 0xc5691b21u},
+    {0xc4b9ba98u, 0xfefc7c00u, 0x7c0081a8u, 0xb4bb1bd8u},
+    {0xe35581cbu, 0x7c007bfau, 0x7e693669u, 0xe923e53au},
+    {0x14cffd79u, 0x8ab7ba3cu, 0x02187f62u, 0xb36dfc0cu},
+    {0x03a38000u, 0x762b0c3du, 0xf7b38000u, 0xd6313affu},
+    {0x1cf83a09u, 0xb655146bu, 0xffac7c00u, 0x33ded778u},
+    {0xb42d0133u, 0x0000c68fu, 0x7c00007fu, 0x75545595u},
+    {0x8151eed3u, 0xc664fa49u, 0x5b064dd1u, 0xb259b46bu},
+    {0x0dfb7eb4u, 0x8354747bu, 0x3fdd8000u, 0xc5fbd33du},
+    {0x82977daau, 0x80003a59u, 0x40537d86u, 0xc5f7e4bbu},
+    {0xfc000b87u, 0x87c48262u, 0x09972ce7u, 0x45e89b65u},
+    {0xad3c7f13u, 0x9df3f340u, 0x30974fa2u, 0x2a8cd90cu},
+    {0x81b9405cu, 0x7f3fc62au, 0x7909809fu, 0x8fb4c2b9u},
+    {0xf9a00113u, 0x30cef570u, 0xfc0076cau, 0xe2586cbcu},
+    {0x00007c68u, 0xd45a8f28u, 0xfb73fc66u, 0xa94893e7u},
+};
+
 #ifdef ANYPS5_TRANSLATED_GUEST
 constexpr std::size_t ProbePageBytes = 16384;
 constexpr std::size_t ProbeInputOffset = 256;
@@ -287,6 +333,28 @@ FloatFlushProbeResult ProbeFloat32DenormPreserve(VulkanDevice& device, const Sha
     auto unpreserved = preserved;
     unpreserved.float32DenormPreserve = false;
     CompareTranscendental(result, Run(device, unpreserved, std::nullopt, TranscendentalCode, TranscendentalRows), Run(device, preserved, std::nullopt, TranscendentalCode, TranscendentalRows));
+    return result;
+}
+
+FloatFlushProbeResult ProbeFloat16Arithmetic(VulkanDevice& device, const ShaderRecompiler::SpirvTarget& target) {
+    FloatFlushProbeResult result;
+    auto emulated = target;
+    emulated.float16Measured = false;
+    auto native = target;
+    native.float16Measured = true;
+    const auto sameHalf = [](std::uint32_t left, std::uint32_t right) { return left == right || ((left & 0x7fffu) > 0x7c00u && (right & 0x7fffu) > 0x7c00u); };
+    const std::array<std::optional<ShaderRecompiler::ShaderFloatMode>, 3> modes{std::nullopt, ShaderRecompiler::ShaderFloatMode{0xc0u, false, true, false}, ShaderRecompiler::ShaderFloatMode{0xc0u, true, false, true}};
+    for (const auto& mode : modes) {
+        const auto expected = Run(device, emulated, mode, Float16Code, Float16Rows);
+        const auto actual = Run(device, native, mode, Float16Code, Float16Rows);
+        for (std::size_t index = 0; index < expected.size(); ++index) {
+            ++result.compared;
+            const bool wide = std::ranges::find(Float16WideResults, index % Results) != Float16WideResults.end();
+            const bool same = wide ? expected[index] == actual[index] || (IsNan(expected[index]) && IsNan(actual[index]))
+                                   : sameHalf(expected[index] & 0xffffu, actual[index] & 0xffffu) && sameHalf(expected[index] >> 16u, actual[index] >> 16u);
+            if (!same) ++result.mismatches;
+        }
+    }
     return result;
 }
 

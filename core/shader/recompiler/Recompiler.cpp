@@ -260,9 +260,10 @@ IrProgram PrepareResourceProgram(const RecompileRequest& request, ShaderPreparat
     const bool hostInterpolationFirst = stageKind == ShaderStageKind::Pixel && request.target.fragmentShaderBarycentricEnabled && request.target.hostInterpolationFirst;
     translateOptions.fragmentShaderBarycentricEnabled = request.target.fragmentShaderBarycentricEnabled && !hostInterpolationFirst;
     const auto supports = [&](spv::Capability capability) { return std::ranges::find(request.target.supportedCapabilities, static_cast<std::uint32_t>(capability)) != request.target.supportedCapabilities.end(); };
-    translateOptions.nativeFloat16 = supports(spv::CapabilityFloat16) && supports(spv::CapabilityRoundingModeRTE) && supports(spv::CapabilityDenormPreserve);
+    if (request.target.float16Measured && (!supports(spv::CapabilityFloat16) || !supports(spv::CapabilityRoundingModeRTE))) throw std::runtime_error("a target whose f16 arithmetic was measured exact must support Float16 and RoundingModeRTE");
+    translateOptions.nativeFloat16 = (supports(spv::CapabilityFloat16) && supports(spv::CapabilityRoundingModeRTE) && supports(spv::CapabilityDenormPreserve)) || request.target.float16Measured;
     translateOptions.interpolationFunctions = supports(spv::CapabilityInterpolationFunction);
-    translateOptions.nativeFloat16Fma = translateOptions.nativeFloat16 && supports(spv::CapabilityFMAKHR);
+    translateOptions.nativeFloat16Fma = translateOptions.nativeFloat16 && (supports(spv::CapabilityFMAKHR) || request.target.float16Measured);
     translateOptions.floatMode = request.context.floatMode;
     translateOptions.float32FlushToZero = HardwareFloat32Flush(request);
     translateOptions.float32FlushDeclared = supports(spv::CapabilityDenormFlushToZero);
@@ -647,6 +648,7 @@ CompiledVariant emitVariant(const RecompileRequest& request, IrProgram& program)
     targetOptions.registrationModules = registration;
     targetOptions.fragmentDescriptorSet = request.target.registrationModules;
     targetOptions.float16DenormPreserve = request.target.float16DenormPreserve;
+    targetOptions.float16Measured = request.target.float16Measured;
     targetOptions.spannedWaves = request.target.spannedWaves;
     targetOptions.robustBufferAccess2 = request.target.robustBufferAccess2;
     targetOptions.exactRobustLoads = request.target.exactRobustLoads;

@@ -379,6 +379,7 @@ private:
         append(key, value.meshWindowBuffer);
         append(key, value.hostInterpolationFirst);
         append(key, value.shaderImageMinLod);
+        append(key, value.float16Measured);
     }
 };
 

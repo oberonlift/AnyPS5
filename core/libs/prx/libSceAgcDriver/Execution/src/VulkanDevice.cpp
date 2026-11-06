@@ -483,6 +483,8 @@ struct VulkanDevice::State {
     bool narrowSubgroupClock = false;
     bool float64DenormPreserve = false;
     bool float16DenormPreserve = false;
+    bool float16Candidate = false;
+    bool float16Measured = false;
     bool float32FlushToZeroCandidate = false;
     bool float32FlushToZero = false;
     bool float32DenormPreserve = false;
@@ -1667,16 +1669,18 @@ VulkanDevice::VulkanDevice(const PresentationWindow* window, bool compileOnly) :
         VkPhysicalDeviceFeatures2 features{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2, &float16Features};
         state->InstanceFunction<PFN_vkGetPhysicalDeviceFeatures2>("vkGetPhysicalDeviceFeatures2")(selected, &features);
     }
-    const bool float16Rte = float16Features.shaderFloat16 == VK_TRUE && floatControls.shaderRoundingModeRTEFloat16 == VK_TRUE &&
-        floatControls.shaderDenormPreserveFloat16 == VK_TRUE && floatControls.shaderSignedZeroInfNanPreserveFloat16 == VK_TRUE;
+    const bool float16Arithmetic = float16Features.shaderFloat16 == VK_TRUE && floatControls.shaderRoundingModeRTEFloat16 == VK_TRUE && floatControls.shaderSignedZeroInfNanPreserveFloat16 == VK_TRUE;
+    const bool float16Rte = float16Arithmetic && floatControls.shaderDenormPreserveFloat16 == VK_TRUE;
+    state->float16Candidate = float16Arithmetic && std::getenv("APS5_NO_F16_PROBE") == nullptr;
+    const bool float16Enabled = float16Rte || state->float16Candidate;
     float16Features = {VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_FLOAT16_INT8_FEATURES_KHR};
     float16Features.shaderFloat16 = VK_TRUE;
-    if (float16Rte) {
+    if (float16Enabled) {
         deviceExtensions.push_back(VK_KHR_SHADER_FLOAT16_INT8_EXTENSION_NAME);
         state->capabilities.push_back(spv::CapabilityFloat16);
         state->capabilities.push_back(spv::CapabilityRoundingModeRTE);
-        state->capabilities.push_back(spv::CapabilityDenormPreserve);
     }
+    if (float16Rte) state->capabilities.push_back(spv::CapabilityDenormPreserve);
     state->float16DenormPreserve = floatControls.shaderDenormPreserveFloat16 == VK_TRUE &&
         floatControls.denormBehaviorIndependence == VK_SHADER_FLOAT_CONTROLS_INDEPENDENCE_ALL;
     const auto float32Flush = Float32FlushControlFor(driverId, floatControls.shaderDenormFlushToZeroFloat32, floatControls.denormBehaviorIndependence);
@@ -2177,7 +2181,7 @@ VulkanDevice::VulkanDevice(const PresentationWindow* window, bool compileOnly) :
         clockFeatures.pNext = byteFeatures.pNext;
         byteFeatures.pNext = &clockFeatures;
     }
-    if (float16Rte) {
+    if (float16Enabled) {
         float16Features.pNext = byteFeatures.pNext;
         byteFeatures.pNext = &float16Features;
     }
@@ -2517,6 +2521,14 @@ VulkanDevice::VulkanDevice(const PresentationWindow* window, bool compileOnly) :
         state->probingFloatControls = false;
         state->float32DenormPreserve = probe.mismatches == 0u;
         std::fprintf(stderr, "[float-controls] f32 denormal preserve: %s (%u of %u probe results on normal values differ from the default mode by more than the Vulkan precision bounds, %.0f ms)\n", state->float32DenormPreserve ? "requested" : "not requested", probe.mismatches, probe.compared, std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - probeStart).count());
+    }
+    if (state->float16Candidate) {
+        const auto probeStart = std::chrono::steady_clock::now();
+        state->probingFloatControls = true;
+        const auto probe = ProbeFloat16Arithmetic(*this, Target());
+        state->probingFloatControls = false;
+        state->float16Measured = probe.mismatches == 0u;
+        std::fprintf(stderr, "[float-controls] f16 arithmetic and fused multiply-add: %s (%u of %u probe results differ from the emulation, %.0f ms)\n", state->float16Measured ? "native" : "emulated", probe.mismatches, probe.compared, std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - probeStart).count());
     }
     // A device without a window is usually replaced by the window's device before the title draws
     // (Driver::AttachWindow): its replay starts at its first draw or dispatch instead, so the
@@ -4344,6 +4356,7 @@ ShaderRecompiler::SpirvTarget VulkanDevice::Target() const {
     require(state->shaderProfile != nullptr, "shader device profile is unavailable");
     auto target = state->shaderProfile->Target();
     target.float32FlushToZero = state->float32FlushToZero;
+    target.float16Measured = state->float16Measured;
     target.fusedExactArithmetic = state->fusedExactArithmetic;
     target.hostInterpolationFirst = state->hostInterpolationFirst;
     target.float32DenormPreserve = state->float32DenormPreserve;

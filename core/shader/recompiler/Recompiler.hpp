@@ -362,6 +362,7 @@ struct SpirvTarget {
     bool meshWindowBuffer = false;
     bool hostInterpolationFirst = false;
     bool shaderImageMinLod = false;
+    bool float16Measured = false;
 };
 
 struct BindingLayout {
