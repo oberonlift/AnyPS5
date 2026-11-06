@@ -1,8 +1,9 @@
 #include "../FunctionLifter.hpp"
 
-#include <llvm/IR/MDBuilder.h>
+#include <llvm/Transforms/Utils/LowerAtomic.h>
 
 #include <bit>
+#include <cstdint>
 
 namespace Ps5Lift::Lifting {
 
@@ -16,7 +17,8 @@ void FunctionLifter::Shift(const ZydisMnemonic mnemonic) {
     llvm::Value* result = nullptr;
     llvm::Value* carry = nullptr;
     llvm::Value* overflow = nullptr;
-    const bool rotate = mnemonic == ZYDIS_MNEMONIC_ROL || mnemonic == ZYDIS_MNEMONIC_ROR;
+    const bool rotateLeft = mnemonic == ZYDIS_MNEMONIC_ROL || mnemonic == ZYDIS_MNEMONIC_RCL;
+    const bool rotate = rotateLeft || mnemonic == ZYDIS_MNEMONIC_ROR || mnemonic == ZYDIS_MNEMONIC_RCR;
     if (mnemonic == ZYDIS_MNEMONIC_SHL) {
         auto* wide = _builder.CreateShl(_builder.CreateZExt(value, Int(128)), wideCount);
         result = _builder.CreateTrunc(wide, Int(bits));
@@ -32,20 +34,23 @@ void FunctionLifter::Shift(const ZydisMnemonic mnemonic) {
         result = _builder.CreateTrunc(_builder.CreateAShr(wide, wideCount), Int(bits));
         carry = _builder.CreateTrunc(_builder.CreateAShr(wide, below), _builder.getInt1Ty());
         overflow = _builder.getFalse();
-    } else if (rotate) {
+    } else if (mnemonic == ZYDIS_MNEMONIC_ROL || mnemonic == ZYDIS_MNEMONIC_ROR) {
         auto* amount = _builder.CreateZExtOrTrunc(_builder.CreateURem(count, _builder.getInt8(bits)), Int(bits));
-        const auto intrinsic = mnemonic == ZYDIS_MNEMONIC_ROL ? llvm::Intrinsic::fshl : llvm::Intrinsic::fshr;
-        result = _builder.CreateIntrinsic(intrinsic, {Int(bits)}, {value, value, amount});
-        if (mnemonic == ZYDIS_MNEMONIC_ROL) {
-            carry = _builder.CreateTrunc(result, _builder.getInt1Ty());
-            overflow = _builder.CreateXor(SignBit(result), carry);
-        } else {
-            carry = SignBit(result);
-            overflow = _builder.CreateXor(carry, _builder.CreateTrunc(_builder.CreateLShr(result, bits - 2), _builder.getInt1Ty()));
-        }
+        result = _builder.CreateIntrinsic(rotateLeft ? llvm::Intrinsic::fshl : llvm::Intrinsic::fshr, {Int(bits)}, {value, value, amount});
+        carry = rotateLeft ? _builder.CreateTrunc(result, _builder.getInt1Ty()) : SignBit(result);
+    } else if (mnemonic == ZYDIS_MNEMONIC_RCL || mnemonic == ZYDIS_MNEMONIC_RCR) {
+        const auto span = bits + 1;
+        auto* wide = _builder.CreateZExt(ConcatenateIntegers(value, Flag(PS5LIFT_CF)), Int(128));
+        auto* amount = _builder.CreateZExt(_builder.CreateURem(count, _builder.getInt8(span)), Int(128));
+        auto* back = _builder.CreateSub(llvm::ConstantInt::get(Int(128), span), amount);
+        auto* rotated = rotateLeft ? _builder.CreateOr(_builder.CreateShl(wide, amount), _builder.CreateLShr(wide, back))
+                             : _builder.CreateOr(_builder.CreateLShr(wide, amount), _builder.CreateShl(wide, back));
+        result = _builder.CreateTrunc(rotated, Int(bits));
+        carry = _builder.CreateTrunc(_builder.CreateLShr(rotated, bits), _builder.getInt1Ty());
     } else {
         UnexpectedMnemonic("Shift", mnemonic);
     }
+    if (rotate) overflow = _builder.CreateXor(SignBit(result), rotateLeft ? carry : _builder.CreateTrunc(_builder.CreateLShr(result, bits - 2), _builder.getInt1Ty()));
     Write(0, result);
     SetFlag(PS5LIFT_CF, _builder.CreateSelect(zero, Flag(PS5LIFT_CF), carry));
     SetFlag(PS5LIFT_OF, _builder.CreateSelect(zero, Flag(PS5LIFT_OF), overflow));
@@ -56,25 +61,30 @@ void FunctionLifter::Shift(const ZydisMnemonic mnemonic) {
 }
 
 void FunctionLifter::ShiftDouble(const ZydisMnemonic mnemonic) {
+    const bool left = mnemonic == ZYDIS_MNEMONIC_SHLD;
+    if (!left && mnemonic != ZYDIS_MNEMONIC_SHRD) UnexpectedMnemonic("ShiftDouble", mnemonic);
+    const auto funnel = left ? llvm::Intrinsic::fshl : llvm::Intrinsic::fshr;
     const auto bits = Bits(0);
-    if (bits == 16) throw UnsupportedInstruction("16-bit");
     auto* value = Read(0);
+    auto* source = ReadAs(1, bits);
+    auto* high = left ? value : source;
+    auto* low = left ? source : value;
     auto* count = _builder.CreateAnd(ReadAs(2, 8), _builder.getInt8(bits == 64 ? 63 : 31));
     auto* zero = _builder.CreateICmpEQ(count, _builder.getInt8(0));
-    auto* amount = _builder.CreateZExt(count, Int(bits));
-    auto* wideValue = _builder.CreateZExt(value, Int(128));
-    auto* wideCount = _builder.CreateZExt(count, Int(128));
     llvm::Value* result = nullptr;
     llvm::Value* carry = nullptr;
-    if (mnemonic == ZYDIS_MNEMONIC_SHLD) {
-        result = _builder.CreateIntrinsic(llvm::Intrinsic::fshl, {Int(bits)}, {value, ReadAs(1, bits), amount});
-        carry = _builder.CreateTrunc(_builder.CreateLShr(_builder.CreateShl(wideValue, wideCount), bits), _builder.getInt1Ty());
-    } else if (mnemonic == ZYDIS_MNEMONIC_SHRD) {
-        result = _builder.CreateIntrinsic(llvm::Intrinsic::fshr, {Int(bits)}, {ReadAs(1, bits), value, amount});
-        auto* below = _builder.CreateSelect(zero, llvm::ConstantInt::get(Int(128), 0), _builder.CreateSub(wideCount, llvm::ConstantInt::get(Int(128), 1)));
-        carry = _builder.CreateTrunc(_builder.CreateLShr(wideValue, below), _builder.getInt1Ty());
+    if (bits == 16) {
+        auto* pairType = Int(bits * 2);
+        auto* pair = ConcatenateIntegers(low, high);
+        auto* rotated = _builder.CreateIntrinsic(funnel, {pairType}, {pair, pair, _builder.CreateZExt(count, pairType)});
+        result = _builder.CreateTrunc(left ? _builder.CreateLShr(rotated, bits) : rotated, Int(bits));
+        carry = left ? _builder.CreateTrunc(rotated, _builder.getInt1Ty()) : SignBit(rotated);
     } else {
-        UnexpectedMnemonic("ShiftDouble", mnemonic);
+        result = _builder.CreateIntrinsic(funnel, {Int(bits)}, {high, low, _builder.CreateZExt(count, Int(bits))});
+        auto* wideValue = _builder.CreateZExt(value, Int(128));
+        auto* wideCount = _builder.CreateZExt(count, Int(128));
+        auto* shifted = left ? _builder.CreateLShr(_builder.CreateShl(wideValue, wideCount), bits) : _builder.CreateLShr(_builder.CreateLShr(_builder.CreateShl(wideValue, bits), wideCount), bits - 1);
+        carry = _builder.CreateTrunc(shifted, _builder.getInt1Ty());
     }
     Write(0, result);
     SetFlag(PS5LIFT_CF, _builder.CreateSelect(zero, Flag(PS5LIFT_CF), carry));
@@ -96,10 +106,7 @@ llvm::Value* FunctionLifter::LowAccumulator(const unsigned bits) {
 }
 
 void FunctionLifter::WriteAccumulatorPair(const unsigned bits, llvm::Value* low, llvm::Value* high) {
-    if (bits == 8) {
-        auto* ax = _builder.CreateOr(_builder.CreateZExt(low, _builder.getInt16Ty()), _builder.CreateShl(_builder.CreateZExt(high, _builder.getInt16Ty()), 8));
-        return WriteRegister(ZYDIS_REGISTER_AX, ax);
-    }
+    if (bits == 8) return WriteRegister(ZYDIS_REGISTER_AX, ConcatenateIntegers(low, high));
     const auto rax = bits == 64 ? ZYDIS_REGISTER_RAX : bits == 32 ? ZYDIS_REGISTER_EAX : ZYDIS_REGISTER_AX;
     const auto rdx = bits == 64 ? ZYDIS_REGISTER_RDX : bits == 32 ? ZYDIS_REGISTER_EDX : ZYDIS_REGISTER_DX;
     WriteRegister(rax, low);
@@ -108,9 +115,7 @@ void FunctionLifter::WriteAccumulatorPair(const unsigned bits, llvm::Value* low,
 
 llvm::Value* FunctionLifter::AccumulatorPair(const unsigned bits) {
     if (bits == 8) return _builder.CreateTrunc(Gpr(PS5LIFT_RAX), _builder.getInt16Ty());
-    auto* low = _builder.CreateZExt(LowAccumulator(bits), Int(bits * 2));
-    auto* high = _builder.CreateZExt(_builder.CreateTrunc(Gpr(PS5LIFT_RDX), Int(bits)), Int(bits * 2));
-    return _builder.CreateOr(low, _builder.CreateShl(high, bits));
+    return ConcatenateIntegers(LowAccumulator(bits), _builder.CreateTrunc(Gpr(PS5LIFT_RDX), Int(bits)));
 }
 
 void FunctionLifter::Multiply(const bool isSigned) {
@@ -139,24 +144,18 @@ void FunctionLifter::Divide(const bool isSigned) {
     auto* high = _builder.CreateTrunc(_builder.CreateLShr(dividend, bits), type);
     auto* minusOne = _builder.CreateICmpEQ(divisor, llvm::ConstantInt::getAllOnesValue(type));
     const auto block = [&](const char* name) { return llvm::BasicBlock::Create(Context(), name, _host); };
-    auto* nonzero = block("divide_nonzero");
     auto* narrow = block("divide_narrow");
     auto* wideDivide = block("divide_wide");
-    auto* fault = block("divide_error");
     auto* done = block("divide_done");
-    const auto unlikely = llvm::MDBuilder(Context()).createBranchWeights(1, 1u << 20);
-    _builder.CreateCondBr(_builder.CreateICmpEQ(divisor, llvm::ConstantInt::get(type, 0)), fault, nonzero, unlikely);
-
-    _builder.SetInsertPoint(nonzero);
+    const auto divideError = [&](llvm::Value* condition) { StopIf(condition, PS5LIFT_STOP_DIVIDE_ERROR, 0, Mnemonic()); };
+    divideError(_builder.CreateICmpEQ(divisor, llvm::ConstantInt::get(type, 0)));
     auto* extended = isSigned ? _builder.CreateAShr(low, bits - 1) : llvm::ConstantInt::get(type, 0);
     _builder.CreateCondBr(_builder.CreateICmpEQ(high, extended), narrow, wideDivide);
 
     _builder.SetInsertPoint(narrow);
     if (isSigned) {
         auto* overflow = _builder.CreateAnd(minusOne, _builder.CreateICmpEQ(low, llvm::ConstantInt::get(Context(), llvm::APInt::getSignedMinValue(bits))));
-        auto* divide = block("divide_narrow_signed");
-        _builder.CreateCondBr(overflow, fault, divide, unlikely);
-        _builder.SetInsertPoint(divide);
+        divideError(overflow);
     }
     auto* narrowQuotient = isSigned ? _builder.CreateSDiv(low, divisor) : _builder.CreateUDiv(low, divisor);
     auto* narrowRemainder = isSigned ? _builder.CreateSRem(low, divisor) : _builder.CreateURem(low, divisor);
@@ -166,30 +165,21 @@ void FunctionLifter::Divide(const bool isSigned) {
     _builder.SetInsertPoint(wideDivide);
     llvm::Value* wideQuotient = nullptr;
     llvm::Value* wideRemainder = nullptr;
-    llvm::Value* fits = nullptr;
     if (isSigned) {
         auto* safeDivisor = _builder.CreateSelect(minusOne, llvm::ConstantInt::get(wide, 1), _builder.CreateSExt(divisor, wide));
         wideQuotient = _builder.CreateSelect(minusOne, _builder.CreateNeg(dividend), _builder.CreateSDiv(dividend, safeDivisor));
         wideRemainder = _builder.CreateSelect(minusOne, llvm::ConstantInt::get(wide, 0), _builder.CreateSRem(dividend, safeDivisor));
-        fits = _builder.CreateICmpEQ(_builder.CreateSExt(_builder.CreateTrunc(wideQuotient, type), wide), wideQuotient);
+        divideError(_builder.CreateICmpNE(_builder.CreateSExt(_builder.CreateTrunc(wideQuotient, type), wide), wideQuotient));
     } else {
-        fits = _builder.CreateICmpULT(high, divisor);
-        auto* divide = block("divide_wide_unsigned");
-        _builder.CreateCondBr(fits, divide, fault);
-        _builder.SetInsertPoint(divide);
+        divideError(_builder.CreateICmpUGE(high, divisor));
         auto* wideDivisor = _builder.CreateZExt(divisor, wide);
         wideQuotient = _builder.CreateUDiv(dividend, wideDivisor);
         wideRemainder = _builder.CreateURem(dividend, wideDivisor);
-        fits = nullptr;
     }
     auto* quotientBits = _builder.CreateTrunc(wideQuotient, type);
     auto* remainderBits = _builder.CreateTrunc(wideRemainder, type);
     auto* wideEnd = _builder.GetInsertBlock();
-    if (fits != nullptr) _builder.CreateCondBr(fits, done, fault);
-    else _builder.CreateBr(done);
-
-    _builder.SetInsertPoint(fault);
-    Stop(PS5LIFT_STOP_DIVIDE_ERROR, 0, Mnemonic());
+    _builder.CreateBr(done);
 
     _builder.SetInsertPoint(done);
     auto* quotient = _builder.CreatePHI(type, 2);
@@ -225,7 +215,7 @@ void FunctionLifter::BitScan(const ZydisMnemonic mnemonic) {
     case ZYDIS_MNEMONIC_BSR: {
         llvm::Value* index = _builder.CreateBinaryIntrinsic(llvm::Intrinsic::cttz, source, _builder.getTrue());
         if (mnemonic == ZYDIS_MNEMONIC_BSR) index = _builder.CreateSub(llvm::ConstantInt::get(type, bits - 1), _builder.CreateBinaryIntrinsic(llvm::Intrinsic::ctlz, source, _builder.getTrue()));
-        Write(0, _builder.CreateSelect(isZero, Read(0), index));
+        WriteUnlessKept(0, index, isZero);
         SetFlag(PS5LIFT_ZF, isZero);
         return;
     }
@@ -284,13 +274,102 @@ llvm::Value* FunctionLifter::BitStringAddress(llvm::Value* offset) {
     return _builder.CreateAdd(address, _builder.CreateShl(unit, std::countr_zero(bits / 8)));
 }
 
+bool FunctionLifter::MaySplit(const unsigned bits) const {
+    return _module.Triple().isAArch64() && CheckedAlignment().value() * 8 < bits;
+}
+
+llvm::Value* FunctionLifter::LockedAccess(llvm::Value* address, const unsigned bits, const std::function<llvm::Value*()>& atomic, const std::function<llvm::Value*(llvm::Value* old)>& update) {
+    if (!MaySplit(bits)) return atomic();
+    constexpr std::uint64_t granule = 16;
+    const std::uint64_t bytes = bits / 8;
+    auto* whole = llvm::BasicBlock::Create(Context(), "locked", _host);
+    auto* split = llvm::BasicBlock::Create(Context(), "split_lock", _host);
+    auto* done = llvm::BasicBlock::Create(Context(), "locked_done", _host);
+    auto* crosses = _builder.CreateICmpUGT(_builder.CreateAdd(_builder.CreateAnd(address, granule - 1), _builder.getInt64(bytes)), _builder.getInt64(granule));
+    _builder.CreateCondBr(crosses, split, whole, _module.Unlikely());
+
+    _builder.SetInsertPoint(whole);
+    auto* atomicOld = atomic();
+    auto* wholeEnd = _builder.GetInsertBlock();
+    _builder.CreateBr(done);
+
+    _builder.SetInsertPoint(split);
+    _builder.CreateCall(_module.Runtime("ps5lift_split_lock_begin", llvm::FunctionType::get(_builder.getVoidTy(), {I64(), I64()}, false)), {address, _builder.getInt64(bytes)});
+    auto* splitOld = GuestLoad(address, bits);
+    GuestStore(address, update(splitOld));
+    _builder.CreateCall(_module.Runtime("ps5lift_split_lock_end", llvm::FunctionType::get(_builder.getVoidTy(), false)));
+    auto* splitEnd = _builder.GetInsertBlock();
+    _builder.CreateBr(done);
+
+    _builder.SetInsertPoint(done);
+    auto* old = _builder.CreatePHI(Int(bits), 2);
+    old->addIncoming(atomicOld, wholeEnd);
+    old->addIncoming(splitOld, splitEnd);
+    return old;
+}
+
 llvm::Value* FunctionLifter::AtomicUpdate(const llvm::AtomicRMWInst::BinOp operation, llvm::Value* operand) {
     return AtomicUpdate(Address(Operand(0)), operation, operand);
 }
 
 llvm::Value* FunctionLifter::AtomicUpdate(llvm::Value* address, const llvm::AtomicRMWInst::BinOp operation, llvm::Value* operand) {
-    auto* pointer = _builder.CreateIntToPtr(address, _module.Pointer());
-    return _builder.CreateAtomicRMW(operation, pointer, operand, llvm::MaybeAlign(operand->getType()->getIntegerBitWidth() / 8), llvm::AtomicOrdering::SequentiallyConsistent);
+    const auto bits = operand->getType()->getIntegerBitWidth();
+    return LockedAccess(
+        address, bits,
+        [&] { return _builder.CreateAtomicRMW(operation, GuestPointer(address), operand, llvm::MaybeAlign(bits / 8), llvm::AtomicOrdering::SequentiallyConsistent); },
+        [&](llvm::Value* old) { return llvm::buildAtomicRMWValue(operation, _builder, old, operand); });
+}
+
+llvm::Value* FunctionLifter::AtomicLoop(const std::function<llvm::Value*(llvm::Value* old)>& update) {
+    const auto bits = Bits(0);
+    auto* address = Address(Operand(0));
+    const auto loop = [&] {
+        auto* pointer = GuestPointer(address);
+        auto* initial = _builder.CreateAlignedLoad(Int(bits), pointer, llvm::Align(bits / 8));
+        initial->setAtomic(llvm::AtomicOrdering::Monotonic);
+        initial->setMetadata(llvm::LLVMContext::MD_tbaa, _module.GuestTag());
+        auto* entry = _builder.GetInsertBlock();
+        auto* retry = llvm::BasicBlock::Create(Context(), "atomic", _host);
+        auto* done = llvm::BasicBlock::Create(Context(), "atomic_done", _host);
+        _builder.CreateBr(retry);
+        _builder.SetInsertPoint(retry);
+        auto* old = _builder.CreatePHI(Int(bits), 2);
+        old->addIncoming(initial, entry);
+        auto* exchange = _builder.CreateAtomicCmpXchg(pointer, old, update(old), llvm::MaybeAlign(bits / 8), llvm::AtomicOrdering::SequentiallyConsistent,
+                                                      llvm::AtomicOrdering::SequentiallyConsistent);
+        old->addIncoming(_builder.CreateExtractValue(exchange, 0), retry);
+        _builder.CreateCondBr(_builder.CreateExtractValue(exchange, 1), done, retry);
+        _builder.SetInsertPoint(done);
+        return old;
+    };
+    return LockedAccess(address, bits, loop, update);
+}
+
+llvm::Value* FunctionLifter::AtomicCompareExchange(llvm::Value* expected, llvm::Value* desired) {
+    const auto bits = expected->getType()->getIntegerBitWidth();
+    auto* address = Address(Operand(0));
+    const auto exchange = [&] {
+        auto* result = _builder.CreateAtomicCmpXchg(GuestPointer(address), expected, desired, llvm::MaybeAlign(bits / 8), llvm::AtomicOrdering::SequentiallyConsistent,
+                                                    llvm::AtomicOrdering::SequentiallyConsistent);
+        return _builder.CreateExtractValue(result, 0);
+    };
+    return LockedAccess(address, bits, exchange, [&](llvm::Value* old) { return CompareExchangeResult(old, expected, desired); });
+}
+
+llvm::Value* FunctionLifter::CompareExchangeResult(llvm::Value* old, llvm::Value* expected, llvm::Value* desired) {
+    return _builder.CreateSelect(_builder.CreateICmpEQ(old, expected), desired, old);
+}
+
+void FunctionLifter::WriteUnlessKept(const int index, llvm::Value* value, llvm::Value* keep) {
+    const auto& operand = Operand(index);
+    if (operand.type == ZYDIS_OPERAND_TYPE_REGISTER) return WriteRegisterUnlessKept(operand.reg.value, value, keep);
+    Write(index, _builder.CreateSelect(keep, Read(index), value));
+}
+
+void FunctionLifter::WriteRegisterUnlessKept(const ZydisRegister reg, llvm::Value* value, llvm::Value* keep) {
+    const auto gpr = GprIndex(reg);
+    if (gpr >= 0 && ZydisRegisterGetWidth(ZYDIS_MACHINE_MODE_LONG_64, reg) == 32) return SetGpr(gpr, _builder.CreateSelect(keep, Gpr(gpr), _builder.CreateZExt(value, I64())));
+    WriteRegister(reg, _builder.CreateSelect(keep, ReadRegister(reg), value));
 }
 
 bool FunctionLifter::LockedMemory() const {
@@ -301,8 +380,8 @@ void FunctionLifter::Exchange() {
     if (Operand(0).type == ZYDIS_OPERAND_TYPE_MEMORY || Operand(1).type == ZYDIS_OPERAND_TYPE_MEMORY) {
         const int memory = Operand(0).type == ZYDIS_OPERAND_TYPE_MEMORY ? 0 : 1;
         const int reg = 1 - memory;
-        auto* old = _builder.CreateAtomicRMW(llvm::AtomicRMWInst::Xchg, MemoryPointer(memory), Read(reg), llvm::MaybeAlign(Bits(reg) / 8), llvm::AtomicOrdering::SequentiallyConsistent);
-        Write(reg, old);
+        auto* value = Read(reg);
+        Write(reg, AtomicUpdate(Address(Operand(memory)), llvm::AtomicRMWInst::Xchg, value));
         return;
     }
     auto* a = Read(0);
@@ -332,34 +411,28 @@ void FunctionLifter::CompareExchange() {
     auto* desired = Read(1);
     llvm::Value* old = nullptr;
     if (Operand(0).type == ZYDIS_OPERAND_TYPE_MEMORY) {
-        auto* exchange = _builder.CreateAtomicCmpXchg(MemoryPointer(0), expected, desired, llvm::MaybeAlign(bits / 8), llvm::AtomicOrdering::SequentiallyConsistent, llvm::AtomicOrdering::SequentiallyConsistent);
-        old = _builder.CreateExtractValue(exchange, 0);
+        old = AtomicCompareExchange(expected, desired);
     } else {
         old = Read(0);
-        Write(0, _builder.CreateSelect(_builder.CreateICmpEQ(old, expected), desired, old));
+        WriteUnlessKept(0, desired, _builder.CreateICmpNE(old, expected));
     }
     Sub(expected, old, _builder.getFalse());
-    auto* equal = _builder.CreateICmpEQ(old, expected);
-    if (bits == 32) return SetGpr(PS5LIFT_RAX, _builder.CreateSelect(equal, Gpr(PS5LIFT_RAX), _builder.CreateZExt(old, I64())));
-    WriteRegister(bits == 64 ? ZYDIS_REGISTER_RAX : bits == 16 ? ZYDIS_REGISTER_AX : ZYDIS_REGISTER_AL, old);
+    const auto accumulator = bits == 64 ? ZYDIS_REGISTER_RAX : bits == 32 ? ZYDIS_REGISTER_EAX : bits == 16 ? ZYDIS_REGISTER_AX : ZYDIS_REGISTER_AL;
+    WriteRegisterUnlessKept(accumulator, old, _builder.CreateICmpEQ(old, expected));
 }
 
 void FunctionLifter::CompareExchangeWide() {
     const auto bits = Bits(0);
     const auto half = bits / 2;
-    const auto pair = [&](const int high, const int low) {
-        auto* upper = _builder.CreateZExt(_builder.CreateTrunc(Gpr(high), Int(half)), Int(bits));
-        return _builder.CreateOr(_builder.CreateShl(upper, half), _builder.CreateZExt(_builder.CreateTrunc(Gpr(low), Int(half)), Int(bits)));
-    };
-    auto* exchange = _builder.CreateAtomicCmpXchg(MemoryPointer(0), pair(PS5LIFT_RDX, PS5LIFT_RAX), pair(PS5LIFT_RCX, PS5LIFT_RBX), llvm::MaybeAlign(bits / 8),
-                                                  llvm::AtomicOrdering::SequentiallyConsistent, llvm::AtomicOrdering::SequentiallyConsistent);
-    auto* old = _builder.CreateExtractValue(exchange, 0);
-    auto* matched = _builder.CreateExtractValue(exchange, 1);
+    const auto halves = [&](const int low, const int high) { return ConcatenateIntegers(_builder.CreateTrunc(Gpr(low), Int(half)), _builder.CreateTrunc(Gpr(high), Int(half))); };
+    auto* expected = halves(PS5LIFT_RAX, PS5LIFT_RDX);
+    auto* desired = halves(PS5LIFT_RBX, PS5LIFT_RCX);
+    auto* old = AtomicCompareExchange(expected, desired);
+    auto* matched = _builder.CreateICmpEQ(old, expected);
     SetFlag(PS5LIFT_ZF, matched);
-    auto* low = _builder.CreateZExt(_builder.CreateTrunc(old, Int(half)), I64());
-    auto* high = _builder.CreateZExt(_builder.CreateTrunc(_builder.CreateLShr(old, half), Int(half)), I64());
-    SetGpr(PS5LIFT_RAX, _builder.CreateSelect(matched, Gpr(PS5LIFT_RAX), low));
-    SetGpr(PS5LIFT_RDX, _builder.CreateSelect(matched, Gpr(PS5LIFT_RDX), high));
+    const bool quadwords = half == 64;
+    WriteRegisterUnlessKept(quadwords ? ZYDIS_REGISTER_RAX : ZYDIS_REGISTER_EAX, _builder.CreateTrunc(old, Int(half)), matched);
+    WriteRegisterUnlessKept(quadwords ? ZYDIS_REGISTER_RDX : ZYDIS_REGISTER_EDX, _builder.CreateTrunc(_builder.CreateLShr(old, half), Int(half)), matched);
 }
 
 void FunctionLifter::SignExtendAccumulator(const ZydisMnemonic mnemonic) {
@@ -449,8 +522,48 @@ void FunctionLifter::BitManipulation(const ZydisMnemonic mnemonic) {
         Write(0, high);
         return;
     }
+    case ZYDIS_MNEMONIC_PDEP:
+    case ZYDIS_MNEMONIC_PEXT: return ParallelBits(mnemonic == ZYDIS_MNEMONIC_PDEP);
     default: UnexpectedMnemonic("BitManipulation", mnemonic);
     }
+}
+
+void FunctionLifter::ParallelBits(const bool deposit) {
+    const auto bits = Bits(0);
+    auto* type = Int(bits);
+    auto* source = Read(1);
+    auto* mask = Read(2);
+    auto* zero = llvm::ConstantInt::get(type, 0);
+    auto* one = llvm::ConstantInt::get(type, 1);
+    auto* entry = _builder.GetInsertBlock();
+    auto* body = llvm::BasicBlock::Create(Context(), "parallel_bits", _host);
+    auto* done = llvm::BasicBlock::Create(Context(), "parallel_bits_done", _host);
+    _builder.CreateCondBr(_builder.CreateICmpEQ(mask, zero), done, body);
+    _builder.SetInsertPoint(body);
+    auto* remaining = _builder.CreatePHI(type, 2);
+    auto* rest = _builder.CreatePHI(type, 2);
+    auto* position = _builder.CreatePHI(type, 2);
+    auto* accumulated = _builder.CreatePHI(type, 2);
+    auto* lowest = _builder.CreateAnd(remaining, _builder.CreateNeg(remaining));
+    auto* taken = _builder.CreateICmpNE(_builder.CreateAnd(deposit ? rest : source, deposit ? one : lowest), zero);
+    auto* bit = deposit ? lowest : position;
+    auto* next = _builder.CreateOr(accumulated, _builder.CreateSelect(taken, bit, zero));
+    auto* nextRemaining = _builder.CreateAnd(remaining, _builder.CreateSub(remaining, one));
+    remaining->addIncoming(mask, entry);
+    rest->addIncoming(source, entry);
+    position->addIncoming(one, entry);
+    accumulated->addIncoming(zero, entry);
+    remaining->addIncoming(nextRemaining, body);
+    rest->addIncoming(_builder.CreateLShr(rest, one), body);
+    position->addIncoming(_builder.CreateShl(position, one), body);
+    accumulated->addIncoming(next, body);
+    auto* loopEnd = _builder.GetInsertBlock();
+    _builder.CreateCondBr(_builder.CreateICmpEQ(nextRemaining, zero), done, body);
+    _builder.SetInsertPoint(done);
+    auto* result = _builder.CreatePHI(type, 2);
+    result->addIncoming(zero, entry);
+    result->addIncoming(next, loopEnd);
+    Write(0, result);
 }
 
 llvm::Value* FunctionLifter::LowRdx(const unsigned bits) {
@@ -519,7 +632,7 @@ void FunctionLifter::Decrement() {
 
 void FunctionLifter::Negation() {
     auto* zero = llvm::ConstantInt::get(Int(Bits(0)), 0);
-    auto* value = LockedMemory() ? AtomicLoop(Bits(0), [&](llvm::Value* old) { return _builder.CreateSub(zero, old); }) : Read(0);
+    auto* value = LockedMemory() ? AtomicLoop([&](llvm::Value* old) { return _builder.CreateSub(zero, old); }) : Read(0);
     auto* result = Sub(zero, value, _builder.getFalse());
     SetFlag(PS5LIFT_CF, _builder.CreateICmpNE(value, zero));
     if (!LockedMemory()) Write(0, result);
@@ -534,7 +647,7 @@ void FunctionLifter::Complement() {
 }
 
 void FunctionLifter::ByteSwap() {
-    if (Bits(0) == 16) throw UnsupportedInstruction("16-bit");
+    if (Bits(0) == 16) return Write(0, _builder.getInt16(0));
     Write(0, _builder.CreateUnaryIntrinsic(llvm::Intrinsic::bswap, Read(0)));
 }
 

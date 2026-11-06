@@ -20,7 +20,9 @@ names have no recording, and their results are written:
   store does when that line is in the guard.
 - 16-bit near branches (APM volume 3), `jmp`, `call` and `jcc` with a 66 prefix: the target is (end + rel16) & 0xffff,
   where nothing is mapped, so a taken branch faults on fetching it, with that address as the faulting address and as
-  the page fault's data address. A `jcc` that is not taken completes with PATH `PATH_NOT_TAKEN`.
+  the page fault's data address. A `call` first pushes its 2-byte return address, so one whose push reaches the guard
+  faults at the instance instead, with the push's first byte in the guard as the data address. A `jcc` that is not
+  taken completes with PATH `PATH_NOT_TAKEN`.
 
 Every other case is its recording, changed only where AMD documents another result:
 - `bsf` and `bsr` with a zero source (APM volume 3) leave the destination's 64 bits as they were and set ZF.
@@ -58,6 +60,7 @@ _QUADWORD_BITS = 64
 _QUADWORD_BYTES = 8
 _XMM_BYTES = 16
 _SHORT_TARGET = 0xFFFF
+_SHORT_RETURN_BYTES = 2
 _CACHE_LINE = 64
 _REL16 = range(-0x8000, 0x8000)
 _CONDITIONS = {
@@ -195,10 +198,17 @@ def _page_fault(case, address, data):
     return Result(case.spec.index, Outcome.PAGE_FAULT, 0, address, data, {}, {}, None)
 
 
-def _store_low(case, size):
-    address = operand_address(case, 0)
+def _guard_fault(case, address, size):
     if address + size > case.layout.guard:
         return _page_fault(case, case.address, max(address, case.layout.guard))
+    return None
+
+
+def _store_low(case, size):
+    address = operand_address(case, 0)
+    fault = _guard_fault(case, address, size)
+    if fault is not None:
+        return fault
     final = _Final.completed(case)
     start = final.offset(address, size)
     vector = records.ymm_offset(_vector(case, 1))
@@ -223,6 +233,10 @@ def _near_branch16(case):
     relative = entry.label(TARGET) - end
     if relative not in _REL16:
         raise ExpectationError(f"{_key(case)}: its target lies {relative:#x} from its end, beyond a rel16")
+    if case.instance.shape is Shape.CALL:
+        fault = _guard_fault(case, register_value(case.input.slot, "rsp") - _SHORT_RETURN_BYTES, _SHORT_RETURN_BYTES)
+        if fault is not None:
+            return fault
     if not _taken(case):
         return _Final.completed(case, records.PATH_NOT_TAKEN).result()
     target = end + relative & _SHORT_TARGET
@@ -235,8 +249,9 @@ def _unchanged(case):
 
 def _clear_line(case):
     line = register_value(case.input.slot, "rax") & ~(_CACHE_LINE - 1)
-    if line + _CACHE_LINE > case.layout.guard:
-        return _page_fault(case, case.address, max(line, case.layout.guard))
+    fault = _guard_fault(case, line, _CACHE_LINE)
+    if fault is not None:
+        return fault
     final = _Final.completed(case)
     start = final.offset(line, _CACHE_LINE)
     final.block[start:start + _CACHE_LINE] = bytes(_CACHE_LINE)

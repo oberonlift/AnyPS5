@@ -5,6 +5,7 @@
 
 #include <pthread.h>
 #include <sched.h>
+#include <signal.h>
 #include <sys/random.h>
 #include <sys/auxv.h>
 #include <sys/mman.h>
@@ -19,6 +20,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <mutex>
 #include <vector>
 
 #if defined(__x86_64__)
@@ -44,44 +46,66 @@ std::uint64_t PageSize() {
     return static_cast<std::uint64_t>(sysconf(_SC_PAGESIZE));
 }
 
-std::atomic<Ps5LiftStopHandler> StopHandler{nullptr};
+void ApplyMxcsr(Ps5LiftState* state);
 
-[[noreturn]] void InvalidOpcode(const std::uint64_t address, const std::uint64_t detail, const char* mnemonic) {
+std::atomic<Ps5LiftStopHandler> StopHandler{nullptr};
+std::mutex SplitLock;
+thread_local sigset_t SplitLockSignalMask;
+
+const sigset_t& AsynchronousSignals() {
+    static const sigset_t signals = [] {
+        sigset_t set;
+        sigfillset(&set);
+        for (const int synchronous : {SIGSEGV, SIGBUS, SIGFPE, SIGILL, SIGTRAP}) sigdelset(&set, synchronous);
+        return set;
+    }();
+    return signals;
+}
+
+void SetSignalMask(const int how, const sigset_t* signals, sigset_t* previous) {
+    if (const int error = pthread_sigmask(how, signals, previous); error != 0) ps5lift_fail("cannot change the signal mask around a split lock: %s", std::strerror(error));
+}
+
+[[noreturn]] void InvalidOpcode(const std::uint64_t address, const std::uint64_t detail, const char* text) {
     switch (detail) {
     case PS5LIFT_INVALID_OPCODE_BY_DEFINITION:
-        ps5lift_fail("invalid opcode %s at 0x%" PRIx64, mnemonic, address);
+        ps5lift_fail("invalid opcode %s at 0x%" PRIx64, text, address);
     case PS5LIFT_INVALID_OPCODE_NOT_ON_PS5:
-        ps5lift_fail("invalid opcode: %s at 0x%" PRIx64 " is not on the PS5's CPU", mnemonic, address);
+        ps5lift_fail("invalid opcode: %s at 0x%" PRIx64 " is not on the PS5's CPU", text, address);
     default:
-        ps5lift_fail("invalid opcode %s at 0x%" PRIx64 " with unknown detail %" PRIu64, mnemonic, address, detail);
+        ps5lift_fail("invalid opcode %s at 0x%" PRIx64 " with unknown detail %" PRIu64, text, address, detail);
     }
 }
 
-[[noreturn]] void ConsoleKernel(const Ps5LiftState* state, const std::uint64_t address, const char* mnemonic) {
-    if (std::strncmp(mnemonic, InterruptMnemonic, sizeof(InterruptMnemonic) - 1) != 0) {
-        ps5lift_fail("%s at 0x%" PRIx64 " enters the console's kernel, which PS5 code reaches only through libkernel", mnemonic, address);
+[[noreturn]] void ConsoleKernel(const Ps5LiftState* state, const std::uint64_t address, const char* text) {
+    if (std::strncmp(text, InterruptMnemonic, sizeof(InterruptMnemonic) - 1) != 0) {
+        ps5lift_fail("%s at 0x%" PRIx64 " enters the console's kernel, which PS5 code reaches only through libkernel", text, address);
     }
     std::uint32_t code = 0;
     std::memcpy(&code, reinterpret_cast<const void*>(state->FsBase + 0x28), sizeof(code));
-    ps5lift_fail("%s at 0x%" PRIx64 " enters the console's kernel, which PS5 code reaches only through libkernel, with 0x%08x at %%fs:0x28", mnemonic, address, code);
+    ps5lift_fail("%s at 0x%" PRIx64 " enters the console's kernel, which PS5 code reaches only through libkernel, with 0x%08x at %%fs:0x28", text, address, code);
 }
 
-void DefaultStopHandler(Ps5LiftState* state, const std::uint32_t kind, const std::uint64_t address, const std::uint64_t detail, const char* mnemonic) {
+void DefaultStopHandler(Ps5LiftState* state, const std::uint32_t kind, const std::uint64_t address, const std::uint64_t detail, const char* text) {
     switch (kind) {
     case PS5LIFT_STOP_DIVIDE_ERROR:
         ps5lift_fail("divide error at 0x%" PRIx64 ": the divisor is zero or the quotient does not fit", address);
     case PS5LIFT_STOP_BREAKPOINT:
         ps5lift_fail("breakpoint at 0x%" PRIx64, address);
     case PS5LIFT_STOP_INVALID_OPCODE:
-        InvalidOpcode(address, detail, mnemonic);
+        InvalidOpcode(address, detail, text);
     case PS5LIFT_STOP_GENERAL_PROTECTION:
-        ps5lift_fail("general-protection fault: %s at 0x%" PRIx64 " is privileged on the PS5", mnemonic, address);
+        ps5lift_fail("general-protection fault at 0x%" PRIx64 ": %s", address, text);
     case PS5LIFT_STOP_CONSOLE_KERNEL:
-        ConsoleKernel(state, address, mnemonic);
+        ConsoleKernel(state, address, text);
     case PS5LIFT_STOP_MISSING_TRANSLATION:
-        ps5lift_fail("reached unsupported instruction %s at 0x%" PRIx64, mnemonic, address);
+        ps5lift_fail("reached unsupported instruction %s at 0x%" PRIx64, text, address);
     case PS5LIFT_STOP_SEGMENT_TABLES:
-        ps5lift_fail("%s at 0x%" PRIx64 " depends on the console's segment descriptor tables, which are unknown", mnemonic, address);
+        ps5lift_fail("%s at 0x%" PRIx64 " depends on the console's segment descriptor tables, which are unknown", text, address);
+    case PS5LIFT_STOP_PAGE_FAULT:
+        ps5lift_fail("page fault at 0x%" PRIx64 ": %s from unmapped memory", address, text);
+    case PS5LIFT_STOP_NEEDS_EXACT_FLOAT:
+        ps5lift_fail("--float fast stops at 0x%" PRIx64 ": %s", address, text);
     default:
         ps5lift_fail("unknown stop kind %" PRIu32 " at 0x%" PRIx64, kind, address);
     }
@@ -244,7 +268,7 @@ void* RunMain(void* argument) {
     PrepareState(state, memory.Tls, ConsoleMxcsr);
     const auto top = StackTop(memory.Stack);
     BindThread(&state, memory);
-    ps5lift_apply_mxcsr(&state);
+    ApplyMxcsr(&state);
     const auto function = Ps5Lift::LookupFunction(entry);
     if (function == nullptr) ps5lift_fail("the program entry 0x%" PRIx64 " was not lifted", entry);
     static constexpr char ProgramName[] = "eboot.bin";
@@ -277,6 +301,7 @@ void StartMain(std::uint64_t& entry) {
 namespace {
 
 constexpr std::uint32_t MxcsrExceptions = 0x3f;
+constexpr std::uint32_t MxcsrExceptionMasks = 0x1f80;
 
 #if defined(__aarch64__)
 constexpr std::uint64_t FpsrBits[6] = {1u << 0, 1u << 7, 1u << 1, 1u << 2, 1u << 3, 1u << 4};
@@ -312,9 +337,7 @@ void SetHostExceptions(const std::uint32_t flags) {
 #endif
 }
 
-}
-
-extern "C" void ps5lift_apply_mxcsr(Ps5LiftState* state) {
+void ApplyMxcsr(Ps5LiftState* state) {
     if (!GuestEnvironmentLive()) return;
     const auto mxcsr = state->Mxcsr;
 #if defined(__aarch64__)
@@ -330,9 +353,27 @@ extern "C" void ps5lift_apply_mxcsr(Ps5LiftState* state) {
     if (mxcsr & (MxcsrDenormalsAreZero | MxcsrFlushToZero)) fpcr |= FlushToZero;
     __asm__ volatile("msr fpcr, %0" : : "r"(fpcr));
 #elif defined(__x86_64__)
-    _mm_setcsr((mxcsr & ~MxcsrExceptions) | 0x1f80u);
+    _mm_setcsr((mxcsr & ~(MxcsrExceptions | PS5LIFT_MXCSR_MISALIGNED_SSE)) | MxcsrExceptionMasks);
 #endif
     SetHostExceptions(mxcsr & MxcsrExceptions);
+}
+
+[[noreturn]] void StopMxcsrLoad(Ps5LiftState* state, const std::uint32_t kind, const std::uint64_t address, const char* loader, const char* reason) {
+    char text[256];
+    const int length = std::snprintf(text, sizeof(text), "%s %s", loader, reason);
+    if (length < 0 || static_cast<std::size_t>(length) >= sizeof(text)) ps5lift_fail("the stop of an MXCSR load at 0x%" PRIx64 " does not fit its message", address);
+    ps5lift_stop(state, kind, address, 0, text);
+}
+
+}
+
+extern "C" void ps5lift_load_mxcsr(Ps5LiftState* state, const std::uint32_t value, const std::uint64_t address, const char* loader) {
+    if ((value & ~PS5LIFT_MXCSR_MASK) != 0) StopMxcsrLoad(state, PS5LIFT_STOP_GENERAL_PROTECTION, address, loader, "loads a reserved MXCSR bit");
+    if (Ps5Lift::Program().FloatModel == PS5LIFT_FLOAT_FAST && (value & MxcsrExceptionMasks) != MxcsrExceptionMasks) {
+        StopMxcsrLoad(state, PS5LIFT_STOP_NEEDS_EXACT_FLOAT, address, loader, "unmasks a SIMD floating-point exception, which needs --float exact");
+    }
+    state->Mxcsr = value;
+    ApplyMxcsr(state);
 }
 
 extern "C" std::uint64_t ps5lift_read_tsc(void) {
@@ -361,6 +402,20 @@ extern "C" void ps5lift_write_back_cache_line(const std::uint64_t address) {
 #endif
 }
 
+extern "C" void ps5lift_split_lock_begin(const std::uint64_t address, const std::uint64_t bytes) {
+    const auto page = PageSize();
+    for (auto probe = address; probe < address + bytes; probe = (probe | (page - 1)) + 1) static_cast<void>(__atomic_fetch_add(reinterpret_cast<volatile std::uint8_t*>(probe), 0, __ATOMIC_RELAXED));
+    SetSignalMask(SIG_BLOCK, &AsynchronousSignals(), &SplitLockSignalMask);
+    SplitLock.lock();
+    std::atomic_thread_fence(std::memory_order_seq_cst);
+}
+
+extern "C" void ps5lift_split_lock_end(void) {
+    std::atomic_thread_fence(std::memory_order_seq_cst);
+    SplitLock.unlock();
+    SetSignalMask(SIG_SETMASK, &SplitLockSignalMask, nullptr);
+}
+
 extern "C" std::uint64_t ps5lift_random(void) {
     std::uint64_t value = 0;
     if (getrandom(&value, sizeof(value), 0) != static_cast<ssize_t>(sizeof(value))) ps5lift_fail("rdrand: the host gave no random bytes: %s", std::strerror(errno));
@@ -378,10 +433,23 @@ extern "C" std::uint32_t ps5lift_read_mxcsr(Ps5LiftState* state) {
     return (state->Mxcsr & ~MxcsrExceptions) | HostExceptions();
 }
 
-extern "C" Ps5LiftFunction ps5lift_resolve(const std::uint64_t target) {
+namespace {
+
+void StopIfUnmapped(Ps5LiftState* state, const std::uint64_t address) {
+    const auto page = PageSize();
+    unsigned char resident = 0;
+    if (mincore(reinterpret_cast<void*>(address & ~(page - 1)), page, &resident) == 0) return;
+    if (errno != ENOMEM) ps5lift_fail("cannot tell whether 0x%" PRIx64 " is mapped: %s", address, std::strerror(errno));
+    ps5lift_stop(state, PS5LIFT_STOP_PAGE_FAULT, address, 0, "fetch");
+}
+
+}
+
+extern "C" Ps5LiftFunction ps5lift_resolve(Ps5LiftState* state, const std::uint64_t target) {
     const auto function = Ps5Lift::LookupFunction(target);
-    if (function == nullptr) ps5lift_fail("indirect branch to 0x%" PRIx64 ", which was not lifted", target);
-    return function;
+    if (function != nullptr) return function;
+    StopIfUnmapped(state, target);
+    ps5lift_fail("indirect branch to 0x%" PRIx64 ", which was not lifted", target);
 }
 
 namespace {
@@ -399,6 +467,7 @@ void ReturnByJump(Ps5LiftState*) {}
 
 extern "C" Ps5LiftFunction ps5lift_resolve_jump(Ps5LiftState* state, const std::uint64_t target) {
     if (const auto function = Ps5Lift::LookupFunction(target)) return function;
+    StopIfUnmapped(state, target);
     state->ResumeRip = target;
     state->ResumeRsp = state->Gpr[PS5LIFT_RSP];
     state->ReturnSlot = 0;
@@ -416,7 +485,7 @@ extern "C" void ps5lift_fail_unresumed(const Ps5LiftState* state, const char* fr
 }
 
 extern "C" void ps5lift_dispatch(Ps5LiftState* state, const std::uint64_t target) {
-    ps5lift_resolve(target)(state);
+    ps5lift_resolve(state, target)(state);
 }
 
 extern "C" void ps5lift_fail(const char* format, ...) {
@@ -443,9 +512,9 @@ extern "C" void ps5lift_set_stop_handler(const Ps5LiftStopHandler handler) {
     StopHandler.store(handler);
 }
 
-extern "C" void ps5lift_stop(Ps5LiftState* state, const std::uint32_t kind, const std::uint64_t address, const std::uint64_t detail, const char* mnemonic) {
+extern "C" void ps5lift_stop(Ps5LiftState* state, const std::uint32_t kind, const std::uint64_t address, const std::uint64_t detail, const char* text) {
     const auto handler = StopHandler.load();
-    (handler != nullptr ? handler : DefaultStopHandler)(state, kind, address, detail, mnemonic);
+    (handler != nullptr ? handler : DefaultStopHandler)(state, kind, address, detail, text);
     ps5lift_fail("the stop handler returned from stop %" PRIu32 " at 0x%" PRIx64, kind, address);
 }
 
@@ -551,7 +620,7 @@ extern "C" Ps5LiftState* ps5lift_enter_guest(void) {
     auto* state = ps5lift_current_state();
     if (Foreign != nullptr && Foreign->Entered++ == 0) {
         Foreign->Host = SaveHostFloatingPoint();
-        ps5lift_apply_mxcsr(state);
+        ApplyMxcsr(state);
     }
     return state;
 }

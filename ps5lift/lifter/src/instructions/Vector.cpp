@@ -92,6 +92,11 @@ llvm::Value* FunctionLifter::Saturate(llvm::Value* wide, const unsigned element,
     return _builder.CreateTrunc(clamped, llvm::FixedVectorType::get(Int(element), llvm::cast<llvm::FixedVectorType>(type)->getNumElements()));
 }
 
+llvm::Value* FunctionLifter::AbsoluteDifferences(llvm::Value* a, llvm::Value* b) {
+    auto* words = llvm::FixedVectorType::get(Int(16), llvm::cast<llvm::FixedVectorType>(a->getType())->getNumElements());
+    return _builder.CreateBinaryIntrinsic(llvm::Intrinsic::abs, _builder.CreateSub(_builder.CreateZExt(a, words), _builder.CreateZExt(b, words)), _builder.getFalse());
+}
+
 void FunctionLifter::MoveMask(const unsigned element) {
     auto* source = Read(1);
     auto* negative = _builder.CreateICmpSLT(AsVector(source, element), llvm::Constant::getNullValue(AsVector(source, element)->getType()));
@@ -168,7 +173,7 @@ void FunctionLifter::VectorShift(const llvm::Instruction::BinaryOps shift, const
 
 FunctionLifter::VectorOperands FunctionLifter::ReadVectorOperands(const int base, const unsigned width, const unsigned element) {
     auto* a = ReadAs(base, width);
-    auto* b = _builder.CreateZExtOrTrunc(Read(base + 1), Int(width));
+    auto* b = ReadVector(base + 1, width);
     return {a, b, AsVector(a, element), AsVector(b, element)};
 }
 
@@ -196,6 +201,12 @@ void FunctionLifter::VectorBinary(const VectorKind kind, const unsigned element)
     case K::CompareEqual: result = _builder.CreateSExt(_builder.CreateICmpEQ(va, vb), va->getType()); break;
     case K::CompareGreater: result = _builder.CreateSExt(_builder.CreateICmpSGT(va, vb), va->getType()); break;
     case K::AndNot: result = _builder.CreateAnd(_builder.CreateNot(va), vb); break;
+    case K::Sign: {
+        auto* zero = llvm::Constant::getNullValue(va->getType());
+        auto* applied = _builder.CreateSelect(_builder.CreateICmpSLT(vb, zero), _builder.CreateNeg(va), va);
+        result = _builder.CreateSelect(_builder.CreateICmpEQ(vb, zero), zero, applied);
+        break;
+    }
     case K::MultiplyHighSigned:
     case K::MultiplyHighUnsigned: {
         auto* wide = llvm::FixedVectorType::get(Int(element * 2), count);
@@ -242,9 +253,7 @@ void FunctionLifter::VectorBinary(const VectorKind kind, const unsigned element)
         break;
     }
     case K::SumAbsoluteDifferences: {
-        auto* words = llvm::FixedVectorType::get(Int(16), count * 8);
-        auto* difference = _builder.CreateBinaryIntrinsic(llvm::Intrinsic::abs, _builder.CreateSub(_builder.CreateZExt(AsVector(a, 8), words), _builder.CreateZExt(AsVector(b, 8), words)),
-                                                          _builder.getFalse());
+        auto* difference = AbsoluteDifferences(AsVector(a, 8), AsVector(b, 8));
         result = llvm::Constant::getNullValue(va->getType());
         for (unsigned i = 0; i < count; ++i) {
             std::vector<int> block(8);
@@ -327,6 +336,55 @@ void FunctionLifter::VectorBinary(const VectorKind kind, const unsigned element)
     Write(0, AsInteger(result));
 }
 
+void FunctionLifter::MultipleSumAbsoluteDifferences() {
+    const auto width = Bits(0);
+    const int base = Base(3);
+    const auto [a, b, va, vb] = ReadVectorOperands(base, width, 8);
+    const auto control = Immediate(base + 2);
+    std::vector<int> windows;
+    std::vector<int> blocks;
+    for (unsigned lane = 0; lane < width / 128; ++lane) {
+        const auto select = control >> (3 * lane);
+        const auto window = static_cast<int>(16 * lane + 4 * (select >> 2 & 1));
+        const auto block = static_cast<int>(16 * lane + 4 * (select & 3));
+        for (int i = 0; i < 8; ++i) {
+            for (int j = 0; j < 4; ++j) {
+                windows.push_back(window + i + j);
+                blocks.push_back(block + j);
+            }
+        }
+    }
+    auto* differences = AbsoluteDifferences(_builder.CreateShuffleVector(va, va, windows), _builder.CreateShuffleVector(vb, vb, blocks));
+    const unsigned sums = width / 16;
+    auto* pairs = _builder.CreateAdd(Pairs(differences, 2 * sums, 0), Pairs(differences, 2 * sums, 1));
+    Write(0, AsInteger(_builder.CreateAdd(Pairs(pairs, sums, 0), Pairs(pairs, sums, 1))));
+}
+
+void FunctionLifter::Gather(const unsigned indexBits) {
+    const auto& memory = Operand(1);
+    const auto destination = VectorIndex(Operand(0).reg.value);
+    const auto mask = VectorIndex(Operand(2).reg.value);
+    const auto element = Bits(1);
+    const auto setElement = [&](const int target, const unsigned position, llvm::Value* value) {
+        SetVector(target, AsInteger(_builder.CreateInsertElement(AsVector(Vector(target), element), value, position)));
+    };
+    auto* indexes = AsVector(Vector(VectorIndex(memory.mem.index)), indexBits);
+    auto* selected = AsVector(Vector(mask), element);
+    for (unsigned i = 0; i < Bits(0) / element; ++i) {
+        auto* gather = llvm::BasicBlock::Create(Context(), "gather_element", _host);
+        auto* next = llvm::BasicBlock::Create(Context(), "gather_element_done", _host);
+        _builder.CreateCondBr(SignBit(_builder.CreateExtractElement(selected, i)), gather, next);
+        _builder.SetInsertPoint(gather);
+        auto* address = IndexedAddress(memory, _builder.CreateExtractElement(indexes, i));
+        setElement(destination, i, Load(address, element, NeedsOrdering(memory, element)));
+        _builder.CreateBr(next);
+        _builder.SetInsertPoint(next);
+        setElement(mask, i, Const(element, 0));
+    }
+    WriteVector(destination, _builder.CreateTrunc(Vector(destination), Int(Bits(0))), true);
+    SetVector(mask, Const(256, 0));
+}
+
 void FunctionLifter::VectorShiftVariable(const llvm::Instruction::BinaryOps shift, const unsigned element) {
     const auto width = Bits(0);
     const auto [a, b, va, vb] = ReadVectorOperands(Base(2), width, element);
@@ -352,7 +410,7 @@ void FunctionLifter::MinimumPosition() {
     auto* minimum = _builder.CreateUnaryIntrinsic(llvm::Intrinsic::vector_reduce_umin, words);
     auto* matches = _builder.CreateBitCast(_builder.CreateICmpEQ(words, _builder.CreateVectorSplat(8, minimum)), _builder.getInt8Ty());
     auto* index = _builder.CreateBinaryIntrinsic(llvm::Intrinsic::cttz, matches, _builder.getTrue());
-    Write(0, _builder.CreateOr(_builder.CreateZExt(minimum, Int(128)), _builder.CreateShl(_builder.CreateZExt(index, Int(128)), 16)));
+    Write(0, _builder.CreateZExt(ConcatenateIntegers(minimum, index), Int(128)));
 }
 
 }

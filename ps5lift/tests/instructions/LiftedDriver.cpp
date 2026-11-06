@@ -36,21 +36,24 @@ bool StopOutcome(const std::uint32_t kind, std::uint8_t* outcome) {
     case PS5LIFT_STOP_CONSOLE_KERNEL: *outcome = PS5LIFT_INSTRUCTION_OUTCOME_CONSOLE_KERNEL; return true;
     case PS5LIFT_STOP_MISSING_TRANSLATION: *outcome = PS5LIFT_INSTRUCTION_OUTCOME_MISSING_TRANSLATION; return true;
     case PS5LIFT_STOP_SEGMENT_TABLES: *outcome = PS5LIFT_INSTRUCTION_OUTCOME_SEGMENT_TABLES; return true;
+    case PS5LIFT_STOP_PAGE_FAULT: *outcome = PS5LIFT_INSTRUCTION_OUTCOME_PAGE_FAULT; return true;
+    case PS5LIFT_STOP_NEEDS_EXACT_FLOAT: *outcome = PS5LIFT_INSTRUCTION_OUTCOME_NEEDS_EXACT_FLOAT; return true;
     default: return false;
     }
 }
 
-void OnStop(Ps5LiftState* state, const std::uint32_t kind, const std::uint64_t address, const std::uint64_t detail, const char* mnemonic) {
+void OnStop(Ps5LiftState* state, const std::uint32_t kind, const std::uint64_t address, const std::uint64_t detail, const char* text) {
     if (!inCase) {
         ps5lift_set_stop_handler(nullptr);
-        ps5lift_stop(state, kind, address, detail, mnemonic);
+        ps5lift_stop(state, kind, address, detail, text);
     }
     std::uint8_t outcome = 0;
     if (!StopOutcome(kind, &outcome) || detail > UINT16_MAX) {
-        Fail("the runtime stopped %s at 0x%" PRIx64 " with kind %" PRIu32 " and detail 0x%" PRIx64 ", which no result holds", mnemonic, address, kind, detail);
+        Fail("the runtime stopped %s at 0x%" PRIx64 " with kind %" PRIu32 " and detail 0x%" PRIx64 ", which no result holds", text, address, kind, detail);
         std::_Exit(PS5LIFT_INSTRUCTION_DRIVER_FAILED);
     }
-    fault = Fault{outcome, static_cast<std::uint16_t>(detail), address, 0};
+    const std::uint64_t data = kind == PS5LIFT_STOP_PAGE_FAULT ? address : 0;
+    fault = Fault{outcome, static_cast<std::uint16_t>(detail), address, data};
     siglongjmp(caseJump, 1);
 }
 

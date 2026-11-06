@@ -1,7 +1,7 @@
 #include "../FunctionLifter.hpp"
 
 #include <cstddef>
-#include <utility>
+#include <cstdint>
 
 namespace Ps5Lift::Lifting {
 
@@ -27,21 +27,43 @@ void FunctionLifter::TimeStampAndProcessor() {
     SetGpr(PS5LIFT_RCX, _builder.CreateZExt(_builder.CreateCall(_module.Runtime("ps5lift_processor_id", llvm::FunctionType::get(_builder.getInt32Ty(), false))), I64()));
 }
 
-void FunctionLifter::LoadFlagsIntoAh() {
-    llvm::Value* value = _builder.getInt8(2);
-    for (const auto& [flag, bit] : {std::pair{PS5LIFT_SF, 7}, std::pair{PS5LIFT_ZF, 6}, std::pair{PS5LIFT_AF, 4}, std::pair{PS5LIFT_PF, 2}, std::pair{PS5LIFT_CF, 0}})
-        value = _builder.CreateOr(value, _builder.CreateShl(_builder.CreateZExt(Flag(flag), _builder.getInt8Ty()), bit));
-    WriteRegister(ZYDIS_REGISTER_AH, value);
+llvm::Value* FunctionLifter::FlagImage(const unsigned bits) {
+    llvm::Value* image = Const(bits, PS5LIFT_USER_MODE_RFLAGS);
+    for (int flag = 0; flag < PS5LIFT_FLAG_COUNT; ++flag) {
+        const unsigned bit = PS5LIFT_RFLAGS_BIT[flag];
+        if (bit < bits) image = _builder.CreateOr(image, _builder.CreateShl(_builder.CreateZExt(Flag(flag), Int(bits)), bit));
+    }
+    return image;
 }
 
-void FunctionLifter::StoreAhIntoFlags() {
-    auto* value = ReadRegister(ZYDIS_REGISTER_AH);
-    for (const auto& [flag, bit] : {std::pair{PS5LIFT_SF, 7}, std::pair{PS5LIFT_ZF, 6}, std::pair{PS5LIFT_AF, 4}, std::pair{PS5LIFT_PF, 2}, std::pair{PS5LIFT_CF, 0}})
-        SetFlag(flag, _builder.CreateTrunc(_builder.CreateLShr(value, bit), _builder.getInt1Ty()));
+void FunctionLifter::SetFlagsFromImage(llvm::Value* image) {
+    const auto bits = image->getType()->getIntegerBitWidth();
+    for (int flag = 0; flag < PS5LIFT_FLAG_COUNT; ++flag) {
+        const unsigned bit = PS5LIFT_RFLAGS_BIT[flag];
+        if (bit < bits) SetFlag(flag, _builder.CreateTrunc(_builder.CreateLShr(image, bit), _builder.getInt1Ty()));
+    }
+}
+
+void FunctionLifter::PopFlags() {
+    constexpr std::uint64_t trap = 1 << 8;
+    constexpr std::uint64_t nestedTask = 1 << 14;
+    constexpr std::uint64_t alignmentCheck = 1 << 18;
+    constexpr std::uint64_t identification = 1 << 21;
+    const auto bits = _instruction->Info.operand_width;
+    auto* image = Pop(bits);
+    SetFlagsFromImage(image);
+    auto* unmodelled = _builder.CreateAnd(image, Const(bits, trap | nestedTask | alignmentCheck | identification));
+    StopIf(_builder.CreateICmpNE(unmodelled, Const(bits, 0)), PS5LIFT_STOP_MISSING_TRANSLATION, 0, "popf of TF, NT, AC or ID");
 }
 
 void FunctionLifter::CacheLine(const char* function) {
     _builder.CreateCall(_module.Runtime(function, llvm::FunctionType::get(_builder.getVoidTy(), {I64()}, false)), {Address(Operand(0))});
+}
+
+void FunctionLifter::ClearCacheLine() {
+    constexpr unsigned lineBits = 512;
+    auto* line = _builder.CreateAnd(_builder.CreateZExtOrTrunc(Read(0), I64()), _builder.getInt64(~std::uint64_t{lineBits / 8 - 1}));
+    GuestStore(line, llvm::ConstantInt::get(Int(lineBits), 0));
 }
 
 void FunctionLifter::Cpuid() {

@@ -3,7 +3,7 @@
 namespace Ps5Lift::Lifting {
 
 llvm::Value* FunctionLifter::CallX87(const std::uint32_t operation, const std::uint32_t format, llvm::Value* address, const std::uint32_t index) {
-    const auto* memory = address ? X87Memory() : nullptr;
+    const auto* memory = address ? MemoryOperand() : nullptr;
     const bool ordered = memory != nullptr && _module.Options().Memory == MemoryModel::Tso && !InPrivateFrame(*memory) && !InReadOnlySegment(*memory, memory->size);
     if (ordered) _builder.CreateFence(llvm::AtomicOrdering::SequentiallyConsistent);
     auto callee = _module.Runtime("ps5lift_x87", llvm::FunctionType::get(_builder.getInt32Ty(), {_module.Pointer(), _builder.getInt32Ty(), _builder.getInt32Ty(), I64(), _builder.getInt32Ty()}, false));
@@ -20,15 +20,8 @@ std::uint32_t FunctionLifter::StackIndex(const ZydisDecodedOperand& operand) {
     return static_cast<std::uint32_t>(operand.reg.value - ZYDIS_REGISTER_ST0);
 }
 
-const ZydisDecodedOperand* FunctionLifter::X87Memory() const {
-    for (unsigned i = 0; i < _instruction->Info.operand_count_visible; ++i) {
-        if (Operand(static_cast<int>(i)).type == ZYDIS_OPERAND_TYPE_MEMORY) return &Operand(static_cast<int>(i));
-    }
-    return nullptr;
-}
-
 std::uint32_t FunctionLifter::X87Format(const bool integer) const {
-    const auto* memory = X87Memory();
+    const auto* memory = MemoryOperand();
     if (memory == nullptr) return PS5LIFT_X87_REGISTER;
     switch (memory->size) {
     case 16: return integer ? PS5LIFT_X87_INTEGER16 : throw UnsupportedInstruction("16-bit x87 float");
@@ -62,7 +55,7 @@ void FunctionLifter::X87CompareFlags(llvm::Value* result) {
 }
 
 llvm::Value* FunctionLifter::X87Address() {
-    const auto* memory = X87Memory();
+    const auto* memory = MemoryOperand();
     return memory ? Address(*memory) : nullptr;
 }
 
@@ -89,7 +82,7 @@ void FunctionLifter::X87SaveState() {
 
 void FunctionLifter::X87RestoreState() {
     Flush();
-    CallX87(PS5LIFT_X87_RESTORE_STATE, 0, X87Address(), 0);
+    LoadMxcsr(CallX87(PS5LIFT_X87_RESTORE_STATE, 0, X87Address(), 0));
     Reload();
 }
 

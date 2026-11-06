@@ -1,0 +1,20 @@
+lock add: memory 8001, register 0011, flags 8001
+lock adc: memory 00000010, register 0000001f, flags 1100
+lock sub: memory 00000000ffffffff, register 0000000000000001, flags 1400
+lock sbb: memory fffffffd, register 00000007, flags 9100
+lock and: memory 0f000f00, register 0ff00ff0, flags 0400
+lock or: memory 80f000f1, register 00f000f0, flags 8000
+lock xor: memory ffff0000, register 5555aaaa, flags 8400
+lock inc: memory 80000000, register 00000000, flags 9501
+lock dec: memory 000000ff, register 00000000, flags 1400
+lock not: memory f0f0edcb, register 00000000, flags 0000
+lock neg: memory fff0, register 0000, flags 8500
+lock bts: memory 00020000, register 00000000, flags 0000
+lock btr: memory fffbffff, register 00000012, flags 0100
+lock btc: memory 0123457789abcdef, register 0000000000000024, flags 0000
+lock xadd: memory 8000000000000010, register 7ffffffffffffff0, flags 8001
+xchg: memory 2468ace0, register 13579bdf, flags 0000
+lock cmpxchg equal: memory 22222222, register 11111111, flags 4400
+lock cmpxchg unequal: memory 33333333, register 33333333, flags 0400
+lock cmpxchg8b: memory 99aabbccddeeff00, register 1122334455667788, flags 4000
+threads: 2000

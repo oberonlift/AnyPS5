@@ -15,8 +15,7 @@ extern "C" std::uint32_t GuestCpuMxcsr_nid_no_patch(void) {
 
 extern "C" void GuestCpuSetMxcsr_nid_no_patch(const std::uint32_t value) {
     auto* state = ps5lift_current_state();
-    state->Mxcsr = value;
-    ps5lift_apply_mxcsr(state);
+    ps5lift_load_mxcsr(state, value, state->Rip, "a native call");
 }
 
 extern "C" std::uint16_t GuestCpuX87Control_nid_no_patch(void) {
@@ -231,17 +230,15 @@ extern "C" void GuestCpuCallInterrupted_nid_no_patch(const std::uint64_t target,
     state->Unwinding = 0;
     Ps5Lift::Bridge::CallGuest<void>(target, first, second);
     *state = saved;
-    state->Mxcsr = mxcsr;
-    ps5lift_apply_mxcsr(state);
+    ps5lift_load_mxcsr(state, mxcsr, state->Rip, "the return from a guest exception handler");
 }
 
 extern "C" void GuestCpuInterruptedContext_nid_no_patch(std::uint64_t* registers, std::uint64_t* flags) {
-    static constexpr unsigned FlagBits[PS5LIFT_FLAG_COUNT] = {0, 2, 4, 6, 7, 11, 10};
     const auto* state = ps5lift_current_state();
     for (int i = 0; i < 16; ++i) registers[i] = state->Gpr[DwarfRegisters[i]];
     registers[DwarfRip] = state->Rip;
-    std::uint64_t value = 0x202;
-    for (int i = 0; i < PS5LIFT_FLAG_COUNT; ++i) value |= static_cast<std::uint64_t>(state->Flags[i] & 1) << FlagBits[i];
+    std::uint64_t value = PS5LIFT_USER_MODE_RFLAGS;
+    for (int i = 0; i < PS5LIFT_FLAG_COUNT; ++i) value |= static_cast<std::uint64_t>(state->Flags[i] & 1) << PS5LIFT_RFLAGS_BIT[i];
     *flags = value;
 }
 
@@ -260,10 +257,9 @@ extern "C" void GuestCpuSaveFiber_nid_no_patch(std::uint64_t* context) {
 extern "C" void GuestCpuRestoreFiber_nid_no_patch(const std::uint64_t* context) {
     auto* state = ps5lift_current_state();
     for (int i = 0; i < 7; ++i) state->Gpr[FiberRegisters[i]] = context[i];
-    state->Mxcsr = static_cast<std::uint32_t>(context[7]);
     state->X87Control = static_cast<std::uint16_t>(context[7] >> 32);
     state->Unwinding = 0;
-    ps5lift_apply_mxcsr(state);
+    ps5lift_load_mxcsr(state, static_cast<std::uint32_t>(context[7]), state->Rip, "a fiber switch");
 }
 
 extern "C" void GuestCpuStartFiber_nid_no_patch(const std::uint64_t stackTop) {

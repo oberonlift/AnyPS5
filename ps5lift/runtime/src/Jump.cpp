@@ -48,8 +48,7 @@ void Jump(Ps5LiftState* state, const bool mask) {
     if (mask && JumpBufferRestoreMask_nid_no_patch != nullptr) JumpBufferRestoreMask_nid_no_patch(buffer);
     for (std::size_t i = 0; i < std::size(SavedRegisters); ++i) state->Gpr[SavedRegisters[i]] = Get<std::uint64_t>(buffer, 8 + 8 * i);
     state->Gpr[PS5LIFT_RAX] = value != 0 ? value : 1;
-    state->Mxcsr = Get<std::uint32_t>(buffer, 64);
-    ps5lift_apply_mxcsr(state);
+    ps5lift_load_mxcsr(state, Get<std::uint32_t>(buffer, 64), state->Rip, "longjmp");
     state->X87Control = Get<std::uint16_t>(buffer, 68);
     state->ResumeRip = Get<std::uint64_t>(buffer, 0);
     state->ResumeRsp = state->Gpr[PS5LIFT_RSP];

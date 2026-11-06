@@ -285,7 +285,7 @@ static void fx_state(void) {
     __asm__ volatile("ldmxcsr %[mxcsr]\n\tfninit\n\tfldpi\n\tfld1\n\tmovdqa %[pattern], %%xmm5\n\tfxsave %[saved]\n\tfstp %%st(0)\n\tfstp %%st(0)"
                      : [saved] "=m"(saved) : [pattern] "m"(pattern), [mxcsr] "m"(mxcsr) : "xmm5", "st", "st(1)", "st(2)", "st(3)", "st(4)", "st(5)", "st(6)", "st(7)", "memory");
     mix(saved, 5);
-    mix(saved + 24, 8);
+    mix(saved + 24, 4);
     mix(saved + 32, 10);
     mix(saved + 48, 10);
     mix(saved + 160 + 5 * 16, 16);

@@ -1,5 +1,7 @@
 #include "../FunctionLifter.hpp"
 
+#include <algorithm>
+
 namespace Ps5Lift::Lifting {
 
 bool FunctionLifter::Lockable(const ZydisMnemonic mnemonic) {
@@ -16,7 +18,7 @@ bool FunctionLifter::Lockable(const ZydisMnemonic mnemonic) {
 
 void FunctionLifter::EmitSemantics(const ZydisMnemonic mnemonic) {
     if (Locked() && !(Lockable(mnemonic) && Operand(0).type == ZYDIS_OPERAND_TYPE_MEMORY)) throw UnsupportedInstruction("lock prefix");
-    if (UsesMmx()) EnterMmx();
+    if (HasRegisterOperand(MmxIndex)) EnterMmx();
     using K = VectorKind;
     using F = FloatKind;
     constexpr auto Element = [](const char* suffix) { return suffix[1] == 'S' ? 32u : 64u; };
@@ -58,7 +60,8 @@ case ZYDIS_MNEMONIC_##prefix##231##suffix: return FloatArithmetic({F::Fma, Eleme
     case ZYDIS_MNEMONIC_JMP: return Jump();
     case ZYDIS_MNEMONIC_CALL: return Call();
     case ZYDIS_MNEMONIC_RET: return Return();
-    case ZYDIS_MNEMONIC_UD2: return Stop(PS5LIFT_STOP_INVALID_OPCODE, PS5LIFT_INVALID_OPCODE_BY_DEFINITION, "ud2");
+    case ZYDIS_MNEMONIC_UD0: case ZYDIS_MNEMONIC_UD1: case ZYDIS_MNEMONIC_UD2: case ZYDIS_MNEMONIC_RSM:
+        return Stop(PS5LIFT_STOP_INVALID_OPCODE, PS5LIFT_INVALID_OPCODE_BY_DEFINITION, Mnemonic());
     case ZYDIS_MNEMONIC_INT3: return Stop(PS5LIFT_STOP_BREAKPOINT, 0, "int3");
 
     case ZYDIS_MNEMONIC_SYSENTER: return StopNotOnPs5();
@@ -80,6 +83,7 @@ case ZYDIS_MNEMONIC_##prefix##231##suffix: return FloatArithmetic({F::Fma, Eleme
     case ZYDIS_MNEMONIC_MFENCE: _builder.CreateFence(llvm::AtomicOrdering::SequentiallyConsistent); return;
     case ZYDIS_MNEMONIC_LFENCE: case ZYDIS_MNEMONIC_SFENCE: _builder.CreateFence(llvm::AtomicOrdering::AcquireRelease); return;
     case ZYDIS_MNEMONIC_CLFLUSH: case ZYDIS_MNEMONIC_CLFLUSHOPT: return CacheLine("ps5lift_flush_cache_line");
+    case ZYDIS_MNEMONIC_CLZERO: return ClearCacheLine();
     case ZYDIS_MNEMONIC_CLWB: return CacheLine("ps5lift_write_back_cache_line");
     case ZYDIS_MNEMONIC_CPUID: return Cpuid();
     case ZYDIS_MNEMONIC_XGETBV: return ExtendedControlRegister();
@@ -87,8 +91,10 @@ case ZYDIS_MNEMONIC_##prefix##231##suffix: return FloatArithmetic({F::Fma, Eleme
     case ZYDIS_MNEMONIC_RDTSCP: return TimeStampAndProcessor();
     case ZYDIS_MNEMONIC_RDPID: return ProcessorId();
     case ZYDIS_MNEMONIC_RDRAND: case ZYDIS_MNEMONIC_RDSEED: return RandomNumber();
-    case ZYDIS_MNEMONIC_LAHF: return LoadFlagsIntoAh();
-    case ZYDIS_MNEMONIC_SAHF: return StoreAhIntoFlags();
+    case ZYDIS_MNEMONIC_LAHF: return WriteRegister(ZYDIS_REGISTER_AH, FlagImage(8));
+    case ZYDIS_MNEMONIC_SAHF: return SetFlagsFromImage(ReadRegister(ZYDIS_REGISTER_AH));
+    case ZYDIS_MNEMONIC_PUSHF: case ZYDIS_MNEMONIC_PUSHFQ: return Push(FlagImage(_instruction->Info.operand_width));
+    case ZYDIS_MNEMONIC_POPF: case ZYDIS_MNEMONIC_POPFQ: return PopFlags();
     case ZYDIS_MNEMONIC_CLD: return SetFlag(PS5LIFT_DF, _builder.getFalse());
     case ZYDIS_MNEMONIC_STD: return SetFlag(PS5LIFT_DF, _builder.getTrue());
     case ZYDIS_MNEMONIC_CLC: return SetFlag(PS5LIFT_CF, _builder.getFalse());
@@ -97,13 +103,15 @@ case ZYDIS_MNEMONIC_##prefix##231##suffix: return FloatArithmetic({F::Fma, Eleme
 
     case ZYDIS_MNEMONIC_MOV: return Write(0, Read(1));
     case ZYDIS_MNEMONIC_MOVZX: return Write(0, _builder.CreateZExt(Read(1), Int(Bits(0))));
-    case ZYDIS_MNEMONIC_MOVSX: case ZYDIS_MNEMONIC_MOVSXD: return Write(0, _builder.CreateSExtOrTrunc(Read(1), Int(Bits(0))));
+    case ZYDIS_MNEMONIC_MOVSX: case ZYDIS_MNEMONIC_MOVSXD: return Write(0, _builder.CreateSExt(ReadRegisterOrMemory(1, std::min(Bits(1), Bits(0))), Int(Bits(0))));
     case ZYDIS_MNEMONIC_LEA: return Write(0, _builder.CreateTrunc(Address(Operand(1), false), Int(Bits(0))));
     case ZYDIS_MNEMONIC_MOVBE: return Write(0, _builder.CreateUnaryIntrinsic(llvm::Intrinsic::bswap, Read(1)));
     case ZYDIS_MNEMONIC_BSWAP: return ByteSwap();
     case ZYDIS_MNEMONIC_PUSH: return Push(_builder.CreateSExtOrTrunc(Read(0), _builder.getIntNTy(_instruction->Info.operand_width)));
     case ZYDIS_MNEMONIC_POP: return Write(0, Pop(_instruction->Info.operand_width));
+    case ZYDIS_MNEMONIC_ENTER: return Enter();
     case ZYDIS_MNEMONIC_LEAVE: return Leave();
+    case ZYDIS_MNEMONIC_XLAT: return TableLookup();
     case ZYDIS_MNEMONIC_XCHG: return Exchange();
     case ZYDIS_MNEMONIC_XADD: return ExchangeAdd();
     case ZYDIS_MNEMONIC_CMPXCHG: return CompareExchange();
@@ -129,12 +137,14 @@ case ZYDIS_MNEMONIC_##prefix##231##suffix: return FloatArithmetic({F::Fma, Eleme
     case ZYDIS_MNEMONIC_IDIV: return Divide(true);
     case ZYDIS_MNEMONIC_CBW: case ZYDIS_MNEMONIC_CWDE: case ZYDIS_MNEMONIC_CDQE: case ZYDIS_MNEMONIC_CWD: case ZYDIS_MNEMONIC_CDQ: case ZYDIS_MNEMONIC_CQO:
         return SignExtendAccumulator(mnemonic);
-    case ZYDIS_MNEMONIC_SHL: case ZYDIS_MNEMONIC_SHR: case ZYDIS_MNEMONIC_SAR: case ZYDIS_MNEMONIC_ROL: case ZYDIS_MNEMONIC_ROR: return Shift(mnemonic);
+    case ZYDIS_MNEMONIC_SHL: case ZYDIS_MNEMONIC_SHR: case ZYDIS_MNEMONIC_SAR: case ZYDIS_MNEMONIC_ROL: case ZYDIS_MNEMONIC_ROR: case ZYDIS_MNEMONIC_RCL: case ZYDIS_MNEMONIC_RCR:
+        return Shift(mnemonic);
     case ZYDIS_MNEMONIC_SHLD: case ZYDIS_MNEMONIC_SHRD: return ShiftDouble(mnemonic);
     case ZYDIS_MNEMONIC_BSF: case ZYDIS_MNEMONIC_BSR: case ZYDIS_MNEMONIC_TZCNT: case ZYDIS_MNEMONIC_LZCNT: case ZYDIS_MNEMONIC_POPCNT: return BitScan(mnemonic);
     case ZYDIS_MNEMONIC_BT: case ZYDIS_MNEMONIC_BTS: case ZYDIS_MNEMONIC_BTR: case ZYDIS_MNEMONIC_BTC: return BitTest(mnemonic);
     case ZYDIS_MNEMONIC_ANDN: case ZYDIS_MNEMONIC_SHLX: case ZYDIS_MNEMONIC_SHRX: case ZYDIS_MNEMONIC_SARX: case ZYDIS_MNEMONIC_RORX: case ZYDIS_MNEMONIC_BEXTR:
     case ZYDIS_MNEMONIC_BZHI: case ZYDIS_MNEMONIC_BLSR: case ZYDIS_MNEMONIC_BLSI: case ZYDIS_MNEMONIC_BLSMSK: case ZYDIS_MNEMONIC_MULX:
+    case ZYDIS_MNEMONIC_PDEP: case ZYDIS_MNEMONIC_PEXT:
         return BitManipulation(mnemonic);
     case ZYDIS_MNEMONIC_CRC32: return Crc32();
 
@@ -167,9 +177,11 @@ case ZYDIS_MNEMONIC_##prefix##231##suffix: return FloatArithmetic({F::Fma, Eleme
     case ZYDIS_MNEMONIC_MOVDQA: case ZYDIS_MNEMONIC_MOVDQU: case ZYDIS_MNEMONIC_MOVQ: case ZYDIS_MNEMONIC_MOVD: case ZYDIS_MNEMONIC_MOVSS:
     case ZYDIS_MNEMONIC_VMOVAPS: case ZYDIS_MNEMONIC_VMOVUPS: case ZYDIS_MNEMONIC_VMOVAPD: case ZYDIS_MNEMONIC_VMOVUPD:
     case ZYDIS_MNEMONIC_VMOVDQA: case ZYDIS_MNEMONIC_VMOVDQU: case ZYDIS_MNEMONIC_VMOVQ: case ZYDIS_MNEMONIC_VMOVD:
-    case ZYDIS_MNEMONIC_MOVNTDQ: case ZYDIS_MNEMONIC_VMOVNTDQ: case ZYDIS_MNEMONIC_MOVNTPS: case ZYDIS_MNEMONIC_VMOVNTPS: case ZYDIS_MNEMONIC_MOVNTQ:
     case ZYDIS_MNEMONIC_MOVNTDQA: case ZYDIS_MNEMONIC_VMOVNTDQA: case ZYDIS_MNEMONIC_LDDQU: case ZYDIS_MNEMONIC_VLDDQU:
+    case ZYDIS_MNEMONIC_MOVQ2DQ: case ZYDIS_MNEMONIC_MOVDQ2Q:
         return VectorMove();
+    case ZYDIS_MNEMONIC_MOVNTI: case ZYDIS_MNEMONIC_MOVNTQ: case ZYDIS_MNEMONIC_MOVNTSD: case ZYDIS_MNEMONIC_MOVNTSS: PS5LIFT_BOTH(MOVNTPS): PS5LIFT_BOTH(MOVNTPD): PS5LIFT_BOTH(MOVNTDQ): return NonTemporalStore();
+    case ZYDIS_MNEMONIC_MASKMOVQ: PS5LIFT_BOTH(MASKMOVDQU): return MaskedByteStore();
     case ZYDIS_MNEMONIC_VMOVSS: return _instruction->Info.operand_count_visible == 3 ? MergeScalar(32) : VectorMove();
     case ZYDIS_MNEMONIC_VMOVSD: return _instruction->Info.operand_count_visible == 3 ? MergeScalar(64) : VectorMove();
     case ZYDIS_MNEMONIC_MOVHLPS: case ZYDIS_MNEMONIC_VMOVHLPS: case ZYDIS_MNEMONIC_MOVLHPS: case ZYDIS_MNEMONIC_VMOVLHPS:
@@ -178,7 +190,10 @@ case ZYDIS_MNEMONIC_##prefix##231##suffix: return FloatArithmetic({F::Fma, Eleme
         return HalfMove(mnemonic);
     case ZYDIS_MNEMONIC_VMASKMOVPS: case ZYDIS_MNEMONIC_VPMASKMOVD: return MaskedMove(32);
     case ZYDIS_MNEMONIC_VMASKMOVPD: case ZYDIS_MNEMONIC_VPMASKMOVQ: return MaskedMove(64);
+    case ZYDIS_MNEMONIC_VGATHERDPS: case ZYDIS_MNEMONIC_VGATHERDPD: case ZYDIS_MNEMONIC_VPGATHERDD: case ZYDIS_MNEMONIC_VPGATHERDQ: return Gather(32);
+    case ZYDIS_MNEMONIC_VGATHERQPS: case ZYDIS_MNEMONIC_VGATHERQPD: case ZYDIS_MNEMONIC_VPGATHERQD: case ZYDIS_MNEMONIC_VPGATHERQQ: return Gather(64);
     case ZYDIS_MNEMONIC_VZEROUPPER: return ZeroUpper();
+    case ZYDIS_MNEMONIC_VZEROALL: return ZeroAll();
     case ZYDIS_MNEMONIC_EMMS: return LeaveMmx();
     PS5LIFT_BOTH(PXOR): PS5LIFT_BOTH(XORPS): PS5LIFT_BOTH(XORPD): return VectorBitwise(llvm::Instruction::Xor);
     PS5LIFT_BOTH(PAND): PS5LIFT_BOTH(ANDPS): PS5LIFT_BOTH(ANDPD): return VectorBitwise(llvm::Instruction::And);
@@ -227,6 +242,10 @@ case ZYDIS_MNEMONIC_##prefix##231##suffix: return FloatArithmetic({F::Fma, Eleme
     PS5LIFT_BOTH(PHSUBD): return VectorBinary(K::HorizontalSub, 32);
     PS5LIFT_BOTH(PHSUBSW): return VectorBinary(K::HorizontalSubSaturate, 16);
     PS5LIFT_BOTH(PSADBW): return VectorBinary(K::SumAbsoluteDifferences, 64);
+    PS5LIFT_BOTH(MPSADBW): return MultipleSumAbsoluteDifferences();
+    PS5LIFT_BOTH(PSIGNB): return VectorBinary(K::Sign, 8);
+    PS5LIFT_BOTH(PSIGNW): return VectorBinary(K::Sign, 16);
+    PS5LIFT_BOTH(PSIGND): return VectorBinary(K::Sign, 32);
     case ZYDIS_MNEMONIC_VTESTPS: return VectorTestSigns(32);
     case ZYDIS_MNEMONIC_VTESTPD: return VectorTestSigns(64);
     PS5LIFT_BOTH(PMULHUW): return VectorBinary(K::MultiplyHighUnsigned, 16);
@@ -384,7 +403,7 @@ case ZYDIS_MNEMONIC_##prefix##231##suffix: return FloatArithmetic({F::Fma, Eleme
     PS5LIFT_BOTH(COMISD): PS5LIFT_BOTH(UCOMISD): return CompareScalar(64);
     PS5LIFT_BOTH(DPPS): return DotProduct(32);
     PS5LIFT_BOTH(DPPD): return DotProduct(64);
-    PS5LIFT_BOTH(LDMXCSR): return LoadMxcsr();
+    PS5LIFT_BOTH(LDMXCSR): return LoadMxcsr(Read(0));
     PS5LIFT_BOTH(STMXCSR): return StoreMxcsr();
 
     case ZYDIS_MNEMONIC_FLD: CallX87(PS5LIFT_X87_LOAD, X87Format(false), X87Address(), X87Index(0)); return;

@@ -429,9 +429,9 @@ void FunctionLifter::DotProduct(const unsigned element) {
     Write(0, FloatBits(result));
 }
 
-void FunctionLifter::LoadMxcsr() {
-    StateStore(Read(0), offsetof(Ps5LiftState, Mxcsr));
-    _builder.CreateCall(_module.Runtime("ps5lift_apply_mxcsr", llvm::FunctionType::get(_builder.getVoidTy(), {_module.Pointer()}, false)), {_state});
+void FunctionLifter::LoadMxcsr(llvm::Value* value) {
+    auto callee = _module.Runtime("ps5lift_load_mxcsr", llvm::FunctionType::get(_builder.getVoidTy(), {_module.Pointer(), _builder.getInt32Ty(), I64(), _module.Pointer()}, false));
+    _builder.CreateCall(callee, {_state, value, _builder.getInt64(_instruction->Address), _builder.CreateGlobalString(Mnemonic())});
 }
 
 void FunctionLifter::StoreMxcsr() {

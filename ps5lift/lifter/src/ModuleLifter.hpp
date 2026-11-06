@@ -42,6 +42,7 @@ public:
         auto* guestType = metadata.createTBAAScalarTypeNode("guest", root);
         _stateTag = metadata.createTBAAStructTagNode(stateType, stateType, 0);
         _guestTag = metadata.createTBAAStructTagNode(guestType, guestType, 0);
+        _unlikely = metadata.createBranchWeights(1, 1u << 20);
         _pointer = llvm::PointerType::get(_context, 0);
         _guestType = llvm::FunctionType::get(llvm::Type::getVoidTy(_context), {_pointer}, false);
     }
@@ -68,6 +69,7 @@ public:
     llvm::LLVMContext& Context() { return _context; }
     llvm::MDNode* StateTag() const { return _stateTag; }
     llvm::MDNode* GuestTag() const { return _guestTag; }
+    llvm::MDNode* Unlikely() const { return _unlikely; }
     llvm::PointerType* Pointer() const { return _pointer; }
     llvm::FunctionType* GuestType() const { return _guestType; }
     const LiftOptions& Options() const { return _options; }
@@ -90,6 +92,7 @@ private:
     llvm::FunctionType* _guestType = nullptr;
     llvm::MDNode* _stateTag = nullptr;
     llvm::MDNode* _guestTag = nullptr;
+    llvm::MDNode* _unlikely = nullptr;
 
     void LiftFunction(const GuestFunction& function);
 
@@ -102,7 +105,7 @@ private:
         unwinding->setMetadata(llvm::LLVMContext::MD_tbaa, _stateTag);
         auto* returned = llvm::BasicBlock::Create(_context, "returned", host);
         auto* unwind = llvm::BasicBlock::Create(_context, "unwind", host);
-        builder.CreateCondBr(builder.CreateICmpNE(unwinding, builder.getInt8(0)), unwind, returned, llvm::MDBuilder(_context).createBranchWeights(1, 1u << 20));
+        builder.CreateCondBr(builder.CreateICmpNE(unwinding, builder.getInt8(0)), unwind, returned, _unlikely);
         llvm::IRBuilder<>(unwind).CreateRetVoid();
         builder.SetInsertPoint(returned);
         auto* rsp = builder.CreateConstGEP1_64(builder.getInt8Ty(), state, offsetof(Ps5LiftState, Gpr) + 8 * PS5LIFT_RSP);

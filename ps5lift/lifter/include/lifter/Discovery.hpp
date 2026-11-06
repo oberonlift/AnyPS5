@@ -77,6 +77,7 @@ private:
 bool IsConditionalJump(ZydisMnemonic mnemonic);
 RegisterEffects InstructionEffects(const Instruction& instruction);
 std::optional<std::uint64_t> DirectTarget(const Instruction& instruction);
+bool DispatchesDirectTarget(const GuestImage& image, const Instruction& instruction);
 std::optional<std::uint64_t> ImportTarget(const GuestImage& image, const Instruction& instruction);
 std::string BridgeSymbol(const std::string& import);
 std::string Nid(std::string_view name);

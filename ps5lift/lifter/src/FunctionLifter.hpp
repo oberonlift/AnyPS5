@@ -16,6 +16,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <map>
 #include <optional>
 #include <stdexcept>
@@ -26,6 +27,8 @@
 namespace Ps5Lift::Lifting {
 
 enum class StringRead { Compare, Scan, Load };
+
+enum class StoreHint { None, NonTemporal };
 
 struct UnsupportedInstruction : std::runtime_error {
     using std::runtime_error::runtime_error;
@@ -60,6 +63,7 @@ private:
     llvm::AllocaInst* _gpr[PS5LIFT_GPR_COUNT]{};
     llvm::AllocaInst* _flags[PS5LIFT_FLAG_COUNT]{};
     static constexpr int VectorCount = 16;
+    static constexpr unsigned PartBits = 128;
     llvm::AllocaInst* _vectors[VectorCount]{};
     std::array<bool, PS5LIFT_GPR_COUNT> _usedGprs{};
     std::array<bool, VectorCount> _usedVectors{};
@@ -67,6 +71,7 @@ private:
     bool _assignsStackPointer = false;
     bool _framePointer = false;
     bool _frameEscapes = false;
+    bool _wholeAccesses = false;
     std::map<std::uint64_t, llvm::BasicBlock*> _blocks;
     const Instruction* _instruction = nullptr;
     llvm::Value* _entryRsp = nullptr;
@@ -87,6 +92,7 @@ private:
     bool CrossesCalls(const int flag) const;
     void Flush(const RegisterSet registers = EveryRegister);
     void Reload(const RegisterSet registers = EveryRegister);
+    void ForgetFlagsAcrossCall();
     bool Terminated() const;
     void StartDeadBlock();
     llvm::Value* Gpr(const int index);
@@ -97,18 +103,23 @@ private:
     void SetVector(const int index, llvm::Value* value);
     void WriteVector(const int index, llvm::Value* value, const bool zeroUpper);
     std::size_t MmxOffset(const int index) const;
-    bool UsesMmx() const;
+    bool HasRegisterOperand(int (*index)(ZydisRegister)) const;
     void EnterMmx();
     llvm::Value* ReadRegister(const ZydisRegister reg);
     void WriteRegister(const ZydisRegister reg, llvm::Value* value);
     llvm::Value* Address(const ZydisDecodedOperand& operand, const bool applySegment = true);
+    llvm::Value* IndexedAddress(const ZydisDecodedOperand& operand, llvm::Value* index, const bool applySegment = true);
+    llvm::Value* ApplySegment(llvm::Value* address, const ZydisRegister segment);
     bool NeedsOrdering(const ZydisDecodedOperand& operand, const unsigned bits) const;
     bool InPrivateFrame(const ZydisDecodedOperand& operand) const;
     bool InReadOnlySegment(const ZydisDecodedOperand& operand, const unsigned bits) const;
     llvm::Value* Load(llvm::Value* address, const unsigned bits, const bool ordered);
     void Store(llvm::Value* address, llvm::Value* value, const bool ordered);
-    llvm::LoadInst* GuestLoad(llvm::Value* address, const unsigned bits);
-    llvm::StoreInst* GuestStore(llvm::Value* address, llvm::Value* value);
+    llvm::Value* GuestPointer(llvm::Value* address);
+    llvm::Value* GuestLoad(llvm::Value* address, const unsigned bits);
+    void GuestStore(llvm::Value* address, llvm::Value* value, const StoreHint hint = StoreHint::None, const llvm::Align alignment = llvm::Align(1));
+    llvm::LoadInst* GuestLoadPart(llvm::Value* address, llvm::Type* type);
+    llvm::StoreInst* GuestStorePart(llvm::Value* address, llvm::Value* value);
 
     template <typename Access>
     Access* Ordered(Access* access, const llvm::AtomicOrdering ordering) {
@@ -130,8 +141,11 @@ private:
     llvm::Value* ReadVector(const int index, const unsigned bits);
     llvm::Value* ReadAs(const int index, const unsigned bits);
     void Write(const int index, llvm::Value* value);
+    void WriteUnlessKept(const int index, llvm::Value* value, llvm::Value* keep);
+    void WriteRegisterUnlessKept(const ZydisRegister reg, llvm::Value* value, llvm::Value* keep);
     llvm::Value* SignBit(llvm::Value* value);
     llvm::Value* Parity(llvm::Value* value);
+    llvm::Value* ConcatenateIntegers(llvm::Value* low, llvm::Value* high);
     void ResultFlags(llvm::Value* result);
     void AdjustFlag(llvm::Value* a, llvm::Value* b, llvm::Value* result);
     void LogicFlags(llvm::Value* result);
@@ -146,10 +160,13 @@ private:
     llvm::BasicBlock* UnwindBlock();
     llvm::FunctionCallee DispatchCallee();
     void TailCall(const std::uint64_t target);
+    void TailDispatch(llvm::Value* destination);
     llvm::BasicBlock* Target(const std::uint64_t target);
+    llvm::BasicBlock* BranchTarget();
     std::string Mnemonic() const;
     void Unsupported(const std::string& what);
-    void Stop(const Ps5LiftStopKind kind, const std::uint64_t detail, const std::string& mnemonic);
+    void Stop(const Ps5LiftStopKind kind, const std::uint64_t detail, const std::string& text);
+    void StopIf(llvm::Value* condition, const Ps5LiftStopKind kind, const std::uint64_t detail, const std::string& text);
     void StopOutside(const Ps5LiftStopKind kind, MnemonicCounts& counts, const std::uint64_t detail, const std::string& text);
     void StopNotOnPs5();
     void StopPrivileged();
@@ -158,6 +175,7 @@ private:
     void StringOp(const Ps5LiftStringOperation operation, const unsigned width);
     void ReadString(const StringRead kind, const unsigned width);
     bool Locked() const;
+    const ZydisDecodedOperand* MemoryOperand() const;
     llvm::Value* MemoryPointer(const int index);
     void Shift(const ZydisMnemonic mnemonic);
     void ShiftDouble(const ZydisMnemonic mnemonic);
@@ -173,29 +191,13 @@ private:
     llvm::Value* BitUpdate(const ZydisMnemonic mnemonic, llvm::Value* value, llvm::Value* mask);
     llvm::Value* BitStringAddress(llvm::Value* offset);
     static bool Lockable(const ZydisMnemonic mnemonic);
+    bool MaySplit(const unsigned bits) const;
+    llvm::Value* LockedAccess(llvm::Value* address, const unsigned bits, const std::function<llvm::Value*()>& atomic, const std::function<llvm::Value*(llvm::Value* old)>& update);
     llvm::Value* AtomicUpdate(const llvm::AtomicRMWInst::BinOp operation, llvm::Value* operand);
     llvm::Value* AtomicUpdate(llvm::Value* address, const llvm::AtomicRMWInst::BinOp operation, llvm::Value* operand);
-
-    template <typename Update>
-    llvm::Value* AtomicLoop(const unsigned bits, Update update) {
-        auto* pointer = MemoryPointer(0);
-        auto* initial = _builder.CreateAlignedLoad(Int(bits), pointer, llvm::Align(bits / 8));
-        initial->setAtomic(llvm::AtomicOrdering::Monotonic);
-        initial->setMetadata(llvm::LLVMContext::MD_tbaa, _module.GuestTag());
-        auto* entry = _builder.GetInsertBlock();
-        auto* loop = llvm::BasicBlock::Create(Context(), "atomic", _host);
-        auto* done = llvm::BasicBlock::Create(Context(), "atomic_done", _host);
-        _builder.CreateBr(loop);
-        _builder.SetInsertPoint(loop);
-        auto* old = _builder.CreatePHI(Int(bits), 2);
-        old->addIncoming(initial, entry);
-        auto* exchange = _builder.CreateAtomicCmpXchg(pointer, old, update(old), llvm::MaybeAlign(bits / 8), llvm::AtomicOrdering::SequentiallyConsistent, llvm::AtomicOrdering::SequentiallyConsistent);
-        old->addIncoming(_builder.CreateExtractValue(exchange, 0), loop);
-        _builder.CreateCondBr(_builder.CreateExtractValue(exchange, 1), done, loop);
-        _builder.SetInsertPoint(done);
-        return old;
-    }
-
+    llvm::Value* AtomicLoop(const std::function<llvm::Value*(llvm::Value* old)>& update);
+    llvm::Value* AtomicCompareExchange(llvm::Value* expected, llvm::Value* desired);
+    llvm::Value* CompareExchangeResult(llvm::Value* old, llvm::Value* expected, llvm::Value* desired);
     bool LockedMemory() const;
     void Exchange();
     void ExchangeAdd();
@@ -205,7 +207,10 @@ private:
     void SignExtendAccumulator(const ZydisMnemonic mnemonic);
     void VectorBitwise(const llvm::Instruction::BinaryOps operation);
     void VectorMove();
+    void NonTemporalStore();
+    void MaskedByteStore();
     void BitManipulation(const ZydisMnemonic mnemonic);
+    void ParallelBits(const bool deposit);
     llvm::Value* LowRdx(const unsigned bits);
     void Broadcast(const unsigned elementBits);
 
@@ -213,7 +218,7 @@ private:
         Add, Sub, AddSignedSaturate, AddUnsignedSaturate, SubSignedSaturate, SubUnsignedSaturate,
         MultiplyLow, MultiplyHighSigned, MultiplyHighUnsigned, MultiplyHighRoundScale, MultiplyEvenUnsigned, MultiplyEvenSigned, MultiplyAddWords, MultiplyAddBytes,
         HorizontalAdd, HorizontalAddSaturate, HorizontalSub, HorizontalSubSaturate, SumAbsoluteDifferences,
-        MinSigned, MaxSigned, MinUnsigned, MaxUnsigned, CompareEqual, CompareGreater, Average, AndNot,
+        MinSigned, MaxSigned, MinUnsigned, MaxUnsigned, CompareEqual, CompareGreater, Average, AndNot, Sign,
         UnpackLow, UnpackHigh, PackSignedSaturate, PackUnsignedSaturate, ShuffleBytes, PermuteDwords
     };
 
@@ -229,6 +234,7 @@ private:
     llvm::Value* ShiftByCount(const llvm::Instruction::BinaryOps shift, llvm::Value* vector, llvm::Value* counts, const unsigned element);
     llvm::Value* Pairs(llvm::Value* vector, const unsigned count, const unsigned offset);
     llvm::Value* Saturate(llvm::Value* wide, const unsigned element, const bool isSigned);
+    llvm::Value* AbsoluteDifferences(llvm::Value* a, llvm::Value* b);
     ZydisRegister HiddenRegister(std::initializer_list<ZydisRegister> candidates) const;
     void StringCompare(const bool explicitLengths, const bool index);
     void Crypto(const ZydisMnemonic mnemonic);
@@ -255,6 +261,8 @@ private:
 
     VectorOperands ReadVectorOperands(const int base, const unsigned width, const unsigned element);
     void VectorBinary(const VectorKind kind, const unsigned element);
+    void MultipleSumAbsoluteDifferences();
+    void Gather(const unsigned indexBits);
     void VectorShiftVariable(const llvm::Instruction::BinaryOps shift, const unsigned element);
     void ShufflePairs();
     void AlignRight();
@@ -318,7 +326,7 @@ private:
     void MinimumPosition();
     void PermuteVariable(const unsigned element);
     void MaskedMove(const unsigned element);
-    void LoadMxcsr();
+    void LoadMxcsr(llvm::Value* value);
     void StoreMxcsr();
     void DuplicateSingles(const bool high);
     void DuplicateDoubles();
@@ -328,7 +336,6 @@ private:
     llvm::Value* CallX87(const std::uint32_t operation, const std::uint32_t format, llvm::Value* address, const std::uint32_t index);
     static bool IsStackRegister(const ZydisDecodedOperand& operand);
     static std::uint32_t StackIndex(const ZydisDecodedOperand& operand);
-    const ZydisDecodedOperand* X87Memory() const;
     std::uint32_t X87Format(const bool integer) const;
     std::uint32_t X87Index(const std::uint32_t fallback) const;
     bool X87ToRegister() const;
@@ -340,6 +347,8 @@ private:
     void X87SaveState();
     void X87RestoreState();
     void X87ConditionalMove(const ZydisMnemonic mnemonic);
+    void CheckAlignment();
+    llvm::Align CheckedAlignment() const;
     void EmitInstruction(const Instruction& instruction);
     llvm::Value* Loop(const ZydisMnemonic mnemonic);
     void Branch(llvm::Value* condition);
@@ -350,10 +359,12 @@ private:
     void ProcessorId();
     void TimeStamp();
     void TimeStampAndProcessor();
-    void LoadFlagsIntoAh();
-    void StoreAhIntoFlags();
+    llvm::Value* FlagImage(const unsigned bits);
+    void SetFlagsFromImage(llvm::Value* image);
+    void PopFlags();
     void LeaveMmx();
     void CacheLine(const char* function);
+    void ClearCacheLine();
     void Cpuid();
     void ExtendedControlRegister();
     void Addition();
@@ -365,10 +376,14 @@ private:
     void Negation();
     void Complement();
     void ByteSwap();
+    void Enter();
     void Leave();
+    void TableLookup();
     void MergeScalar(const unsigned element);
     void ZeroUpper();
+    void ZeroAll();
     void Call();
+    void PushAndCall(llvm::Value* callee, const RegisterEffects& effects, llvm::ArrayRef<llvm::Value*> extra = {});
     void Jump();
     void Return();
     void EmitSemantics(const ZydisMnemonic mnemonic);

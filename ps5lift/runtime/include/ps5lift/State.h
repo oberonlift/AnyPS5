@@ -39,6 +39,9 @@ enum Ps5LiftFlag {
     PS5LIFT_FLAG_COUNT
 };
 
+#define PS5LIFT_USER_MODE_RFLAGS 0x202u
+static const uint8_t PS5LIFT_RFLAGS_BIT[PS5LIFT_FLAG_COUNT] = {0, 2, 4, 6, 7, 11, 10};
+
 typedef struct Ps5LiftState {
     uint64_t Gpr[PS5LIFT_GPR_COUNT];
     uint64_t Rip;
@@ -150,7 +153,9 @@ enum Ps5LiftStopKind {
     PS5LIFT_STOP_GENERAL_PROTECTION = 3,
     PS5LIFT_STOP_CONSOLE_KERNEL = 4,
     PS5LIFT_STOP_MISSING_TRANSLATION = 5,
-    PS5LIFT_STOP_SEGMENT_TABLES = 6
+    PS5LIFT_STOP_SEGMENT_TABLES = 6,
+    PS5LIFT_STOP_PAGE_FAULT = 7,
+    PS5LIFT_STOP_NEEDS_EXACT_FLOAT = 8
 };
 
 enum Ps5LiftInvalidOpcode {
@@ -159,7 +164,7 @@ enum Ps5LiftInvalidOpcode {
 };
 
 typedef void (*Ps5LiftFunction)(Ps5LiftState*);
-typedef void (*Ps5LiftStopHandler)(Ps5LiftState*, uint32_t kind, uint64_t address, uint64_t detail, const char* mnemonic);
+typedef void (*Ps5LiftStopHandler)(Ps5LiftState*, uint32_t kind, uint64_t address, uint64_t detail, const char* text);
 
 typedef struct Ps5LiftFunctionEntry {
     uint64_t GuestAddress;
@@ -214,6 +219,11 @@ typedef struct Ps5LiftImage {
     uint64_t ExportCount;
 } Ps5LiftImage;
 
+enum Ps5LiftFloatModel {
+    PS5LIFT_FLOAT_EXACT = 0,
+    PS5LIFT_FLOAT_FAST = 1
+};
+
 typedef struct Ps5LiftProgram {
     const Ps5LiftImage* Images;
     uint64_t ImageCount;
@@ -222,17 +232,19 @@ typedef struct Ps5LiftProgram {
     const Ps5LiftFunctionEntry* Functions;
     uint64_t FunctionCount;
     uint64_t Entry;
+    uint64_t FloatModel;
 } Ps5LiftProgram;
 
 void ps5lift_use_program(const Ps5LiftProgram* program);
 
 void ps5lift_dispatch(Ps5LiftState* state, uint64_t target);
-Ps5LiftFunction ps5lift_resolve(uint64_t target);
+Ps5LiftFunction ps5lift_resolve(Ps5LiftState* state, uint64_t target);
 Ps5LiftFunction ps5lift_resolve_jump(Ps5LiftState* state, uint64_t target);
 [[noreturn]] void ps5lift_fail_unresumed(const Ps5LiftState* state, const char* frames);
-#define PS5LIFT_MXCSR_MASK 0xffffu
+#define PS5LIFT_MXCSR_MASK 0x2ffffu
+#define PS5LIFT_MXCSR_MISALIGNED_SSE 0x20000u
 
-void ps5lift_apply_mxcsr(Ps5LiftState* state);
+void ps5lift_load_mxcsr(Ps5LiftState* state, uint32_t value, uint64_t address, const char* loader);
 uint32_t ps5lift_read_mxcsr(Ps5LiftState* state);
 uint32_t ps5lift_x87(Ps5LiftState* state, uint32_t operation, uint32_t format, uint64_t address, uint32_t index);
 void ps5lift_extended_operation(Ps5LiftState* state, uint32_t operation, const void* left, const void* right, void* result);
@@ -255,10 +267,12 @@ uint64_t ps5lift_random(void);
 uint32_t ps5lift_processor_id(void);
 void ps5lift_flush_cache_line(uint64_t address);
 void ps5lift_write_back_cache_line(uint64_t address);
+void ps5lift_split_lock_begin(uint64_t address, uint64_t bytes);
+void ps5lift_split_lock_end(void);
 void ps5lift_cpuid(Ps5LiftState* state, uint64_t address);
 uint64_t ps5lift_xgetbv(uint64_t address, uint32_t index);
 [[noreturn, gnu::format(printf, 1, 2)]] void ps5lift_fail(const char* format, ...);
-[[noreturn]] void ps5lift_stop(Ps5LiftState* state, uint32_t kind, uint64_t address, uint64_t detail, const char* mnemonic);
+[[noreturn]] void ps5lift_stop(Ps5LiftState* state, uint32_t kind, uint64_t address, uint64_t detail, const char* text);
 void ps5lift_set_stop_handler(Ps5LiftStopHandler handler);
 void ps5lift_unknown_resume(Ps5LiftState* state, uint64_t function, uint64_t resume);
 void ps5lift_left_jump_table(Ps5LiftState* state, uint64_t address);

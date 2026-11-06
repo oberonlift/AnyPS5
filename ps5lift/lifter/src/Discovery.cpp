@@ -28,7 +28,10 @@ bool EndsFlow(const Instruction& instruction) {
     switch (instruction.Info.mnemonic) {
     case ZYDIS_MNEMONIC_RET:
     case ZYDIS_MNEMONIC_JMP:
+    case ZYDIS_MNEMONIC_UD0:
+    case ZYDIS_MNEMONIC_UD1:
     case ZYDIS_MNEMONIC_UD2:
+    case ZYDIS_MNEMONIC_RSM:
     case ZYDIS_MNEMONIC_HLT:
     case ZYDIS_MNEMONIC_INT3:
         return true;
@@ -563,11 +566,12 @@ GuestFunction DiscoverFunction(const GuestImage& image, const Decoder& decoder, 
                 const auto instruction = DecodeReached(image, decoder, entry, address, start, from);
                 function.Instructions.emplace(address, instruction);
                 const auto target = DirectTarget(instruction);
+                const auto followed = DispatchesDirectTarget(image, instruction) ? std::nullopt : target;
                 const auto mnemonic = instruction.Info.mnemonic;
-                if (mnemonic == ZYDIS_MNEMONIC_CALL && target) {
-                    if (!image.IsExecutable(*target) && !image.Imports().contains(*target))
-                        throw UndecodableCode("The call at 0x" + Hex(address) + " in the function at 0x" + Hex(entry) + " reaches 0x" + Hex(*target) + ", outside executable segments");
-                    reachedStarts.insert(*target);
+                if (mnemonic == ZYDIS_MNEMONIC_CALL && followed) {
+                    if (!image.IsExecutable(*followed) && !image.Imports().contains(*followed))
+                        throw UndecodableCode("The call at 0x" + Hex(address) + " in the function at 0x" + Hex(entry) + " reaches 0x" + Hex(*followed) + ", outside executable segments");
+                    reachedStarts.insert(*followed);
                 }
                 if (mnemonic == ZYDIS_MNEMONIC_CALL) {
                     if (const auto import = CalledImport(image, decoder, instruction); import && ReturnsTwice(*import)) {
@@ -577,9 +581,9 @@ GuestFunction DiscoverFunction(const GuestImage& image, const Decoder& decoder, 
                     }
                 }
                 if (mnemonic == ZYDIS_MNEMONIC_JMP && !target && ImportTarget(image, instruction)) break;
-                if ((mnemonic == ZYDIS_MNEMONIC_JMP || IsConditionalJump(mnemonic)) && target && ownCode(*target)) {
-                    function.Leaders.insert(*target);
-                    pending.emplace_back(*target, address);
+                if ((mnemonic == ZYDIS_MNEMONIC_JMP || IsConditionalJump(mnemonic)) && followed && ownCode(*followed)) {
+                    function.Leaders.insert(*followed);
+                    pending.emplace_back(*followed, address);
                 }
                 if (IsConditionalJump(mnemonic) && ownCode(instruction.Next())) function.Leaders.insert(instruction.Next());
                 if (mnemonic == ZYDIS_MNEMONIC_JMP && !target && instruction.Info.meta.branch_type != ZYDIS_BRANCH_TYPE_FAR) indirectJumps.push_back(address);
@@ -733,7 +737,7 @@ RegisterEffects InstructionEffects(const Instruction& instruction) {
     };
     RegisterEffects effects;
     const auto mnemonic = instruction.Info.mnemonic;
-    if (mnemonic == ZYDIS_MNEMONIC_VZEROUPPER) {
+    if (mnemonic == ZYDIS_MNEMONIC_VZEROUPPER || mnemonic == ZYDIS_MNEMONIC_VZEROALL) {
         constexpr auto vectors = EveryRegister << FirstVectorBit;
         effects = {vectors, vectors};
     }
@@ -778,9 +782,16 @@ bool IsConditionalJump(const ZydisMnemonic mnemonic) {
 }
 
 std::optional<std::uint64_t> DirectTarget(const Instruction& instruction) {
+    constexpr std::uint64_t ShortTargetMask = 0xffff;
     const auto& operand = instruction.Operands[0];
     if (operand.type != ZYDIS_OPERAND_TYPE_IMMEDIATE || !operand.imm.is_relative) return std::nullopt;
-    return instruction.Next() + operand.imm.value.u;
+    const auto target = instruction.Next() + operand.imm.value.u;
+    return instruction.Info.operand_width == 16 ? target & ShortTargetMask : target;
+}
+
+bool DispatchesDirectTarget(const GuestImage& image, const Instruction& instruction) {
+    const auto target = DirectTarget(instruction);
+    return target && instruction.Info.operand_width == 16 && !image.IsExecutable(*target);
 }
 
 std::optional<std::uint64_t> ImportTarget(const GuestImage& image, const Instruction& instruction) {

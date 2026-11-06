@@ -19,7 +19,7 @@ void FunctionLifter::StringOp(const Ps5LiftStringOperation operation, const unsi
     Flush();
     if (ordered) _builder.CreateFence(llvm::AtomicOrdering::SequentiallyConsistent);
     auto callee = _module.Runtime("ps5lift_string_op", llvm::FunctionType::get(_builder.getVoidTy(), {_module.Pointer(), _builder.getInt32Ty(), _builder.getInt32Ty(), _builder.getInt32Ty(), I64()}, false));
-    const bool repeat = (_instruction->Info.attributes & ZYDIS_ATTRIB_HAS_REP) != 0;
+    const bool repeat = (_instruction->Info.attributes & (ZYDIS_ATTRIB_HAS_REP | ZYDIS_ATTRIB_HAS_REPNE)) != 0;
     _builder.CreateCall(callee, {_state, _builder.getInt32(static_cast<std::uint32_t>(operation)), _builder.getInt32(width), _builder.getInt32(repeat ? 1 : 0), sourceBase});
     if (ordered) _builder.CreateFence(llvm::AtomicOrdering::SequentiallyConsistent);
     for (const int index : {PS5LIFT_RCX, PS5LIFT_RSI, PS5LIFT_RDI}) {
