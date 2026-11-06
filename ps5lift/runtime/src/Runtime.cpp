@@ -248,7 +248,7 @@ void PrepareState(Ps5LiftState& state, std::uint8_t* const tls, const std::uint3
         std::memcpy(reinterpret_cast<void*>(threadPointer - image.TlsOffset), reinterpret_cast<const void*>(image.TlsAddress), image.TlsFileSize);
     }
     state.FsBase = threadPointer;
-    state.Mxcsr = mxcsr & ~0x3fu;
+    state.Mxcsr = mxcsr & ~PS5LIFT_MXCSR_EXCEPTIONS;
     state.X87Control = ConsoleX87Control;
 }
 
@@ -304,7 +304,6 @@ void StartMain(std::uint64_t& entry) {
 
 namespace {
 
-constexpr std::uint32_t MxcsrExceptionMasks = PS5LIFT_MXCSR_EXCEPTIONS << PS5LIFT_MXCSR_MASK_SHIFT;
 
 #if defined(__aarch64__)
 struct HostFlag {
@@ -328,7 +327,7 @@ std::uint32_t HostExceptions() {
 #elif defined(__x86_64__)
     return _mm_getcsr() & PS5LIFT_MXCSR_EXCEPTIONS & ~PS5LIFT_MXCSR_DENORMAL_OPERAND;
 #else
-    return 0;
+#error "ps5lift's runtime reads the exception flags of aarch64 and x86-64 hosts only"
 #endif
 }
 
@@ -344,14 +343,14 @@ void ApplyMxcsr(Ps5LiftState* state) {
     std::uint64_t fpcr = 0;
     __asm__ volatile("mrs %0, fpcr" : "=r"(fpcr));
     fpcr &= ~(FlushToZero | (std::uint64_t{3} << RoundingShift));
-    fpcr |= Rounding[(mxcsr >> 13) & 3] << RoundingShift;
+    fpcr |= Rounding[(mxcsr >> PS5LIFT_MXCSR_ROUNDING_SHIFT) & 3] << RoundingShift;
     if (flushing != 0) fpcr |= FlushToZero;
     __asm__ volatile("msr fpcr, %0" : : "r"(fpcr));
     std::uint64_t fpsr = 0;
     __asm__ volatile("mrs %0, fpsr" : "=r"(fpsr));
     __asm__ volatile("msr fpsr, %0" : : "r"(fpsr & ~FpsrExceptions));
 #elif defined(__x86_64__)
-    _mm_setcsr((mxcsr & ~(PS5LIFT_MXCSR_EXCEPTIONS | PS5LIFT_MXCSR_MISALIGNED_SSE | MxcsrFlushing)) | flushing | MxcsrExceptionMasks);
+    _mm_setcsr((mxcsr & ~(PS5LIFT_MXCSR_EXCEPTIONS | PS5LIFT_MXCSR_MISALIGNED_SSE | MxcsrFlushing)) | flushing | PS5LIFT_MXCSR_EXCEPTION_MASKS);
 #endif
 }
 
@@ -366,7 +365,7 @@ void ApplyMxcsr(Ps5LiftState* state) {
 
 extern "C" void ps5lift_load_mxcsr(Ps5LiftState* state, const std::uint32_t value, const std::uint64_t address, const char* loader) {
     if ((value & ~PS5LIFT_MXCSR_MASK) != 0) StopMxcsrLoad(state, PS5LIFT_STOP_GENERAL_PROTECTION, address, loader, "loads a reserved MXCSR bit");
-    if (Ps5Lift::Program().FloatModel == PS5LIFT_FLOAT_FAST && (value & MxcsrExceptionMasks) != MxcsrExceptionMasks) {
+    if (Ps5Lift::Program().FloatModel == PS5LIFT_FLOAT_FAST && (value & PS5LIFT_MXCSR_EXCEPTION_MASKS) != PS5LIFT_MXCSR_EXCEPTION_MASKS) {
         StopMxcsrLoad(state, PS5LIFT_STOP_NEEDS_EXACT_FLOAT, address, loader, "unmasks a SIMD floating-point exception, which needs --float exact");
     }
     state->Mxcsr = value;

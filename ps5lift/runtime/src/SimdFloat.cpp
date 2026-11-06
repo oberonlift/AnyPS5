@@ -13,9 +13,6 @@ extern "C" {
 
 namespace {
 
-constexpr unsigned RoundingShift = 13;
-constexpr std::size_t SlotBytes = 32;
-
 struct Single {
     using Bits = std::uint32_t;
     using Value = float32_t;
@@ -66,13 +63,13 @@ struct Raised {
 template <typename Format>
 typename Format::Bits Load(const std::uint8_t* lanes, const unsigned slot, const unsigned lane) {
     typename Format::Bits bits;
-    std::memcpy(&bits, lanes + slot * SlotBytes + lane * sizeof(bits), sizeof(bits));
+    std::memcpy(&bits, lanes + slot * PS5LIFT_SIMD_SLOT_BYTES + lane * sizeof(bits), sizeof(bits));
     return bits;
 }
 
 template <typename Format>
 void Store(std::uint8_t* lanes, const unsigned lane, const typename Format::Bits bits) {
-    std::memcpy(lanes + lane * sizeof(bits), &bits, sizeof(bits));
+    std::memcpy(lanes + PS5LIFT_SIMD_RESULT_SLOT * PS5LIFT_SIMD_SLOT_BYTES + lane * sizeof(bits), &bits, sizeof(bits));
 }
 
 template <typename Source, typename Result, std::size_t Count, typename Compute>
@@ -115,23 +112,23 @@ Raised Arithmetic(const Environment& environment, const std::uint32_t operation,
     using Operands3 = std::array<typename Format::Value, 3>;
     Raised raised;
     for (unsigned lane = 0; lane < count; ++lane) {
-        const auto source = [&](const unsigned slot) { return Load<Format>(lanes, slot, lane); };
+        const auto source = [&](const unsigned index) { return Load<Format>(lanes, PS5LIFT_SIMD_FIRST_SOURCE_SLOT + index, lane); };
         Bits result = 0;
         switch (operation) {
         case PS5LIFT_SIMD_ADD:
-            result = Lane<Format, Format, 2>(environment, {source(1), source(2)}, [](const Operands2& x) { return Format::Add(x[0], x[1]); }, raised);
+            result = Lane<Format, Format, 2>(environment, {source(0), source(1)}, [](const Operands2& x) { return Format::Add(x[0], x[1]); }, raised);
             break;
         case PS5LIFT_SIMD_MULTIPLY:
-            result = Lane<Format, Format, 2>(environment, {source(1), source(2)}, [](const Operands2& x) { return Format::Multiply(x[0], x[1]); }, raised);
+            result = Lane<Format, Format, 2>(environment, {source(0), source(1)}, [](const Operands2& x) { return Format::Multiply(x[0], x[1]); }, raised);
             break;
         case PS5LIFT_SIMD_DIVIDE:
-            result = Lane<Format, Format, 2>(environment, {source(1), source(2)}, [](const Operands2& x) { return Format::Divide(x[0], x[1]); }, raised);
+            result = Lane<Format, Format, 2>(environment, {source(0), source(1)}, [](const Operands2& x) { return Format::Divide(x[0], x[1]); }, raised);
             break;
         case PS5LIFT_SIMD_SQRT:
-            result = Lane<Format, Format, 1>(environment, {source(1)}, [](const Operands1& x) { return Format::Sqrt(x[0]); }, raised);
+            result = Lane<Format, Format, 1>(environment, {source(0)}, [](const Operands1& x) { return Format::Sqrt(x[0]); }, raised);
             break;
         case PS5LIFT_SIMD_FMA:
-            result = Lane<Format, Format, 3>(environment, {source(1), source(2), source(3)}, [](const Operands3& x) { return Format::Fma(x[0], x[1], x[2]); }, raised);
+            result = Lane<Format, Format, 3>(environment, {source(0), source(1), source(2)}, [](const Operands3& x) { return Format::Fma(x[0], x[1], x[2]); }, raised);
             break;
         default:
             ps5lift_fail("unknown SIMD floating-point operation %u on %zu-bit elements", operation, sizeof(Bits) * 8);
@@ -145,7 +142,7 @@ template <typename Source, typename Result, typename Convert>
 Raised Conversion(const Environment& environment, const std::uint32_t count, std::uint8_t* lanes, const Convert& convert) {
     Raised raised;
     for (unsigned lane = 0; lane < count; ++lane) {
-        const auto result = Lane<Source, Result, 1>(environment, {Load<Source>(lanes, 1, lane)}, [&](const std::array<typename Source::Value, 1>& x) { return convert(x[0]); }, raised);
+        const auto result = Lane<Source, Result, 1>(environment, {Load<Source>(lanes, PS5LIFT_SIMD_FIRST_SOURCE_SLOT, lane)}, [&](const std::array<typename Source::Value, 1>& x) { return convert(x[0]); }, raised);
         Store<Result>(lanes, lane, result);
     }
     return raised;
@@ -173,8 +170,8 @@ Ps5Lift::SoftFloatEnvironment::~SoftFloatEnvironment() {
 extern "C" std::uint32_t ps5lift_simd_float(Ps5LiftState* state, const std::uint32_t operation, const std::uint32_t element, const std::uint32_t count, std::uint8_t* lanes) {
     static constexpr std::uint_fast8_t Rounding[4] = {softfloat_round_near_even, softfloat_round_min, softfloat_round_max, softfloat_round_minMag};
     const auto mxcsr = state->Mxcsr;
-    const auto unmasked = ~(mxcsr >> PS5LIFT_MXCSR_MASK_SHIFT) & PS5LIFT_MXCSR_EXCEPTIONS;
-    softfloat_roundingMode = Rounding[(mxcsr >> RoundingShift) & 3];
+    const auto unmasked = ~(mxcsr >> PS5LIFT_MXCSR_EXCEPTION_MASK_SHIFT) & PS5LIFT_MXCSR_EXCEPTIONS;
+    softfloat_roundingMode = Rounding[(mxcsr >> PS5LIFT_MXCSR_ROUNDING_SHIFT) & 3];
     softfloat_detectTininess = softfloat_tininess_afterRounding;
     const Environment environment{(mxcsr & PS5LIFT_MXCSR_DENORMALS_ARE_ZERO) != 0, (mxcsr & PS5LIFT_MXCSR_FLUSH_TO_ZERO) != 0, (unmasked & PS5LIFT_MXCSR_UNDERFLOW) != 0};
     const auto raised = Compute(environment, operation, element, count, lanes);

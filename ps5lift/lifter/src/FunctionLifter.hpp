@@ -311,7 +311,7 @@ private:
     llvm::Value* DenormalFlag(std::initializer_list<llvm::Value*> sources);
     void RaiseSimdExceptions(llvm::Value* before, llvm::Value* after);
     llvm::Value* BiasedExponent(llvm::Value* value);
-    llvm::Value* ExponentBelow(llvm::Value* value, const std::uint64_t limit);
+    llvm::Value* NonzeroBelowExponent(llvm::Value* value, const std::uint64_t limit);
     llvm::Value* SumExceptional(llvm::Value* a, llvm::Value* b);
     llvm::Value* ProductExceptional(llvm::Value* a, llvm::Value* b, const std::uint64_t limit);
     llvm::Value* MultiplyExceptional(llvm::Value* a, llvm::Value* b);
@@ -331,6 +331,7 @@ private:
     llvm::Value* RoundValue(llvm::Value* value, const std::uint64_t control);
     llvm::Value* CompareMask(llvm::Value* a, llvm::Value* b, const std::uint64_t predicate);
     llvm::Value* FusedMultiplyAdd(const FloatSpec& spec, llvm::Value* x1, llvm::Value* x2, llvm::Value* x3);
+    std::pair<llvm::Value*, llvm::Value*> ComparedOperands(llvm::Value* a, llvm::Value* b, llvm::Value* nan, const bool signaling);
     llvm::Value* LoadScalarFloat(const int index, const unsigned element);
     void FloatArithmetic(const FloatSpec& spec);
     llvm::Value* ConvertNan(llvm::Value* source, llvm::Value* converted);

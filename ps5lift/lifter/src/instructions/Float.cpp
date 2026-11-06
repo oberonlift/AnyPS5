@@ -9,7 +9,12 @@
 namespace Ps5Lift::Lifting {
 
 unsigned FunctionLifter::FractionBits(const unsigned element) {
-    return element == 16 ? 10u : element == 32 ? 23u : 52u;
+    switch (element) {
+    case 16: return 10;
+    case 32: return 23;
+    case 64: return 52;
+    default: throw std::logic_error("no floating-point format of " + std::to_string(element) + " bits");
+    }
 }
 
 std::uint64_t FunctionLifter::ExponentBias(const unsigned element) {
@@ -166,18 +171,22 @@ llvm::Value* FunctionLifter::CompareMask(llvm::Value* a, llvm::Value* b, const s
     const auto relation = Predicates[code & 15];
     llvm::Value* compare = nullptr;
     if (ExactFloat()) {
-        const bool signaling = ((code & 3) == 1 || (code & 3) == 2) != ((code & 16) != 0);
         auto* nan = _builder.CreateOr(IsNan(a), IsNan(b));
-        auto* invalid = signaling ? nan : _builder.CreateOr(IsSignalingNan(a), IsSignalingNan(b));
-        RaiseSimdExceptions(_builder.CreateOr(MxcsrFlag(invalid, PS5LIFT_MXCSR_INVALID), DenormalFlag({a, b})), _builder.getInt32(0));
-        auto* zero = llvm::Constant::getNullValue(a->getType());
-        auto* ordered = _builder.CreateFCmp(relation, _builder.CreateSelect(nan, zero, DenormalsAreZero(a)), _builder.CreateSelect(nan, zero, DenormalsAreZero(b)));
+        const auto [left, right] = ComparedOperands(a, b, nan, ((code & 3) == 1 || (code & 3) == 2) != ((code & 16) != 0));
+        auto* ordered = _builder.CreateFCmp(relation, left, right);
         const bool unordered = (static_cast<unsigned>(relation) & llvm::CmpInst::FCMP_UNO) != 0;
         compare = _builder.CreateSelect(nan, llvm::ConstantInt::getBool(nan->getType(), unordered), ordered);
     } else {
         compare = _builder.CreateFCmp(relation, a, b);
     }
     return _builder.CreateBitCast(_builder.CreateSExt(compare, IntegerLike(a->getType())), a->getType());
+}
+
+std::pair<llvm::Value*, llvm::Value*> FunctionLifter::ComparedOperands(llvm::Value* a, llvm::Value* b, llvm::Value* nan, const bool signaling) {
+    auto* invalid = signaling ? nan : _builder.CreateOr(IsSignalingNan(a), IsSignalingNan(b));
+    RaiseSimdExceptions(_builder.CreateOr(MxcsrFlag(invalid, PS5LIFT_MXCSR_INVALID), DenormalFlag({a, b})), _builder.getInt32(0));
+    auto* zero = llvm::Constant::getNullValue(a->getType());
+    return {_builder.CreateSelect(nan, zero, DenormalsAreZero(a)), _builder.CreateSelect(nan, zero, DenormalsAreZero(b))};
 }
 
 llvm::Value* FunctionLifter::FusedMultiplyAdd(const FloatSpec& spec, llvm::Value* x1, llvm::Value* x2, llvm::Value* x3) {
@@ -360,7 +369,7 @@ llvm::Value* FunctionLifter::SingleToHalf(llvm::Value* source, llvm::Value* mode
         auto* normalKept = _builder.CreateLShr(magnitude, 13);
         auto* normalRounded = _builder.CreateAdd(normalKept, _builder.CreateZExt(increment(normalRemainder, constant(0x1000), normalKept), i32));
         auto* tiny = _builder.CreateAnd(_builder.CreateICmpNE(magnitude, constant(0)), _builder.CreateICmpULT(normalRounded, constant(0x38800000 >> 13)));
-        auto* underflowMasked = _builder.CreateVectorSplat(count, MxcsrSet(PS5LIFT_MXCSR_UNDERFLOW << PS5LIFT_MXCSR_MASK_SHIFT));
+        auto* underflowMasked = _builder.CreateVectorSplat(count, MxcsrSet(PS5LIFT_MXCSR_UNDERFLOW << PS5LIFT_MXCSR_EXCEPTION_MASK_SHIFT));
         auto* underflow = _builder.CreateAnd(tiny, _builder.CreateSelect(underflowMasked, inexact, llvm::Constant::getAllOnesValue(inexact->getType())));
         auto* before = _builder.CreateOr(MxcsrFlag(IsSignalingNan(source), PS5LIFT_MXCSR_INVALID), DenormalFlag({source}));
         auto* after = _builder.CreateOr(_builder.CreateOr(MxcsrFlag(overflowed, PS5LIFT_MXCSR_OVERFLOW), MxcsrFlag(underflow, PS5LIFT_MXCSR_UNDERFLOW)), MxcsrFlag(inexact, PS5LIFT_MXCSR_PRECISION));
@@ -483,7 +492,7 @@ void FunctionLifter::Convert(const ZydisMnemonic mnemonic) {
     case ZYDIS_MNEMONIC_VCVTPS2PH: {
         const auto control = Immediate(2);
         auto* source = AsFloats(ReadRegister(Operand(1).reg.value), 32);
-        auto* mode = (control & 4) != 0 ? _builder.CreateAnd(_builder.CreateLShr(Mxcsr(), 13), 3) : _builder.getInt32(static_cast<std::uint32_t>(control & 3));
+        auto* mode = (control & 4) != 0 ? _builder.CreateAnd(_builder.CreateLShr(Mxcsr(), PS5LIFT_MXCSR_ROUNDING_SHIFT), 3) : _builder.getInt32(static_cast<std::uint32_t>(control & 3));
         auto* bits = AsInteger(SingleToHalf(source, mode));
         if (Operand(0).type == ZYDIS_OPERAND_TYPE_MEMORY) Write(0, bits);
         else WriteRegister(Operand(0).reg.value, _builder.CreateZExt(bits, Int(128)));
@@ -504,11 +513,7 @@ void FunctionLifter::CompareScalar(const unsigned element) {
     const auto mnemonic = _instruction->Info.mnemonic;
     const bool signaling = mnemonic == ZYDIS_MNEMONIC_COMISS || mnemonic == ZYDIS_MNEMONIC_VCOMISS || mnemonic == ZYDIS_MNEMONIC_COMISD || mnemonic == ZYDIS_MNEMONIC_VCOMISD;
     auto* nan = _builder.CreateOr(IsNan(a), IsNan(b));
-    auto* invalid = signaling ? nan : _builder.CreateOr(IsSignalingNan(a), IsSignalingNan(b));
-    RaiseSimdExceptions(_builder.CreateOr(MxcsrFlag(invalid, PS5LIFT_MXCSR_INVALID), DenormalFlag({a, b})), _builder.getInt32(0));
-    auto* zero = llvm::Constant::getNullValue(a->getType());
-    auto* left = _builder.CreateSelect(nan, zero, DenormalsAreZero(a));
-    auto* right = _builder.CreateSelect(nan, zero, DenormalsAreZero(b));
+    const auto [left, right] = ComparedOperands(a, b, nan, signaling);
     ComparisonFlags(nan, [&] { return _builder.CreateOr(nan, _builder.CreateFCmpOEQ(left, right)); }, [&] { return _builder.CreateOr(nan, _builder.CreateFCmpOLT(left, right)); });
 }
 
