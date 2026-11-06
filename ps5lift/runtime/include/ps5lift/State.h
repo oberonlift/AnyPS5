@@ -178,7 +178,8 @@ enum Ps5LiftStopKind {
     PS5LIFT_STOP_SEGMENT_TABLES = 6,
     PS5LIFT_STOP_PAGE_FAULT = 7,
     PS5LIFT_STOP_NEEDS_EXACT_FLOAT = 8,
-    PS5LIFT_STOP_X87_FLOATING_POINT = 9
+    PS5LIFT_STOP_X87_FLOATING_POINT = 9,
+    PS5LIFT_STOP_SIMD_FLOATING_POINT = 10
 };
 
 enum Ps5LiftInvalidOpcode {
@@ -264,10 +265,39 @@ void ps5lift_dispatch(Ps5LiftState* state, uint64_t target);
 Ps5LiftFunction ps5lift_resolve_jump(Ps5LiftState* state, uint64_t target);
 [[noreturn]] void ps5lift_fail_unresumed(const Ps5LiftState* state, const char* frames);
 #define PS5LIFT_MXCSR_MASK 0x2ffffu
+#define PS5LIFT_MXCSR_INVALID 0x1u
+#define PS5LIFT_MXCSR_DENORMAL_OPERAND 0x2u
+#define PS5LIFT_MXCSR_DIVIDE_BY_ZERO 0x4u
+#define PS5LIFT_MXCSR_OVERFLOW 0x8u
+#define PS5LIFT_MXCSR_UNDERFLOW 0x10u
+#define PS5LIFT_MXCSR_PRECISION 0x20u
+#define PS5LIFT_MXCSR_EXCEPTIONS 0x3fu
+#define PS5LIFT_MXCSR_DENORMALS_ARE_ZERO 0x40u
+#define PS5LIFT_MXCSR_EXCEPTION_MASK_SHIFT 7
+#define PS5LIFT_MXCSR_EXCEPTION_MASKS 0x1f80u
+#define PS5LIFT_MXCSR_ROUNDING_SHIFT 13
+#define PS5LIFT_MXCSR_FLUSH_TO_ZERO 0x8000u
 #define PS5LIFT_MXCSR_MISALIGNED_SSE 0x20000u
 
 void ps5lift_load_mxcsr(Ps5LiftState* state, uint32_t value, uint64_t address, const char* loader);
 uint32_t ps5lift_read_mxcsr(Ps5LiftState* state);
+
+enum Ps5LiftSimdOperation {
+    PS5LIFT_SIMD_ADD = 0,
+    PS5LIFT_SIMD_MULTIPLY = 1,
+    PS5LIFT_SIMD_DIVIDE = 2,
+    PS5LIFT_SIMD_SQRT = 3,
+    PS5LIFT_SIMD_FMA = 4,
+    PS5LIFT_SIMD_NARROW = 5,
+    PS5LIFT_SIMD_WIDEN = 6
+};
+
+#define PS5LIFT_SIMD_SLOT_BYTES 32u
+#define PS5LIFT_SIMD_RESULT_SLOT 0u
+#define PS5LIFT_SIMD_FIRST_SOURCE_SLOT 1u
+#define PS5LIFT_SIMD_SLOTS 4u
+
+uint32_t ps5lift_simd_float(Ps5LiftState* state, uint32_t operation, uint32_t element, uint32_t count, uint8_t* lanes);
 #define PS5LIFT_X87_EXCEPTIONS 0x3fu
 #define PS5LIFT_X87_SUMMARY 0x80u
 #define PS5LIFT_X87_BUSY 0x8000u

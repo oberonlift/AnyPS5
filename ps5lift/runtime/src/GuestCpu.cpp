@@ -225,6 +225,7 @@ extern "C" std::uint64_t GuestCpuHostStackSize_nid_no_patch(void) {
 
 extern "C" void GuestCpuCallInterrupted_nid_no_patch(const std::uint64_t target, const std::uint64_t first, const std::uint64_t second) {
     auto* state = ps5lift_current_state();
+    const Ps5Lift::SoftFloatEnvironment softFloat;
     const Ps5LiftState saved = *state;
     const auto mxcsr = ps5lift_read_mxcsr(state);
     state->Gpr[PS5LIFT_RSP] = ps5lift_interrupt_stack();

@@ -8,6 +8,23 @@
 
 namespace Ps5Lift::Lifting {
 
+unsigned FunctionLifter::FractionBits(const unsigned element) {
+    switch (element) {
+    case 16: return 10;
+    case 32: return 23;
+    case 64: return 52;
+    default: throw std::logic_error("no floating-point format of " + std::to_string(element) + " bits");
+    }
+}
+
+std::uint64_t FunctionLifter::ExponentBias(const unsigned element) {
+    return (std::uint64_t{1} << (element - 2 - FractionBits(element))) - 1;
+}
+
+std::uint64_t FunctionLifter::InfinityBits(const unsigned element) {
+    return ((std::uint64_t{1} << (element - 1)) - 1) & ~((std::uint64_t{1} << FractionBits(element)) - 1);
+}
+
 llvm::Type* FunctionLifter::FloatType(const unsigned bits) {
     if (bits == 16) return _builder.getHalfTy();
     return bits == 32 ? _builder.getFloatTy() : _builder.getDoubleTy();
@@ -32,7 +49,7 @@ llvm::Type* FunctionLifter::IntegerLike(llvm::Type* type) {
 llvm::Value* FunctionLifter::Quiet(llvm::Value* value) {
     const auto element = value->getType()->getScalarSizeInBits();
     auto* integerType = IntegerLike(value->getType());
-    auto* bit = llvm::ConstantInt::get(integerType, std::uint64_t{1} << (element == 32 ? 22 : element == 64 ? 51 : 9));
+    auto* bit = llvm::ConstantInt::get(integerType, std::uint64_t{1} << (FractionBits(element) - 1));
     return _builder.CreateBitCast(_builder.CreateOr(_builder.CreateBitCast(value, integerType), bit), value->getType());
 }
 
@@ -43,7 +60,17 @@ llvm::Value* FunctionLifter::DefaultNan(llvm::Type* type) {
 }
 
 llvm::Value* FunctionLifter::IsNan(llvm::Value* value) {
-    return _builder.CreateFCmpUNO(value, value);
+    const auto element = value->getType()->getScalarSizeInBits();
+    auto* type = IntegerLike(value->getType());
+    auto* magnitude = _builder.CreateAnd(_builder.CreateBitCast(value, type), llvm::ConstantInt::get(type, (std::uint64_t{1} << (element - 1)) - 1));
+    return _builder.CreateICmpUGT(magnitude, llvm::ConstantInt::get(type, InfinityBits(element)));
+}
+
+llvm::Value* FunctionLifter::IsSignalingNan(llvm::Value* value) {
+    const auto element = value->getType()->getScalarSizeInBits();
+    auto* type = IntegerLike(value->getType());
+    auto* quiet = _builder.CreateAnd(_builder.CreateBitCast(value, type), llvm::ConstantInt::get(type, std::uint64_t{1} << (FractionBits(element) - 1)));
+    return _builder.CreateAnd(IsNan(value), _builder.CreateICmpEQ(quiet, llvm::Constant::getNullValue(type)));
 }
 
 bool FunctionLifter::ExactFloat() const {
@@ -59,48 +86,58 @@ llvm::Value* FunctionLifter::NanResult(llvm::Value* result, std::initializer_lis
     return value;
 }
 
-llvm::Value* FunctionLifter::DenormalsAreZero(llvm::Value* value) {
-    if (!ExactFloat()) return value;
+llvm::Value* FunctionLifter::IsDenormal(llvm::Value* value) {
     const auto element = value->getType()->getScalarSizeInBits();
     auto* integerType = IntegerLike(value->getType());
     auto* bits = _builder.CreateBitCast(value, integerType);
-    const auto mantissa = element == 32 ? std::uint64_t{0x7fffff} : std::uint64_t{0xfffffffffffff};
-    const auto exponent = element == 32 ? std::uint64_t{0x7f800000} : std::uint64_t{0x7ff0000000000000};
+    const auto fraction = (std::uint64_t{1} << FractionBits(element)) - 1;
     auto* zero = llvm::Constant::getNullValue(integerType);
-    auto* denormal = _builder.CreateAnd(_builder.CreateICmpEQ(_builder.CreateAnd(bits, llvm::ConstantInt::get(integerType, exponent)), zero), _builder.CreateICmpNE(_builder.CreateAnd(bits, llvm::ConstantInt::get(integerType, mantissa)), zero));
-    auto* mxcsr = StateLoad(_builder.getInt32Ty(), offsetof(Ps5LiftState, Mxcsr));
-    llvm::Value* enabled = _builder.CreateICmpNE(_builder.CreateAnd(mxcsr, 0x40), _builder.getInt32(0));
+    return _builder.CreateAnd(_builder.CreateICmpEQ(_builder.CreateAnd(bits, llvm::ConstantInt::get(integerType, InfinityBits(element))), zero), _builder.CreateICmpNE(_builder.CreateAnd(bits, llvm::ConstantInt::get(integerType, fraction)), zero));
+}
+
+llvm::Value* FunctionLifter::DenormalsAreZero(llvm::Value* value) {
+    const auto element = value->getType()->getScalarSizeInBits();
+    auto* integerType = IntegerLike(value->getType());
+    auto* bits = _builder.CreateBitCast(value, integerType);
+    llvm::Value* enabled = MxcsrSet(ExactFloat() ? PS5LIFT_MXCSR_DENORMALS_ARE_ZERO : PS5LIFT_MXCSR_DENORMALS_ARE_ZERO | PS5LIFT_MXCSR_FLUSH_TO_ZERO);
     if (value->getType()->isVectorTy()) enabled = _builder.CreateVectorSplat(llvm::cast<llvm::FixedVectorType>(value->getType())->getNumElements(), enabled);
     auto* signOnly = _builder.CreateAnd(bits, llvm::ConstantInt::get(integerType, std::uint64_t{1} << (element - 1)));
-    return _builder.CreateBitCast(_builder.CreateSelect(_builder.CreateAnd(enabled, denormal), signOnly, bits), value->getType());
+    return _builder.CreateBitCast(_builder.CreateSelect(_builder.CreateAnd(enabled, IsDenormal(value)), signOnly, bits), value->getType());
 }
 
 llvm::Value* FunctionLifter::FloatConstant(llvm::Type* type, const double value) {
     return llvm::ConstantFP::get(type, value);
 }
 
+llvm::Value* FunctionLifter::Sum(llvm::Value* a, llvm::Value* b, llvm::Value* addend) {
+    return NanResult(ExactOperation(PS5LIFT_SIMD_ADD, {a, addend}, [&] { return SumExceptional(a, b); }, [&] { return _builder.CreateFAdd(a, addend); }), {a, b});
+}
+
+llvm::Value* FunctionLifter::MinMax(const FloatKind kind, llvm::Value* a, llvm::Value* b) {
+    const auto relation = kind == FloatKind::Min ? llvm::CmpInst::FCMP_OLT : llvm::CmpInst::FCMP_OGT;
+    if (!ExactFloat()) return _builder.CreateSelect(_builder.CreateFCmp(relation, a, b), a, b);
+    auto* nan = _builder.CreateOr(IsNan(a), IsNan(b));
+    RaiseCompareExceptions(a, b, nan, true);
+    return _builder.CreateSelect(IntegerCompare(relation, a, b, nan), DenormalsAreZero(a), DenormalsAreZero(b));
+}
+
 llvm::Value* FunctionLifter::Arithmetic(const FloatKind kind, llvm::Value* a, llvm::Value* b) {
     switch (kind) {
-    case FloatKind::Add: return NanResult(_builder.CreateFAdd(a, b), {a, b});
-    case FloatKind::Sub: return NanResult(_builder.CreateFSub(a, b), {a, b});
-    case FloatKind::Mul: return NanResult(_builder.CreateFMul(a, b), {a, b});
-    case FloatKind::Div: return NanResult(_builder.CreateFDiv(a, b), {a, b});
+    case FloatKind::Add: return Sum(a, b, b);
+    case FloatKind::Sub: return Sum(a, b, _builder.CreateFNeg(b));
+    case FloatKind::Mul: return NanResult(ExactOperation(PS5LIFT_SIMD_MULTIPLY, {a, b}, [&] { return MultiplyExceptional(a, b); }, [&] { return _builder.CreateFMul(a, b); }), {a, b});
+    case FloatKind::Div: return NanResult(ExactOperation(PS5LIFT_SIMD_DIVIDE, {a, b}, [&] { return DivideExceptional(a, b); }, [&] { return _builder.CreateFDiv(a, b); }), {a, b});
     case FloatKind::Min:
-    case FloatKind::Max: {
-        auto* left = DenormalsAreZero(a);
-        auto* right = DenormalsAreZero(b);
-        auto* compare = kind == FloatKind::Min ? _builder.CreateFCmpOLT(left, right) : _builder.CreateFCmpOGT(left, right);
-        return _builder.CreateSelect(compare, left, right);
-    }
-    case FloatKind::Sqrt: return NanResult(_builder.CreateUnaryIntrinsic(llvm::Intrinsic::sqrt, b), {b});
-    case FloatKind::Reciprocal: return NanResult(_builder.CreateFDiv(FloatConstant(b->getType(), 1.0), b), {b});
-    case FloatKind::ReciprocalSqrt: return NanResult(_builder.CreateFDiv(FloatConstant(b->getType(), 1.0), _builder.CreateUnaryIntrinsic(llvm::Intrinsic::sqrt, b)), {b});
+    case FloatKind::Max: return MinMax(kind, a, b);
+    case FloatKind::Sqrt: return NanResult(ExactOperation(PS5LIFT_SIMD_SQRT, {b}, [&] { return AnyLane(IsDenormal(b)); }, [&] { return _builder.CreateUnaryIntrinsic(llvm::Intrinsic::sqrt, b); }), {b});
+    case FloatKind::Reciprocal: return Reciprocal(b);
+    case FloatKind::ReciprocalSqrt: return ReciprocalSqrt(b);
     default: throw std::logic_error("not an arithmetic kind");
     }
 }
 
 llvm::Value* FunctionLifter::RoundValue(llvm::Value* value, const std::uint64_t control) {
-    llvm::Intrinsic::ID intrinsic = llvm::Intrinsic::rint;
+    llvm::Intrinsic::ID intrinsic = llvm::Intrinsic::nearbyint;
     if ((control & 4) == 0) {
         switch (control & 3) {
         case 0: intrinsic = llvm::Intrinsic::roundeven; break;
@@ -109,7 +146,14 @@ llvm::Value* FunctionLifter::RoundValue(llvm::Value* value, const std::uint64_t 
         default: intrinsic = llvm::Intrinsic::trunc; break;
         }
     }
-    return NanResult(_builder.CreateUnaryIntrinsic(intrinsic, value), {value});
+    auto* source = ExactFloat() ? DenormalsAreZero(value) : value;
+    auto* rounded = _builder.CreateUnaryIntrinsic(intrinsic, source);
+    if (ExactFloat()) {
+        auto* type = IntegerLike(value->getType());
+        auto* inexact = _builder.CreateAnd(_builder.CreateNot(IsNan(value)), _builder.CreateICmpNE(_builder.CreateBitCast(rounded, type), _builder.CreateBitCast(source, type)));
+        RaiseSimdExceptions(MxcsrFlag(IsSignalingNan(value), PS5LIFT_MXCSR_INVALID), (control & 8) != 0 ? _builder.getInt32(0) : MxcsrFlag(inexact, PS5LIFT_MXCSR_PRECISION));
+    }
+    return NanResult(rounded, {value});
 }
 
 llvm::Value* FunctionLifter::CompareMask(llvm::Value* a, llvm::Value* b, const std::uint64_t predicate) {
@@ -119,8 +163,40 @@ llvm::Value* FunctionLifter::CompareMask(llvm::Value* a, llvm::Value* b, const s
         llvm::CmpInst::FCMP_UEQ, llvm::CmpInst::FCMP_ULT, llvm::CmpInst::FCMP_ULE, llvm::CmpInst::FCMP_FALSE,
         llvm::CmpInst::FCMP_ONE, llvm::CmpInst::FCMP_OGE, llvm::CmpInst::FCMP_OGT, llvm::CmpInst::FCMP_TRUE};
     const bool legacy = _instruction->Info.encoding == ZYDIS_INSTRUCTION_ENCODING_LEGACY;
-    auto* compare = _builder.CreateFCmp(Predicates[predicate & (legacy ? 7 : 15)], a, b);
+    const auto code = predicate & (legacy ? 7 : 31);
+    const auto relation = Predicates[code & 15];
+    llvm::Value* compare = nullptr;
+    if (ExactFloat()) {
+        auto* nan = _builder.CreateOr(IsNan(a), IsNan(b));
+        RaiseCompareExceptions(a, b, nan, ((code & 3) == 1 || (code & 3) == 2) != ((code & 16) != 0));
+        compare = IntegerCompare(relation, a, b, nan);
+    } else {
+        compare = _builder.CreateFCmp(relation, a, b);
+    }
     return _builder.CreateBitCast(_builder.CreateSExt(compare, IntegerLike(a->getType())), a->getType());
+}
+
+void FunctionLifter::RaiseCompareExceptions(llvm::Value* a, llvm::Value* b, llvm::Value* nan, const bool signaling) {
+    auto* invalid = signaling ? nan : _builder.CreateOr(IsSignalingNan(a), IsSignalingNan(b));
+    RaiseSimdExceptions(_builder.CreateOr(MxcsrFlag(invalid, PS5LIFT_MXCSR_INVALID), DenormalFlag({a, b})), _builder.getInt32(0));
+}
+
+llvm::Value* FunctionLifter::OrderKey(llvm::Value* value) {
+    auto* type = IntegerLike(value->getType());
+    auto* bits = _builder.CreateBitCast(DenormalsAreZero(value), type);
+    auto* negative = _builder.CreateICmpSLT(bits, llvm::Constant::getNullValue(type));
+    return _builder.CreateSelect(negative, _builder.CreateSub(llvm::ConstantInt::get(type, std::uint64_t{1} << (type->getScalarSizeInBits() - 1)), bits), bits);
+}
+
+llvm::Value* FunctionLifter::IntegerCompare(const llvm::CmpInst::Predicate relation, llvm::Value* a, llvm::Value* b, llvm::Value* nan) {
+    const auto conditions = static_cast<unsigned>(relation);
+    auto* left = OrderKey(a);
+    auto* right = OrderKey(b);
+    llvm::Value* ordered = llvm::Constant::getNullValue(nan->getType());
+    if (conditions & llvm::CmpInst::FCMP_OEQ) ordered = _builder.CreateOr(ordered, _builder.CreateICmpEQ(left, right));
+    if (conditions & llvm::CmpInst::FCMP_OGT) ordered = _builder.CreateOr(ordered, _builder.CreateICmpSGT(left, right));
+    if (conditions & llvm::CmpInst::FCMP_OLT) ordered = _builder.CreateOr(ordered, _builder.CreateICmpSLT(left, right));
+    return _builder.CreateSelect(nan, llvm::ConstantInt::getBool(nan->getType(), (conditions & llvm::CmpInst::FCMP_UNO) != 0), ordered);
 }
 
 llvm::Value* FunctionLifter::FusedMultiplyAdd(const FloatSpec& spec, llvm::Value* x1, llvm::Value* x2, llvm::Value* x3) {
@@ -142,20 +218,15 @@ llvm::Value* FunctionLifter::FusedMultiplyAdd(const FloatSpec& spec, llvm::Value
     }
     auto* type = left->getType();
     auto* product = spec.NegateProduct ? _builder.CreateFNeg(left) : left;
-    auto* add = _builder.CreateIntrinsic(llvm::Intrinsic::fma, {type}, {product, right, addend});
-    auto* subtract = _builder.CreateIntrinsic(llvm::Intrinsic::fma, {type}, {product, right, _builder.CreateFNeg(addend)});
-    llvm::Value* result = spec.SubtractAddend ? subtract : add;
+    llvm::Value* signedAddend = spec.SubtractAddend ? _builder.CreateFNeg(addend) : addend;
     if (spec.Alternate != 0) {
         const auto count = llvm::cast<llvm::FixedVectorType>(type)->getNumElements();
-        std::vector<int> mask(count);
-        for (unsigned i = 0; i < count; ++i) {
-            const bool even = i % 2 == 0;
-            const bool useSubtract = spec.Alternate == 1 ? even : !even;
-            mask[i] = static_cast<int>(useSubtract ? i : count + i);
-        }
-        result = _builder.CreateShuffleVector(subtract, add, mask);
+        std::vector<llvm::Constant*> subtract(count);
+        for (unsigned i = 0; i < count; ++i) subtract[i] = _builder.getInt1((i % 2 == 0) == (spec.Alternate == 1));
+        signedAddend = _builder.CreateSelect(llvm::ConstantVector::get(subtract), _builder.CreateFNeg(addend), addend);
     }
-    return NanResult(result, {left, right, addend});
+    auto* fused = ExactOperation(PS5LIFT_SIMD_FMA, {product, right, signedAddend}, [&] { return FmaExceptional(left, right, addend); }, [&] { return _builder.CreateIntrinsic(llvm::Intrinsic::fma, {type}, {product, right, signedAddend}); });
+    return NanResult(fused, {left, right, addend});
 }
 
 llvm::Value* FunctionLifter::LoadScalarFloat(const int index, const unsigned element) {
@@ -212,11 +283,9 @@ void FunctionLifter::FloatArithmetic(const FloatSpec& spec) {
         result = CompareMask(a, b, Immediate(base + 2));
         break;
     case FloatKind::AddSub: {
-        auto* sum = Arithmetic(FloatKind::Add, a, b);
-        auto* difference = Arithmetic(FloatKind::Sub, a, b);
-        std::vector<int> mask(count);
-        for (unsigned i = 0; i < count; ++i) mask[i] = static_cast<int>(i % 2 == 0 ? i : count + i);
-        result = _builder.CreateShuffleVector(difference, sum, mask);
+        std::vector<llvm::Constant*> subtract(count);
+        for (unsigned i = 0; i < count; ++i) subtract[i] = _builder.getInt1(i % 2 == 0);
+        result = Sum(a, b, _builder.CreateSelect(llvm::ConstantVector::get(subtract), _builder.CreateFNeg(b), b));
         break;
     }
     case FloatKind::HorizontalAdd:
@@ -236,27 +305,52 @@ llvm::Value* FunctionLifter::ConvertNan(llvm::Value* source, llvm::Value* conver
     if (!ExactFloat()) return converted;
     const auto from = source->getType()->getScalarSizeInBits();
     const auto to = converted->getType()->getScalarSizeInBits();
-    const auto mantissa = [](const unsigned bits) { return bits == 16 ? 10u : bits == 32 ? 23u : 52u; };
     auto* integerSource = _builder.CreateBitCast(source, IntegerLike(source->getType()));
     auto* targetInteger = IntegerLike(converted->getType());
     auto* sign = _builder.CreateICmpSLT(integerSource, llvm::Constant::getNullValue(integerSource->getType()));
-    auto* payload = _builder.CreateAnd(integerSource, llvm::ConstantInt::get(integerSource->getType(), (std::uint64_t{1} << mantissa(from)) - 1));
+    auto* payload = _builder.CreateAnd(integerSource, llvm::ConstantInt::get(integerSource->getType(), (std::uint64_t{1} << FractionBits(from)) - 1));
     llvm::Value* moved = nullptr;
-    if (mantissa(to) >= mantissa(from)) moved = _builder.CreateShl(_builder.CreateZExt(payload, targetInteger), mantissa(to) - mantissa(from));
-    else moved = _builder.CreateTrunc(_builder.CreateLShr(payload, mantissa(from) - mantissa(to)), targetInteger);
-    const auto exponentAndQuiet = ((std::uint64_t{1} << (to - 1 - mantissa(to))) - 1) << mantissa(to) | (std::uint64_t{1} << (mantissa(to) - 1));
+    if (FractionBits(to) >= FractionBits(from)) moved = _builder.CreateShl(_builder.CreateZExt(payload, targetInteger), FractionBits(to) - FractionBits(from));
+    else moved = _builder.CreateTrunc(_builder.CreateLShr(payload, FractionBits(from) - FractionBits(to)), targetInteger);
+    const auto exponentAndQuiet = ((std::uint64_t{1} << (to - 1 - FractionBits(to))) - 1) << FractionBits(to) | (std::uint64_t{1} << (FractionBits(to) - 1));
     auto* signBit = _builder.CreateSelect(sign, llvm::ConstantInt::get(targetInteger, std::uint64_t{1} << (to - 1)), llvm::Constant::getNullValue(targetInteger));
     auto* nan = _builder.CreateOr(_builder.CreateOr(moved, llvm::ConstantInt::get(targetInteger, exponentAndQuiet)), signBit);
     return _builder.CreateSelect(IsNan(source), _builder.CreateBitCast(nan, converted->getType()), converted);
 }
 
-llvm::Value* FunctionLifter::SingleToHalf(llvm::Value* source, const unsigned mode) {
+llvm::Value* FunctionLifter::ConvertFloat(llvm::Value* source, const unsigned element) {
+    auto* type = source->getType()->isVectorTy() ? static_cast<llvm::Type*>(llvm::FixedVectorType::get(FloatType(element), llvm::cast<llvm::FixedVectorType>(source->getType())->getNumElements())) : FloatType(element);
+    if (element < source->getType()->getScalarSizeInBits()) {
+        return ConvertNan(source, ExactOperation(PS5LIFT_SIMD_NARROW, {source}, [&] { return NarrowExceptional(source); }, [&] { return _builder.CreateFPTrunc(source, type); }));
+    }
+    return ConvertNan(source, ExactOperation(PS5LIFT_SIMD_WIDEN, {source}, [&] { return AnyLane(IsDenormal(source)); }, [&] { return _builder.CreateFPExt(source, type); }));
+}
+
+llvm::Value* FunctionLifter::HalfToSingle(llvm::Value* source) {
+    auto* type = llvm::FixedVectorType::get(FloatType(32), llvm::cast<llvm::FixedVectorType>(source->getType())->getNumElements());
+    if (!ExactFloat()) return _builder.CreateFPExt(source, type);
+    RaiseSimdExceptions(MxcsrFlag(IsSignalingNan(source), PS5LIFT_MXCSR_INVALID), _builder.getInt32(0));
+    auto* ordered = _builder.CreateSelect(IsNan(source), llvm::Constant::getNullValue(source->getType()), source);
+    return ConvertNan(source, _builder.CreateFPExt(ordered, type));
+}
+
+llvm::Value* FunctionLifter::SingleToHalf(llvm::Value* source, llvm::Value* mode) {
     auto* type = llvm::cast<llvm::FixedVectorType>(source->getType());
-    auto* i32 = llvm::FixedVectorType::get(Int(32), type->getNumElements());
+    const auto count = type->getNumElements();
+    auto* i32 = llvm::FixedVectorType::get(Int(32), count);
     auto* x = _builder.CreateBitCast(DenormalsAreZero(source), i32);
     const auto constant = [&](const std::uint32_t value) { return llvm::ConstantInt::get(i32, value); };
+    const auto modeIs = [&](const std::uint32_t value) { return _builder.CreateVectorSplat(count, _builder.CreateICmpEQ(mode, _builder.getInt32(value))); };
     auto* sign = _builder.CreateAnd(_builder.CreateLShr(x, 16), constant(0x8000));
     auto* negative = _builder.CreateICmpNE(sign, constant(0));
+    const auto increment = [&](llvm::Value* remainder, llvm::Value* half, llvm::Value* kept) {
+        auto* inexact = _builder.CreateICmpNE(remainder, constant(0));
+        auto* nearest = _builder.CreateOr(_builder.CreateICmpUGT(remainder, half), _builder.CreateAnd(_builder.CreateICmpEQ(remainder, half), _builder.CreateICmpNE(_builder.CreateAnd(kept, constant(1)), constant(0))));
+        auto* down = _builder.CreateAnd(inexact, negative);
+        auto* up = _builder.CreateAnd(inexact, _builder.CreateNot(negative));
+        auto* none = llvm::Constant::getNullValue(nearest->getType());
+        return _builder.CreateSelect(modeIs(0), nearest, _builder.CreateSelect(modeIs(1), down, _builder.CreateSelect(modeIs(2), up, none)));
+    };
     auto* magnitude = _builder.CreateAnd(x, constant(0x7fffffff));
     auto* exponent = _builder.CreateLShr(magnitude, 23);
     auto* implicit = _builder.CreateSelect(_builder.CreateICmpEQ(exponent, constant(0)), constant(0), constant(0x800000));
@@ -268,46 +362,64 @@ llvm::Value* FunctionLifter::SingleToHalf(llvm::Value* source, const unsigned mo
     auto* remainderMask = _builder.CreateSub(_builder.CreateShl(constant(1), shift), constant(1));
     auto* remainder = _builder.CreateAnd(_builder.CreateSelect(subnormal, mantissa, magnitude), remainderMask);
     auto* half = _builder.CreateShl(constant(1), _builder.CreateSub(shift, constant(1)));
-    auto* inexact = _builder.CreateICmpNE(remainder, constant(0));
-    llvm::Value* increment = nullptr;
-    switch (mode) {
-    case 0:
-        increment = _builder.CreateOr(_builder.CreateICmpUGT(remainder, half), _builder.CreateAnd(_builder.CreateICmpEQ(remainder, half), _builder.CreateICmpNE(_builder.CreateAnd(base, constant(1)), constant(0))));
-        break;
-    case 1:
-        increment = _builder.CreateAnd(inexact, negative);
-        break;
-    case 2:
-        increment = _builder.CreateAnd(inexact, _builder.CreateNot(negative));
-        break;
-    default:
-        increment = llvm::Constant::getNullValue(llvm::FixedVectorType::get(_builder.getInt1Ty(), type->getNumElements()));
-        break;
-    }
-    auto* rounded = _builder.CreateAdd(base, _builder.CreateZExt(increment, i32));
-    const bool infinityPositive = mode == 0 || mode == 2;
-    const bool infinityNegative = mode == 0 || mode == 1;
-    auto* overflowValue = _builder.CreateSelect(negative, constant(infinityNegative ? 0x7c00 : 0x7bff), constant(infinityPositive ? 0x7c00 : 0x7bff));
+    auto* rounded = _builder.CreateAdd(base, _builder.CreateZExt(increment(remainder, half, base), i32));
+    auto* largestPositive = _builder.CreateSelect(_builder.CreateOr(modeIs(0), modeIs(2)), constant(0x7c00), constant(0x7bff));
+    auto* largestNegative = _builder.CreateSelect(_builder.CreateOr(modeIs(0), modeIs(1)), constant(0x7c00), constant(0x7bff));
+    auto* overflowValue = _builder.CreateSelect(negative, largestNegative, largestPositive);
     auto* overflow = _builder.CreateOr(_builder.CreateICmpUGE(magnitude, constant(0x47800000)), _builder.CreateICmpUGT(rounded, constant(0x7bff)));
     llvm::Value* finite = _builder.CreateSelect(overflow, overflowValue, rounded);
     auto* nan = _builder.CreateOr(constant(0x7e00), _builder.CreateLShr(_builder.CreateAnd(magnitude, constant(0x7fffff)), 13));
     auto* isNan = _builder.CreateICmpUGT(magnitude, constant(0x7f800000));
     auto* isInfinity = _builder.CreateICmpEQ(magnitude, constant(0x7f800000));
+    if (ExactFloat()) {
+        auto* isFinite = _builder.CreateICmpULT(magnitude, constant(0x7f800000));
+        auto* overflowed = _builder.CreateAnd(isFinite, overflow);
+        auto* inexact = _builder.CreateAnd(isFinite, _builder.CreateOr(overflow, _builder.CreateICmpNE(remainder, constant(0))));
+        auto* normalRemainder = _builder.CreateAnd(magnitude, constant(0x1fff));
+        auto* normalKept = _builder.CreateLShr(magnitude, 13);
+        auto* normalRounded = _builder.CreateAdd(normalKept, _builder.CreateZExt(increment(normalRemainder, constant(0x1000), normalKept), i32));
+        auto* tiny = _builder.CreateAnd(_builder.CreateICmpNE(magnitude, constant(0)), _builder.CreateICmpULT(normalRounded, constant(0x38800000 >> 13)));
+        auto* underflowMasked = _builder.CreateVectorSplat(count, MxcsrSet(PS5LIFT_MXCSR_UNDERFLOW << PS5LIFT_MXCSR_EXCEPTION_MASK_SHIFT));
+        auto* underflow = _builder.CreateAnd(tiny, _builder.CreateSelect(underflowMasked, inexact, llvm::Constant::getAllOnesValue(inexact->getType())));
+        auto* before = _builder.CreateOr(MxcsrFlag(IsSignalingNan(source), PS5LIFT_MXCSR_INVALID), DenormalFlag({source}));
+        auto* after = _builder.CreateOr(_builder.CreateOr(MxcsrFlag(overflowed, PS5LIFT_MXCSR_OVERFLOW), MxcsrFlag(underflow, PS5LIFT_MXCSR_UNDERFLOW)), MxcsrFlag(inexact, PS5LIFT_MXCSR_PRECISION));
+        RaiseSimdExceptions(before, after);
+    }
     finite = _builder.CreateSelect(isInfinity, constant(0x7c00), finite);
     finite = _builder.CreateSelect(isNan, nan, finite);
     auto* result = _builder.CreateOr(finite, sign);
-    return _builder.CreateTrunc(result, llvm::FixedVectorType::get(Int(16), type->getNumElements()));
+    return _builder.CreateTrunc(result, llvm::FixedVectorType::get(Int(16), count));
 }
 
 llvm::Value* FunctionLifter::FloatToInteger(llvm::Value* value, const unsigned bits, const bool truncate) {
-    auto* rounded = _builder.CreateUnaryIntrinsic(truncate ? llvm::Intrinsic::trunc : llvm::Intrinsic::rint, value);
+    auto* source = ExactFloat() ? DenormalsAreZero(value) : value;
+    auto* rounded = _builder.CreateUnaryIntrinsic(truncate ? llvm::Intrinsic::trunc : llvm::Intrinsic::nearbyint, source);
     auto* lower = FloatConstant(value->getType(), -std::ldexp(1.0, static_cast<int>(bits) - 1));
     auto* upper = FloatConstant(value->getType(), std::ldexp(1.0, static_cast<int>(bits) - 1));
     auto* inRange = _builder.CreateAnd(_builder.CreateFCmpOGE(rounded, lower), _builder.CreateFCmpOLT(rounded, upper));
+    if (ExactFloat()) {
+        auto* type = IntegerLike(value->getType());
+        auto* inexact = _builder.CreateAnd(inRange, _builder.CreateICmpNE(_builder.CreateBitCast(rounded, type), _builder.CreateBitCast(source, type)));
+        RaiseSimdExceptions(MxcsrFlag(_builder.CreateNot(inRange), PS5LIFT_MXCSR_INVALID), MxcsrFlag(inexact, PS5LIFT_MXCSR_PRECISION));
+    }
     auto* targetType = value->getType()->isVectorTy() ? static_cast<llvm::Type*>(llvm::FixedVectorType::get(Int(bits), llvm::cast<llvm::FixedVectorType>(value->getType())->getNumElements())) : Int(bits);
     auto* safe = _builder.CreateSelect(inRange, rounded, llvm::Constant::getNullValue(value->getType()));
     auto* converted = _builder.CreateFPToSI(safe, targetType);
     return _builder.CreateSelect(inRange, converted, llvm::ConstantInt::get(targetType, std::uint64_t{1} << (bits - 1)));
+}
+
+llvm::Value* FunctionLifter::IntegerToFloat(llvm::Value* integer, llvm::Type* type) {
+    auto* converted = _builder.CreateSIToFP(integer, type);
+    const auto width = integer->getType()->getScalarSizeInBits();
+    const auto precision = FractionBits(type->getScalarSizeInBits()) + 1;
+    if (!ExactFloat() || width <= precision) return converted;
+    auto* magnitude = _builder.CreateBinaryIntrinsic(llvm::Intrinsic::abs, integer, _builder.getFalse());
+    auto* leading = _builder.CreateBinaryIntrinsic(llvm::Intrinsic::ctlz, magnitude, _builder.getFalse());
+    auto* trailing = _builder.CreateBinaryIntrinsic(llvm::Intrinsic::cttz, magnitude, _builder.getFalse());
+    auto* significant = _builder.CreateSub(_builder.CreateSub(llvm::ConstantInt::get(magnitude->getType(), width), leading), trailing);
+    auto* inexact = _builder.CreateICmpSGT(significant, llvm::ConstantInt::get(magnitude->getType(), precision));
+    RaiseSimdExceptions(_builder.getInt32(0), MxcsrFlag(inexact, PS5LIFT_MXCSR_PRECISION));
+    return converted;
 }
 
 void FunctionLifter::WriteVectorLow(const int index, llvm::Value* vector, const unsigned width) {
@@ -324,10 +436,10 @@ void FunctionLifter::Convert(const ZydisMnemonic mnemonic) {
         auto* destination = AsFloats(ReadVector(first, 128), target);
         llvm::Value* value = nullptr;
         if (mnemonic == ZYDIS_MNEMONIC_CVTSI2SS || mnemonic == ZYDIS_MNEMONIC_VCVTSI2SS || mnemonic == ZYDIS_MNEMONIC_CVTSI2SD || mnemonic == ZYDIS_MNEMONIC_VCVTSI2SD) {
-            value = _builder.CreateSIToFP(Read(first + 1), FloatType(target));
+            value = IntegerToFloat(Read(first + 1), FloatType(target));
         } else {
             auto* source = LoadScalarFloat(first + 1, target == 32 ? 64 : 32);
-            value = ConvertNan(source, target == 32 ? _builder.CreateFPTrunc(source, FloatType(32)) : _builder.CreateFPExt(source, FloatType(64)));
+            value = ConvertFloat(source, target);
         }
         Write(0, FloatBits(_builder.CreateInsertElement(destination, value, _builder.getInt64(0))));
         return;
@@ -342,11 +454,11 @@ void FunctionLifter::Convert(const ZydisMnemonic mnemonic) {
     }
     case ZYDIS_MNEMONIC_CVTDQ2PS: case ZYDIS_MNEMONIC_VCVTDQ2PS: {
         const auto width = Bits(0);
-        Write(0, FloatBits(_builder.CreateSIToFP(AsVector(ReadAs(1, width), 32), llvm::FixedVectorType::get(FloatType(32), width / 32))));
+        Write(0, FloatBits(IntegerToFloat(AsVector(ReadAs(1, width), 32), llvm::FixedVectorType::get(FloatType(32), width / 32))));
         return;
     }
     case ZYDIS_MNEMONIC_CVTPI2PS: {
-        auto* converted = _builder.CreateSIToFP(AsVector(ReadAs(1, 64), 32), llvm::FixedVectorType::get(FloatType(32), 2));
+        auto* converted = IntegerToFloat(AsVector(ReadAs(1, 64), 32), llvm::FixedVectorType::get(FloatType(32), 2));
         llvm::Value* destination = AsFloats(ReadVector(0, 128), 32);
         for (unsigned lane = 0; lane < 2; ++lane) destination = _builder.CreateInsertElement(destination, _builder.CreateExtractElement(converted, lane), lane);
         Write(0, FloatBits(destination));
@@ -362,23 +474,21 @@ void FunctionLifter::Convert(const ZydisMnemonic mnemonic) {
     case ZYDIS_MNEMONIC_CVTDQ2PD: case ZYDIS_MNEMONIC_VCVTDQ2PD: case ZYDIS_MNEMONIC_CVTPI2PD: {
         const auto count = Bits(0) / 64;
         auto* source = AsVector(_builder.CreateZExtOrTrunc(ReadRegisterOrMemory(1, count * 32), Int(count * 32)), 32);
-        Write(0, FloatBits(_builder.CreateSIToFP(source, llvm::FixedVectorType::get(FloatType(64), count))));
+        Write(0, FloatBits(IntegerToFloat(source, llvm::FixedVectorType::get(FloatType(64), count))));
         return;
     }
     case ZYDIS_MNEMONIC_CVTPS2PD: case ZYDIS_MNEMONIC_VCVTPS2PD: {
         const auto count = Bits(0) / 64;
         auto* source = AsFloats(_builder.CreateZExtOrTrunc(ReadRegisterOrMemory(1, count * 32), Int(count * 32)), 32);
-        Write(0, FloatBits(ConvertNan(source, _builder.CreateFPExt(source, llvm::FixedVectorType::get(FloatType(64), count)))));
+        Write(0, FloatBits(ConvertFloat(source, 64)));
         return;
     }
     case ZYDIS_MNEMONIC_CVTPD2PS: case ZYDIS_MNEMONIC_VCVTPD2PS:
     case ZYDIS_MNEMONIC_CVTPD2DQ: case ZYDIS_MNEMONIC_VCVTPD2DQ: case ZYDIS_MNEMONIC_CVTTPD2DQ: case ZYDIS_MNEMONIC_VCVTTPD2DQ:
     case ZYDIS_MNEMONIC_CVTPD2PI: case ZYDIS_MNEMONIC_CVTTPD2PI: {
-        const auto sourceBits = Bits(1);
-        const auto count = sourceBits / 64;
-        auto* source = AsFloats(ReadAs(1, sourceBits), 64);
+        auto* source = AsFloats(ReadAs(1, Bits(1)), 64);
         llvm::Value* converted = nullptr;
-        if (mnemonic == ZYDIS_MNEMONIC_CVTPD2PS || mnemonic == ZYDIS_MNEMONIC_VCVTPD2PS) converted = ConvertNan(source, _builder.CreateFPTrunc(source, llvm::FixedVectorType::get(FloatType(32), count)));
+        if (mnemonic == ZYDIS_MNEMONIC_CVTPD2PS || mnemonic == ZYDIS_MNEMONIC_VCVTPD2PS) converted = ConvertFloat(source, 32);
         else converted = FloatToInteger(source, 32, mnemonic == ZYDIS_MNEMONIC_CVTTPD2DQ || mnemonic == ZYDIS_MNEMONIC_VCVTTPD2DQ || mnemonic == ZYDIS_MNEMONIC_CVTTPD2PI);
         WriteVectorLow(0, converted, Bits(0));
         return;
@@ -386,17 +496,14 @@ void FunctionLifter::Convert(const ZydisMnemonic mnemonic) {
     case ZYDIS_MNEMONIC_VCVTPH2PS: {
         const auto count = Bits(0) / 32;
         auto* source = _builder.CreateBitCast(_builder.CreateZExtOrTrunc(ReadRegisterOrMemory(1, count * 16), Int(count * 16)), llvm::FixedVectorType::get(FloatType(16), count));
-        Write(0, FloatBits(ConvertNan(source, _builder.CreateFPExt(source, llvm::FixedVectorType::get(FloatType(32), count)))));
+        Write(0, FloatBits(HalfToSingle(source)));
         return;
     }
     case ZYDIS_MNEMONIC_VCVTPS2PH: {
         const auto control = Immediate(2);
-        const auto sourceBits = ZydisRegisterGetWidth(ZYDIS_MACHINE_MODE_LONG_64, Operand(1).reg.value);
-        const auto count = sourceBits / 32;
         auto* source = AsFloats(ReadRegister(Operand(1).reg.value), 32);
-        llvm::Value* bits = nullptr;
-        if (control & 4) bits = FloatBits(ConvertNan(source, _builder.CreateFPTrunc(source, llvm::FixedVectorType::get(FloatType(16), count))));
-        else bits = AsInteger(SingleToHalf(source, static_cast<unsigned>(control & 3)));
+        auto* mode = (control & 4) != 0 ? _builder.CreateAnd(_builder.CreateLShr(Mxcsr(), PS5LIFT_MXCSR_ROUNDING_SHIFT), 3) : _builder.getInt32(static_cast<std::uint32_t>(control & 3));
+        auto* bits = AsInteger(SingleToHalf(source, mode));
         if (Operand(0).type == ZYDIS_OPERAND_TYPE_MEMORY) Write(0, bits);
         else WriteRegister(Operand(0).reg.value, _builder.CreateZExt(bits, Int(128)));
         return;
@@ -409,7 +516,15 @@ void FunctionLifter::Convert(const ZydisMnemonic mnemonic) {
 void FunctionLifter::CompareScalar(const unsigned element) {
     auto* a = LoadScalarFloat(0, element);
     auto* b = LoadScalarFloat(1, element);
-    ComparisonFlags(_builder.CreateFCmpUNO(a, b), [&] { return _builder.CreateFCmpUEQ(a, b); }, [&] { return _builder.CreateFCmpULT(a, b); });
+    if (!ExactFloat()) {
+        ComparisonFlags(_builder.CreateFCmpUNO(a, b), [&] { return _builder.CreateFCmpUEQ(a, b); }, [&] { return _builder.CreateFCmpULT(a, b); });
+        return;
+    }
+    const auto mnemonic = _instruction->Info.mnemonic;
+    const bool signaling = mnemonic == ZYDIS_MNEMONIC_COMISS || mnemonic == ZYDIS_MNEMONIC_VCOMISS || mnemonic == ZYDIS_MNEMONIC_COMISD || mnemonic == ZYDIS_MNEMONIC_VCOMISD;
+    auto* nan = _builder.CreateOr(IsNan(a), IsNan(b));
+    RaiseCompareExceptions(a, b, nan, signaling);
+    ComparisonFlags(nan, [&] { return IntegerCompare(llvm::CmpInst::FCMP_UEQ, a, b, nan); }, [&] { return IntegerCompare(llvm::CmpInst::FCMP_ULT, a, b, nan); });
 }
 
 void FunctionLifter::DotProduct(const unsigned element) {
