@@ -35,6 +35,8 @@ constexpr std::uint16_t RangeExceptions = StatusOverflow | StatusUnderflow;
 constexpr int ExtendedBias = 0x3fff;
 constexpr int ExtendedMaximumExponent = 0x7ffe;
 constexpr int RangeBiasAdjustment = 24576;
+constexpr int CompleteRemainderDifference = 64;
+constexpr int PartialRemainderBits = 32;
 constexpr std::size_t FxStateBytes = 416;
 constexpr std::uint16_t InitialControl = 0x037f;
 
@@ -493,11 +495,24 @@ bool RoundedAway(const extFloat80_t nearest, const extFloat80_t dividend) {
     return !IsNan(nearest) && !IsZero(nearest) && IsNegative(nearest) != IsNegative(dividend);
 }
 
+bool IsFiniteNonzero(const extFloat80_t value) {
+    return (value.signExp & 0x7fff) != 0x7fff && !IsZero(value);
+}
+
+std::optional<int> PartialRemainderShift(const extFloat80_t dividend, const extFloat80_t divisor) {
+    if (!IsFiniteNonzero(dividend) || !IsFiniteNonzero(divisor)) return std::nullopt;
+    const int difference = Normalize(dividend).Exponent - Normalize(divisor).Exponent;
+    if (difference < CompleteRemainderDifference) return std::nullopt;
+    return difference - (PartialRemainderBits + difference % PartialRemainderBits);
+}
+
 extFloat80_t Remainder(const std::uint32_t operation, const extFloat80_t dividend, const extFloat80_t divisor) {
     const FullPrecision precision;
-    const auto nearest = extF80_rem(dividend, divisor);
-    if (operation == PS5LIFT_X87_IEEE_REMAINDER || !RoundedAway(nearest, dividend)) return nearest;
-    auto magnitude = divisor;
+    const auto shift = PartialRemainderShift(dividend, divisor);
+    const auto modulus = shift ? ScaledByPower(divisor, *shift) : divisor;
+    const auto nearest = extF80_rem(dividend, modulus);
+    if ((operation == PS5LIFT_X87_IEEE_REMAINDER && !shift) || !RoundedAway(nearest, dividend)) return nearest;
+    auto magnitude = modulus;
     magnitude.signExp = static_cast<std::uint16_t>((magnitude.signExp & 0x7fff) | (dividend.signExp & 0x8000));
     const auto saved = softfloat_exceptionFlags;
     const auto truncated = extF80_add(nearest, magnitude);
@@ -525,6 +540,7 @@ unsigned TruncatedQuotientBits(const extFloat80_t dividend, const extFloat80_t d
 std::uint16_t RemainderConditions(const std::uint32_t operation, const extFloat80_t dividend, const extFloat80_t divisor, const extFloat80_t remainder, const std::uint16_t conditions) {
     if (IsNan(remainder)) return static_cast<std::uint16_t>(conditions & ~StatusC2);
     if ((divisor.signExp & 0x7fff) == 0x7fff) return 0;
+    if (PartialRemainderShift(dividend, divisor)) return StatusC2;
     auto bits = TruncatedQuotientBits(dividend, divisor);
     if (operation == PS5LIFT_X87_IEEE_REMAINDER && RoundedAway(remainder, dividend)) bits = (bits + 1) & 7;
     return static_cast<std::uint16_t>((bits & 1 ? StatusC1 : 0) | (bits & 2 ? StatusC3 : 0) | (bits & 4 ? StatusC0 : 0));
