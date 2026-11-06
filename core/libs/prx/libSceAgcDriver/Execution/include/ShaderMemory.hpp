@@ -75,8 +75,6 @@ public:
     // included, the initial regions excluded: one stage's own reads on the draw path's shared
     // ShaderMemory (Regions() stays the union). The spans point into the pages, as Regions()'s do.
     [[nodiscard]] std::vector<ShaderRecompiler::MemoryRegion> TakeRecentRegions();
-    // The driver's source handle memo outcomes, for the [capture] line (APS5_PROFILE_DRAW).
-    static void CountHandleMemo(bool hit);
     struct SupplyCounts {
         std::uint64_t shared, copied, spilled;
     };
