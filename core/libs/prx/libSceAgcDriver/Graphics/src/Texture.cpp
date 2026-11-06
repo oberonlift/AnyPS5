@@ -1723,7 +1723,6 @@ StorageTexture::StorageTexture(const Context& context, TextureDetiler& detiler, 
         layerOriginal.assign(trackedLayers, true);
         savedTicket.assign(trackedLayers, 0);
         sliceLinearBytes = geometry.sliceLinearBytes;
-        const auto linearBytes = sliceLinearBytes * arrayLayers;
 
         VkImageCreateInfo imageInfo{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
         // Sampled views of other same-size formats (sRGB, reinterpretations) read the image directly.

@@ -119,7 +119,6 @@ void Driver::waitMemory(std::span<const std::uint32_t> packet, std::uint32_t que
 
     GuestMemory::TagGpuLockThread(queue);
     auto& outcomes = waitOutcomes();
-    const bool wide = ((packet[0] >> 8u) & 0xffu) == 0x93u;
     const std::size_t awaitedBytes = Pm4::WaitAwaitedBytes(packet);
     const auto alignMask = awaitedBytes == 8 ? ~7ull : ~3ull;
     const std::uint64_t awaited = (packet[2] & static_cast<std::uint32_t>(alignMask)) | (static_cast<std::uint64_t>(packet[3]) << 32u);

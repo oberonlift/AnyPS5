@@ -41,11 +41,9 @@ void TraceShaderRequestFailure(std::uint64_t token, const Submission& submission
     if (token == 0) return;
     try {
         std::string reason = "unknown exception";
-        const char* type = "unknown";
         try {
             if (failure != nullptr) std::rethrow_exception(failure);
         } catch (const std::exception& error) {
-            type = typeid(error).name();
             reason = error.what();
         } catch (...) {
         }
