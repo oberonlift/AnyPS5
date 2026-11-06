@@ -320,6 +320,10 @@ private:
     llvm::Value* NarrowExceptional(llvm::Value* value);
     llvm::Value* SimdLanes();
     llvm::Value* ExactOperation(const Ps5LiftSimdOperation operation, std::initializer_list<llvm::Value*> sources, const std::function<llvm::Value*()>& exceptional, const std::function<llvm::Value*()>& host);
+    llvm::GlobalVariable* Table(const char* name, std::vector<std::uint32_t> (*build)());
+    llvm::Value* Gather(llvm::GlobalVariable* table, llvm::Value* index);
+    llvm::Value* Reciprocal(llvm::Value* value);
+    llvm::Value* ReciprocalSqrt(llvm::Value* value);
     llvm::Value* FloatConstant(llvm::Type* type, const double value);
     llvm::Value* Sum(llvm::Value* a, llvm::Value* b, llvm::Value* addend);
     llvm::Value* MinMax(const FloatKind kind, llvm::Value* a, llvm::Value* b);

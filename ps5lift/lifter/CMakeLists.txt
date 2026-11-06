@@ -10,6 +10,7 @@ add_executable(ps5lift
         src/InstructionSet.cpp
         src/ModuleLifter.cpp
         src/TableLifter.cpp
+        src/instructions/Approximation.cpp
         src/instructions/Control.cpp
         src/instructions/Crypto.cpp
         src/instructions/Dispatch.cpp

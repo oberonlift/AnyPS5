@@ -129,8 +129,8 @@ llvm::Value* FunctionLifter::Arithmetic(const FloatKind kind, llvm::Value* a, ll
     case FloatKind::Min:
     case FloatKind::Max: return MinMax(kind, a, b);
     case FloatKind::Sqrt: return NanResult(ExactOperation(PS5LIFT_SIMD_SQRT, {b}, [&] { return AnyLane(IsDenormal(b)); }, [&] { return _builder.CreateUnaryIntrinsic(llvm::Intrinsic::sqrt, b); }), {b});
-    case FloatKind::Reciprocal: return NanResult(_builder.CreateFDiv(FloatConstant(b->getType(), 1.0), b), {b});
-    case FloatKind::ReciprocalSqrt: return NanResult(_builder.CreateFDiv(FloatConstant(b->getType(), 1.0), _builder.CreateUnaryIntrinsic(llvm::Intrinsic::sqrt, b)), {b});
+    case FloatKind::Reciprocal: return Reciprocal(b);
+    case FloatKind::ReciprocalSqrt: return ReciprocalSqrt(b);
     default: throw std::logic_error("not an arithmetic kind");
     }
 }
