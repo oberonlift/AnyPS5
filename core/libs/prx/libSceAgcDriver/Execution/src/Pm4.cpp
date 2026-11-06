@@ -63,7 +63,7 @@ std::uint64_t GdsAddress() {
                     std::memset(shared, 0, GdsBytes);
                     gdsShared.store(true, std::memory_order_release);
                     gdsImportable.store(true, std::memory_order_release);
-                    return reinterpret_cast<std::uint64_t>(shared);
+                    return GuestArena::HostToGuest(shared);
                 }
             }
         }
