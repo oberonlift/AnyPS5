@@ -75,6 +75,7 @@ private:
     std::map<std::uint64_t, llvm::BasicBlock*> _blocks;
     const Instruction* _instruction = nullptr;
     llvm::Value* _entryRsp = nullptr;
+    llvm::AllocaInst* _simdLanes = nullptr;
     llvm::BasicBlock* _unwind = nullptr;
     llvm::LLVMContext& Context() { return _module.Context(); }
     llvm::IntegerType* I64() { return _builder.getInt64Ty(); }
@@ -288,6 +289,9 @@ private:
         int Alternate = 0;
     };
 
+    static unsigned FractionBits(const unsigned element);
+    static std::uint64_t ExponentBias(const unsigned element);
+    static std::uint64_t InfinityBits(const unsigned element);
     llvm::Type* FloatType(const unsigned bits);
     llvm::Value* AsFloats(llvm::Value* value, const unsigned element);
     llvm::Value* FloatBits(llvm::Value* value);
@@ -295,10 +299,30 @@ private:
     llvm::Value* Quiet(llvm::Value* value);
     llvm::Value* DefaultNan(llvm::Type* type);
     llvm::Value* IsNan(llvm::Value* value);
+    llvm::Value* IsSignalingNan(llvm::Value* value);
     bool ExactFloat() const;
     llvm::Value* NanResult(llvm::Value* result, std::initializer_list<llvm::Value*> sources);
+    llvm::Value* IsDenormal(llvm::Value* value);
     llvm::Value* DenormalsAreZero(llvm::Value* value);
+    llvm::Value* Mxcsr();
+    llvm::Value* MxcsrSet(const std::uint32_t bits);
+    llvm::Value* AnyLane(llvm::Value* condition);
+    llvm::Value* MxcsrFlag(llvm::Value* condition, const std::uint32_t flag);
+    llvm::Value* DenormalFlag(std::initializer_list<llvm::Value*> sources);
+    void RaiseSimdExceptions(llvm::Value* before, llvm::Value* after);
+    llvm::Value* BiasedExponent(llvm::Value* value);
+    llvm::Value* ExponentBelow(llvm::Value* value, const std::uint64_t limit);
+    llvm::Value* SumExceptional(llvm::Value* a, llvm::Value* b);
+    llvm::Value* ProductExceptional(llvm::Value* a, llvm::Value* b, const std::uint64_t limit);
+    llvm::Value* MultiplyExceptional(llvm::Value* a, llvm::Value* b);
+    llvm::Value* DivideExceptional(llvm::Value* a, llvm::Value* b);
+    llvm::Value* FmaExceptional(llvm::Value* a, llvm::Value* b, llvm::Value* c);
+    llvm::Value* NarrowExceptional(llvm::Value* value);
+    llvm::Value* SimdLanes();
+    llvm::Value* ExactOperation(const Ps5LiftSimdOperation operation, std::initializer_list<llvm::Value*> sources, const std::function<llvm::Value*()>& exceptional, const std::function<llvm::Value*()>& host);
     llvm::Value* FloatConstant(llvm::Type* type, const double value);
+    llvm::Value* Sum(llvm::Value* a, llvm::Value* b, llvm::Value* addend);
+    llvm::Value* MinMax(const FloatKind kind, llvm::Value* a, llvm::Value* b);
     llvm::Value* Arithmetic(const FloatKind kind, llvm::Value* a, llvm::Value* b);
     llvm::Value* RoundValue(llvm::Value* value, const std::uint64_t control);
     llvm::Value* CompareMask(llvm::Value* a, llvm::Value* b, const std::uint64_t predicate);
@@ -306,8 +330,11 @@ private:
     llvm::Value* LoadScalarFloat(const int index, const unsigned element);
     void FloatArithmetic(const FloatSpec& spec);
     llvm::Value* ConvertNan(llvm::Value* source, llvm::Value* converted);
-    llvm::Value* SingleToHalf(llvm::Value* source, const unsigned mode);
+    llvm::Value* ConvertFloat(llvm::Value* source, const unsigned element);
+    llvm::Value* HalfToSingle(llvm::Value* source);
+    llvm::Value* SingleToHalf(llvm::Value* source, llvm::Value* mode);
     llvm::Value* FloatToInteger(llvm::Value* value, const unsigned bits, const bool truncate);
+    llvm::Value* IntegerToFloat(llvm::Value* integer, llvm::Type* type);
     void WriteVectorLow(const int index, llvm::Value* vector, const unsigned width);
     void Convert(const ZydisMnemonic mnemonic);
     llvm::Value* ReadRegisterOrMemory(const int index, const unsigned bits);

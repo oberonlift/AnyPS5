@@ -39,6 +39,7 @@ bool StopOutcome(const std::uint32_t kind, std::uint8_t* outcome) {
     case PS5LIFT_STOP_PAGE_FAULT: *outcome = PS5LIFT_INSTRUCTION_OUTCOME_PAGE_FAULT; return true;
     case PS5LIFT_STOP_NEEDS_EXACT_FLOAT: *outcome = PS5LIFT_INSTRUCTION_OUTCOME_NEEDS_EXACT_FLOAT; return true;
     case PS5LIFT_STOP_X87_FLOATING_POINT: *outcome = PS5LIFT_INSTRUCTION_OUTCOME_X87_FLOATING_POINT; return true;
+    case PS5LIFT_STOP_SIMD_FLOATING_POINT: *outcome = PS5LIFT_INSTRUCTION_OUTCOME_SIMD_FLOATING_POINT; return true;
     default: return false;
     }
 }

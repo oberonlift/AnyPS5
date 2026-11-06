@@ -13,6 +13,7 @@ add_executable(ps5lift
         src/instructions/Control.cpp
         src/instructions/Crypto.cpp
         src/instructions/Dispatch.cpp
+        src/instructions/ExactFloat.cpp
         src/instructions/Float.cpp
         src/instructions/Integer.cpp
         src/instructions/Shuffle.cpp
