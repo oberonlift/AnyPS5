@@ -15,7 +15,6 @@ std::uint32_t TypeU64(SpirvEmitterState& state);
 std::uint32_t TypeScalarU64(SpirvEmitterState& state);
 std::uint32_t TypeU32Pair(SpirvEmitterState& state);
 std::uint32_t TypeI32(SpirvEmitterState& state);
-std::uint32_t TypeI32Pair(SpirvEmitterState& state);
 std::uint32_t TypeF32(SpirvEmitterState& state);
 std::uint32_t TypeU32Vector(SpirvEmitterState& state, std::uint32_t components);
 std::uint32_t TypeU32Composite(SpirvEmitterState& state, std::uint32_t components);

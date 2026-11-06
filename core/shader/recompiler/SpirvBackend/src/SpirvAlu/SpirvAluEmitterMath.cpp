@@ -1814,10 +1814,6 @@ std::uint32_t EmitBitcastU32ToF32(SpirvEmitterState& state, std::uint32_t arg0) 
     return EmitNative<spv::OpBitcast, IrType::F32>(state, arg0);
 }
 
-std::uint32_t EmitAndU32(SpirvEmitterState& state, std::uint32_t arg0, std::uint32_t arg1) {
-    return EmitNative<spv::OpBitwiseAnd, IrType::U32>(state, arg0, arg1);
-}
-
 std::uint32_t EmitLogicalAndBool(SpirvEmitterState& state, std::uint32_t arg0, std::uint32_t arg1) {
     return EmitNative<spv::OpLogicalAnd, IrType::U1>(state, arg0, arg1);
 }

@@ -43,8 +43,6 @@ public:
     void EmitCapability(std::uint32_t capability);
     void EmitExtension(const std::string& extensionName);
     void EmitEntryPoint(std::uint32_t executionModel, std::uint32_t entryPointId, const std::string& entryPointName, const std::vector<std::uint32_t>& interfaceIds);
-    void EmitTypeDeclaration(std::vector<std::uint32_t> words);
-    void EmitGlobalVariable(std::vector<std::uint32_t> words);
     void EmitFunctionInstruction(std::vector<std::uint32_t> words);
     [[nodiscard]] std::vector<std::uint32_t> Finalize() const;
 

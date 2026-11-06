@@ -73,11 +73,6 @@ std::uint32_t TypeI32(SpirvEmitterState& state) {
     return state.module.Type(spv::OpTypeInt, 32u, 1u);
 }
 
-std::uint32_t TypeI32Pair(SpirvEmitterState& state) {
-    const auto element = TypeI32(state);
-    return state.module.Type(spv::OpTypeStruct, element, element);
-}
-
 std::uint32_t TypeF32(SpirvEmitterState& state) {
     return state.module.Type(spv::OpTypeFloat, 32u);
 }

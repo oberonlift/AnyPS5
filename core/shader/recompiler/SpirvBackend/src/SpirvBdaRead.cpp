@@ -203,14 +203,6 @@ std::uint32_t DefineBdaSpanReadFunction(SpirvEmitterState& state, bool coherent,
     state.module.AddFunction(spv::OpFunctionCall, u64, physical, state.bdaProbeFunction, firstAddress, span, instruction);
     const auto mapped = Binary(state, spv::OpINotEqual, boolean, physical, BdaConstant(state, 0u));
     const auto wide = Binary(state, spv::OpLogicalAnd, boolean, mapped, Unary(state, spv::OpLogicalNot, boolean, BdaAddressUnaligned(state, physical)));
-    const auto isUsed = [&](std::uint32_t dword) {
-        return Binary(state, spv::OpINotEqual, boolean, Binary(state, spv::OpBitwiseAnd, u32, used, ConstantU32(state, 1u << dword)), zero);
-    };
-    const auto composite = [&](const std::array<std::uint32_t, 4>& parts) {
-        const auto value = state.module.AllocateId();
-        state.module.AddFunction(spv::OpCompositeConstruct, values, value, parts[0], parts[1], parts[2], parts[3]);
-        return value;
-    };
     const auto read = EmitValueIfElse(state, wide, values, [&] {
         const auto loaded = state.module.AllocateId();
         state.module.AddFunction(spv::OpFunctionCall, values, loaded, loader, physical, firstBytes, used);

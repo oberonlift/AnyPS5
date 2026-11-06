@@ -74,14 +74,6 @@ void SpirvModule::EmitEntryPoint(std::uint32_t executionModel, std::uint32_t ent
     appendInstruction(entryPoints, spv::OpEntryPoint, operands);
 }
 
-void SpirvModule::EmitTypeDeclaration(std::vector<std::uint32_t> words) {
-    AppendInstructionWords(typeDeclarations, words);
-}
-
-void SpirvModule::EmitGlobalVariable(std::vector<std::uint32_t> words) {
-    AppendInstructionWords(globalVariables, words);
-}
-
 void SpirvModule::EmitFunctionInstruction(std::vector<std::uint32_t> words) {
     AppendInstructionWords(functionInstructions, words);
 }
