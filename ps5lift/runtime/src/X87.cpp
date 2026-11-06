@@ -1,4 +1,5 @@
 #include "Runtime.hpp"
+#include "X87Transcendental.hpp"
 
 #include <ps5lift/State.h>
 
@@ -94,6 +95,24 @@ extFloat80_t Zero(const bool negative) {
     value.signExp = negative ? 0x8000 : 0;
     value.signif = 0;
     return value;
+}
+
+extFloat80_t Largest(const bool negative) {
+    extFloat80_t value;
+    value.signExp = negative ? 0xfffe : 0x7ffe;
+    value.signif = ~0ull;
+    return value;
+}
+
+extFloat80_t Half() {
+    extFloat80_t value;
+    value.signExp = 0x3ffe;
+    value.signif = 0x8000000000000000ull;
+    return value;
+}
+
+bool IsUnsupported(const extFloat80_t value) {
+    return (value.signExp & 0x7fff) != 0 && (value.signif >> 63) == 0;
 }
 
 extFloat80_t Smallest(const bool negative) {
@@ -243,6 +262,11 @@ public:
 
     void CompleteOnUnmaskedDenormal() { _completesOnDenormal = true; }
 
+    void ForceInexact() {
+        _extra |= StatusPrecision;
+        _forcedInexact = true;
+    }
+
     std::uint16_t Conditions() const {
         return static_cast<std::uint16_t>(_status & StatusConditions);
     }
@@ -266,6 +290,7 @@ private:
     std::uint16_t _extra = 0;
     bool _roundedUp = false;
     bool _completesOnDenormal = false;
+    bool _forcedInexact = false;
     bool _stackUnderflow = false;
     Destination _destination = Destination::None;
     std::optional<Computation> _computation;
@@ -594,7 +619,150 @@ std::uint16_t RemainderConditions(const std::uint32_t operation, const extFloat8
     return static_cast<std::uint16_t>((bits & 1 ? StatusC1 : 0) | (bits & 2 ? StatusC3 : 0) | (bits & 4 ? StatusC0 : 0));
 }
 
+bool IsTranscendental(const std::uint32_t operation) {
+    switch (operation) {
+    case PS5LIFT_X87_SINE: case PS5LIFT_X87_COSINE: case PS5LIFT_X87_TANGENT: case PS5LIFT_X87_ARCTANGENT:
+    case PS5LIFT_X87_POWER_MINUS_ONE: case PS5LIFT_X87_LOGARITHM: case PS5LIFT_X87_LOGARITHM_PLUS_ONE:
+        return true;
+    default:
+        return false;
+    }
+}
+
+float128_t TrueValue(const std::uint32_t operation, const extFloat80_t left, const extFloat80_t right, const int scale) {
+    switch (operation) {
+    case PS5LIFT_X87_SINE: return scale != 0 ? Ps5Lift::X87::Scaled(extF80_to_f128(left), scale) : Ps5Lift::X87::Sine(left);
+    case PS5LIFT_X87_COSINE: return Ps5Lift::X87::Cosine(left);
+    case PS5LIFT_X87_TANGENT: return scale != 0 ? Ps5Lift::X87::Scaled(extF80_to_f128(left), scale) : Ps5Lift::X87::Tangent(left);
+    case PS5LIFT_X87_ARCTANGENT: return Ps5Lift::X87::Arctangent(left, right, scale);
+    case PS5LIFT_X87_POWER_MINUS_ONE: return Ps5Lift::X87::PowerOfTwoMinusOne(left, scale);
+    case PS5LIFT_X87_LOGARITHM: return Ps5Lift::X87::LogarithmProduct(left, right, scale);
+    case PS5LIFT_X87_LOGARITHM_PLUS_ONE: return Ps5Lift::X87::LogarithmPlusOneProduct(left, right, scale);
+    default: ps5lift_fail("unknown x87 transcendental operation %u", operation);
+    }
+}
+
+extFloat80_t RoundTrue(Fpu& fpu, const float128_t value) {
+    const bool negative = (value.v[1] >> 63) != 0;
+    if (((value.v[1] >> 48) & 0x7fff) == 0x7fff) {
+        if ((value.v[1] & 0xffffffffffffull) != 0 || value.v[0] != 0) ps5lift_fail("an x87 transcendental of finite operands computed a NaN");
+        const FullPrecision precision;
+        return WithRoundUp(fpu, [&] { return extF80_mul(Largest(negative), i32_to_extF80(2)); });
+    }
+    if ((value.v[1] << 1) == 0 && value.v[0] == 0) {
+        const FullPrecision precision;
+        return WithRoundUp(fpu, [&] { return extF80_mul(Smallest(negative), Half()); });
+    }
+    return WithRoundUp(fpu, [&] { return f128_to_extF80(value); });
+}
+
+float128_t Signed(float128_t value, const bool negative) {
+    if (negative) value.v[1] ^= 1ull << 63;
+    return value;
+}
+
+bool IsOne(const extFloat80_t value) { return value.signExp == 0x3fff && value.signif == 0x8000000000000000ull; }
+
+extFloat80_t Absolute(extFloat80_t value) {
+    value.signExp = static_cast<std::uint16_t>(value.signExp & 0x7fff);
+    return value;
+}
+
+bool BeyondOne(const extFloat80_t value) {
+    const auto exponent = value.signExp & 0x7fff;
+    return exponent > 0x3fff || (exponent == 0x3fff && value.signif != 0x8000000000000000ull);
+}
+
+std::optional<extFloat80_t> TranscendentalSpecial(Fpu& fpu, const std::uint32_t operation, const extFloat80_t left, const extFloat80_t x) {
+    const auto invalid = [&] {
+        fpu.Raise(StatusInvalid);
+        return Indefinite();
+    };
+    switch (operation) {
+    case PS5LIFT_X87_SINE:
+    case PS5LIFT_X87_COSINE:
+    case PS5LIFT_X87_TANGENT:
+        if (IsInfinity(x)) return invalid();
+        if (IsZero(x)) return operation == PS5LIFT_X87_COSINE ? i32_to_extF80(1) : x;
+        if (IsDenormal(x) || (x.signExp & 0x7fff) - ExtendedBias < Ps5Lift::X87::LinearExponent) {
+            fpu.ForceInexact();
+            if (IsDenormal(x) && operation != PS5LIFT_X87_COSINE) fpu.Raise(StatusUnderflow);
+            if (!IsDenormal(x) && softfloat_roundingMode == softfloat_round_near_even) fpu.SetRoundedUp();
+            return operation == PS5LIFT_X87_COSINE ? i32_to_extF80(1) : x;
+        }
+        return std::nullopt;
+    case PS5LIFT_X87_POWER_MINUS_ONE:
+        if (IsZero(x)) return x;
+        if (IsInfinity(x)) return IsNegative(x) ? i32_to_extF80(-1) : x;
+        if (BeyondOne(x)) {
+            fpu.Raise(StatusPrecision);
+            return x;
+        }
+        return std::nullopt;
+    case PS5LIFT_X87_ARCTANGENT: {
+        const bool negative = IsNegative(left);
+        if (IsZero(left)) return IsNegative(x) ? RoundTrue(fpu, Signed(Ps5Lift::X87::Pi, negative)) : left;
+        if (IsInfinity(left)) {
+            const auto angle = !IsInfinity(x) ? Ps5Lift::X87::Scaled(Ps5Lift::X87::Pi, -1) : IsNegative(x) ? Ps5Lift::X87::ThreeQuarterPi : Ps5Lift::X87::Scaled(Ps5Lift::X87::Pi, -2);
+            return RoundTrue(fpu, Signed(angle, negative));
+        }
+        if (IsZero(x)) return RoundTrue(fpu, Signed(Ps5Lift::X87::Scaled(Ps5Lift::X87::Pi, -1), negative));
+        if (IsInfinity(x)) return IsNegative(x) ? RoundTrue(fpu, Signed(Ps5Lift::X87::Pi, negative)) : Zero(negative);
+        return std::nullopt;
+    }
+    case PS5LIFT_X87_LOGARITHM: {
+        if (IsNegative(x) && !IsZero(x)) return invalid();
+        if (IsZero(x)) {
+            if (IsZero(left)) return invalid();
+            if (!IsInfinity(left)) fpu.Raise(StatusZeroDivide);
+            return Infinity(!IsNegative(left));
+        }
+        if (IsInfinity(x)) return IsZero(left) ? invalid() : Infinity(IsNegative(left));
+        if (IsOne(x)) return IsInfinity(left) ? invalid() : Zero(IsNegative(left));
+        const bool belowOne = (x.signExp & 0x7fff) < 0x3fff;
+        if (IsInfinity(left)) return Infinity(IsNegative(left) != belowOne);
+        if (IsZero(left)) return Zero(IsNegative(left) != belowOne);
+        return std::nullopt;
+    }
+    case PS5LIFT_X87_LOGARITHM_PLUS_ONE: {
+        if (IsNegative(x) && (IsInfinity(x) || BeyondOne(x))) {
+            if (!IsInfinity(left)) {
+                fpu.Raise(StatusPrecision);
+                return x;
+            }
+            auto negated = left;
+            negated.signExp = static_cast<std::uint16_t>(negated.signExp ^ 0x8000);
+            return negated;
+        }
+        if (IsNegative(x) && IsOne(Absolute(x))) {
+            if (IsZero(left)) return invalid();
+            if (!IsInfinity(left)) fpu.Raise(StatusZeroDivide);
+            return Infinity(!IsNegative(left));
+        }
+        if (IsInfinity(x)) return IsZero(left) ? invalid() : Infinity(IsNegative(left));
+        if (IsZero(x)) return IsInfinity(left) ? invalid() : Zero(IsNegative(left) != IsNegative(x));
+        if (IsInfinity(left)) return Infinity(IsNegative(left) != IsNegative(x));
+        if (IsZero(left)) return Zero(IsNegative(left) != IsNegative(x));
+        return std::nullopt;
+    }
+    default:
+        ps5lift_fail("unknown x87 transcendental operation %u", operation);
+    }
+}
+
+extFloat80_t Transcendental(Fpu& fpu, const std::uint32_t operation, const extFloat80_t left, const extFloat80_t right) {
+    if (IsUnsupported(left) || IsUnsupported(right)) {
+        fpu.Raise(StatusInvalid);
+        return Indefinite();
+    }
+    if (IsNan(left) || IsNan(right)) return extF80_add(left, right);
+    if (const auto special = TranscendentalSpecial(fpu, operation, left, right)) return *special;
+    fpu.ForceInexact();
+    return RoundTrue(fpu, TrueValue(operation, left, right, 0));
+}
+
 extFloat80_t Evaluate(Fpu& fpu, const std::uint32_t operation, const extFloat80_t left, const extFloat80_t right) {
+    if (IsTranscendental(operation)) return Transcendental(fpu, operation, left, right);
     switch (operation) {
     case PS5LIFT_X87_SQUARE_ROOT: return WithRoundUp(fpu, [&] { return extF80_sqrt(left); });
     case PS5LIFT_X87_ROUND: return WithRoundUp(fpu, [&] { return extF80_roundToInt(left, softfloat_roundingMode, true); });
@@ -611,6 +779,7 @@ extFloat80_t Compute(Fpu& fpu, const std::uint32_t operation, const extFloat80_t
 }
 
 extFloat80_t ScaledResult(const std::uint32_t operation, const extFloat80_t left, const extFloat80_t right, const int bias) {
+    if (IsTranscendental(operation)) return f128_to_extF80(TrueValue(operation, left, right, bias));
     switch (operation) {
     case PS5LIFT_X87_ADD:
     case PS5LIFT_X87_SUBTRACT:
@@ -668,7 +837,8 @@ void Fpu::Commit() {
             WriteStatus(static_cast<std::uint16_t>(_exceptionStatus | (raised & ~StatusPrecision)));
             return;
         }
-        raised = static_cast<std::uint16_t>((raised & ~StatusPrecision) | WriteScaledResult((unmasked & StatusOverflow) != 0 ? -RangeBiasAdjustment : RangeBiasAdjustment));
+        const auto scaledInexact = WriteScaledResult((unmasked & StatusOverflow) != 0 ? -RangeBiasAdjustment : RangeBiasAdjustment);
+        raised = static_cast<std::uint16_t>((raised & ~StatusPrecision) | scaledInexact | (_forcedInexact ? StatusPrecision : 0));
     }
     if (_storeSize != 0) std::memcpy(_store, _storeBytes, _storeSize);
     for (unsigned physical = 0; physical < 8; ++physical) {
@@ -705,19 +875,17 @@ std::uint16_t CompareConditions(const std::uint32_t result) {
 }
 
 extFloat80_t Constant(const std::uint32_t index) {
-    static constexpr std::uint64_t Constants[5][2] = {
-        {0x4000a934f0979a37ull, 0x15fc9257edfe9b60ull},
-        {0x3fff71547652b82full, 0xe1777d0ffda0d23aull},
-        {0x4000921fb54442d1ull, 0x8469898cc51701b8ull},
-        {0x3ffd34413509f79full, 0xef311f12b35816f9ull},
-        {0x3ffe62e42fefa39eull, 0xf35793c7673007e6ull},
+    static constexpr float128_t Constants[5] = {
+        {{0x15fc9257edfe9b60ull, 0x4000a934f0979a37ull}},
+        Ps5Lift::X87::Log2E,
+        Ps5Lift::X87::Pi,
+        {{0xef311f12b35816f9ull, 0x3ffd34413509f79full}},
+        Ps5Lift::X87::Ln2,
     };
     if (index == PS5LIFT_X87_CONSTANT_ONE) return i32_to_extF80(1);
     if (index == PS5LIFT_X87_CONSTANT_ZERO) return Zero(false);
     if (index > PS5LIFT_X87_CONSTANT_ZERO) ps5lift_fail("unknown x87 constant 0x%x", index);
-    float128_t value;
-    value.v[0] = Constants[index - PS5LIFT_X87_CONSTANT_LOG2_10][1];
-    value.v[1] = Constants[index - PS5LIFT_X87_CONSTANT_LOG2_10][0];
+    const auto value = Constants[index - PS5LIFT_X87_CONSTANT_LOG2_10];
     const auto savedPrecision = extF80_roundingPrecision;
     extF80_roundingPrecision = 80;
     const auto result = f128_to_extF80(value);
@@ -767,7 +935,7 @@ struct Extracted {
 
 Extracted Extract(Fpu& fpu, const extFloat80_t value) {
     const auto biased = value.signExp & 0x7fff;
-    if (biased != 0 && (value.signif >> 63) == 0) {
+    if (IsUnsupported(value)) {
         fpu.Raise(StatusInvalid);
         return {Indefinite(), Indefinite()};
     }
@@ -993,6 +1161,19 @@ std::uint32_t RestoreExtendedState(Ps5LiftState& state, const std::uint64_t addr
     return mxcsr;
 }
 
+bool FillOnStackOverflow(Fpu& fpu) {
+    if (!fpu.Valid(7)) return false;
+    fpu.SetDestination(0, Indefinite());
+    fpu.Push(Indefinite());
+    return true;
+}
+
+bool OutsideTrigonometricRange(const extFloat80_t value) {
+    constexpr std::uint16_t LimitExponent = 0x3fff + 63;
+    const auto exponent = value.signExp & 0x7fff;
+    return !IsUnsupported(value) && exponent >= LimitExponent && exponent != 0x7fff;
+}
+
 std::uint32_t Execute(Fpu& fpu, const std::uint32_t operation, const std::uint32_t format, const std::uint64_t address, const std::uint32_t index) {
     const bool memory = (format & 7) != PS5LIFT_X87_REGISTER;
     switch (operation) {
@@ -1110,13 +1291,46 @@ std::uint32_t Execute(Fpu& fpu, const std::uint32_t operation, const std::uint32
         fpu.Free(index);
         if (format & PS5LIFT_X87_POP) fpu.Pop();
         return 0;
-    case PS5LIFT_X87_EXTRACT: {
+    case PS5LIFT_X87_SINE:
+    case PS5LIFT_X87_COSINE:
+    case PS5LIFT_X87_SINE_COSINE:
+    case PS5LIFT_X87_TANGENT: {
         fpu.ClearRoundedUp();
-        if (fpu.Valid(7)) {
-            fpu.SetDestination(0, Indefinite());
-            fpu.Push(Indefinite());
+        const bool pushes = operation == PS5LIFT_X87_SINE_COSINE || operation == PS5LIFT_X87_TANGENT;
+        if (pushes && FillOnStackOverflow(fpu)) return 0;
+        const auto x = fpu.Get(0);
+        const bool outside = OutsideTrigonometricRange(x);
+        fpu.SetConditions(static_cast<std::uint16_t>((fpu.Conditions() & ~StatusC2) | (outside ? StatusC2 : 0)));
+        if (outside) return 0;
+        if (operation == PS5LIFT_X87_SINE_COSINE) {
+            const auto cosine = Compute(fpu, PS5LIFT_X87_COSINE, x, x);
+            fpu.SetResult(0, PS5LIFT_X87_SINE, x, x);
+            fpu.Push(cosine);
             return 0;
         }
+        const auto result = fpu.SetResult(0, operation, x, x);
+        if (operation == PS5LIFT_X87_TANGENT) fpu.Push(IsNan(result) ? result : i32_to_extF80(1));
+        return 0;
+    }
+    case PS5LIFT_X87_POWER_MINUS_ONE: {
+        fpu.ClearRoundedUp();
+        const auto x = fpu.Get(0);
+        fpu.SetResult(0, operation, x, x);
+        return 0;
+    }
+    case PS5LIFT_X87_ARCTANGENT:
+    case PS5LIFT_X87_LOGARITHM:
+    case PS5LIFT_X87_LOGARITHM_PLUS_ONE: {
+        fpu.ClearRoundedUp();
+        const auto x = fpu.Get(0);
+        const auto y = fpu.Get(1);
+        fpu.SetResult(1, operation, y, x);
+        fpu.Pop();
+        return 0;
+    }
+    case PS5LIFT_X87_EXTRACT: {
+        fpu.ClearRoundedUp();
+        if (FillOnStackOverflow(fpu)) return 0;
         const auto extracted = Extract(fpu, fpu.Get(0));
         fpu.SetDestination(0, extracted.Exponent);
         fpu.Push(extracted.Significand);

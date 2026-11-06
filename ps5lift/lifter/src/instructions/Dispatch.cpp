@@ -448,6 +448,14 @@ case ZYDIS_MNEMONIC_##prefix##231##suffix: return FloatArithmetic({F::Fma, Eleme
     case ZYDIS_MNEMONIC_FTST: CallX87(PS5LIFT_X87_TEST, 0, nullptr, 0); return;
     case ZYDIS_MNEMONIC_FXAM: CallX87(PS5LIFT_X87_EXAMINE, 0, nullptr, 0); return;
     case ZYDIS_MNEMONIC_FXTRACT: CallX87(PS5LIFT_X87_EXTRACT, 0, nullptr, 0); return;
+    case ZYDIS_MNEMONIC_FSIN: CallX87(PS5LIFT_X87_SINE, 0, nullptr, 0); return;
+    case ZYDIS_MNEMONIC_FCOS: CallX87(PS5LIFT_X87_COSINE, 0, nullptr, 0); return;
+    case ZYDIS_MNEMONIC_FSINCOS: CallX87(PS5LIFT_X87_SINE_COSINE, 0, nullptr, 0); return;
+    case ZYDIS_MNEMONIC_FPTAN: CallX87(PS5LIFT_X87_TANGENT, 0, nullptr, 0); return;
+    case ZYDIS_MNEMONIC_FPATAN: CallX87(PS5LIFT_X87_ARCTANGENT, 0, nullptr, 0); return;
+    case ZYDIS_MNEMONIC_F2XM1: CallX87(PS5LIFT_X87_POWER_MINUS_ONE, 0, nullptr, 0); return;
+    case ZYDIS_MNEMONIC_FYL2X: CallX87(PS5LIFT_X87_LOGARITHM, 0, nullptr, 0); return;
+    case ZYDIS_MNEMONIC_FYL2XP1: CallX87(PS5LIFT_X87_LOGARITHM_PLUS_ONE, 0, nullptr, 0); return;
     case ZYDIS_MNEMONIC_FBLD: CallX87(PS5LIFT_X87_LOAD, PS5LIFT_X87_PACKED_BCD, X87Address(), 0); return;
     case ZYDIS_MNEMONIC_FBSTP: CallX87(PS5LIFT_X87_STORE, PS5LIFT_X87_PACKED_BCD | PS5LIFT_X87_POP, X87Address(), 0); return;
     case ZYDIS_MNEMONIC_FCHS: CallX87(PS5LIFT_X87_CHANGE_SIGN, 0, nullptr, 0); return;
