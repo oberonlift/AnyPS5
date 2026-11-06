@@ -1,3 +1,5 @@
+#include "Runtime.hpp"
+
 #include <ps5lift/State.h>
 
 extern "C" {
@@ -157,6 +159,15 @@ Raised Compute(const Environment& environment, const std::uint32_t operation, co
     ps5lift_fail("SIMD floating-point operation %u on %u-bit elements", operation, element);
 }
 
+}
+
+Ps5Lift::SoftFloatEnvironment::SoftFloatEnvironment() : _rounding(softfloat_roundingMode), _tininess(softfloat_detectTininess), _flags(softfloat_exceptionFlags), _extendedPrecision(extF80_roundingPrecision) {}
+
+Ps5Lift::SoftFloatEnvironment::~SoftFloatEnvironment() {
+    softfloat_roundingMode = _rounding;
+    softfloat_detectTininess = _tininess;
+    softfloat_exceptionFlags = _flags;
+    extF80_roundingPrecision = _extendedPrecision;
 }
 
 extern "C" std::uint32_t ps5lift_simd_float(Ps5LiftState* state, const std::uint32_t operation, const std::uint32_t element, const std::uint32_t count, std::uint8_t* lanes) {
