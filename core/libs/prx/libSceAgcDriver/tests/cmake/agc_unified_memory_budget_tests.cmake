@@ -1,0 +1,8 @@
+if(BUILD_TESTING)
+    add_test_executable(agc_unified_memory_budget_tests tests/UnifiedMemoryBudget.cpp Graphics/src/UnifiedMemoryBudget.cpp)
+    target_include_directories(agc_unified_memory_budget_tests PRIVATE ${LIBS_INCLUDE_DIR} ${ANYPS5_VULKAN_HEADERS_INCLUDE_DIR})
+    set_target_properties(agc_unified_memory_budget_tests PROPERTIES CXX_EXTENSIONS OFF)
+    configure_windows_unwind(agc_unified_memory_budget_tests)
+    add_test(NAME agc_unified_memory_budget COMMAND agc_unified_memory_budget_tests)
+    set_tests_properties(agc_unified_memory_budget PROPERTIES TIMEOUT 30)
+endif()
