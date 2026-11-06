@@ -80,7 +80,7 @@ int main() {
         Require(sceSaveDataDialogGetResult(reinterpret_cast<SaveDataDialogResult*>(0x10)) == SAVE_DATA_DIALOG_ERROR_ARG_NULL,
                 "get result with invalid pointer");
         SaveDataDialogResult invalidDirResult{};
-        invalidDirResult.dir_name = reinterpret_cast<void*>(0x10);
+        invalidDirResult.dir_name = reinterpret_cast<SaveDataDirName*>(0x10);
         Require(sceSaveDataDialogGetResult(&invalidDirResult) == SAVE_DATA_DIALOG_ERROR_ARG_NULL,
                 "get result with invalid directory name pointer");
         SaveDataDialogResult nullDirResult{};

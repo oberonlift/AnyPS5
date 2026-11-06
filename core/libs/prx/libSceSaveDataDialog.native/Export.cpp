@@ -41,7 +41,7 @@ int APS5_VABI sceSaveDataDialogGetResult(void* result) {
  if (result == nullptr) {
   return SAVE_DATA_DIALOG_ERROR_ARG_NULL;
  }
- void* dir_name = nullptr;
+ GuestArena::GuestPointer<SaveDataDirName> dir_name = nullptr;
  if (!GuestCopyIn_nid_no_patch(&dir_name, static_cast<const char*>(result) + offsetof(SaveDataDialogResult, dir_name), sizeof(dir_name))) {
   return SAVE_DATA_DIALOG_ERROR_ARG_NULL;
  }
@@ -57,9 +57,9 @@ int APS5_VABI sceSaveDataDialogGetResult(void* result) {
  if (!GuestCopyOut_nid_no_patch(static_cast<char*>(result) + offsetof(SaveDataDialogResult, user_data), &user_data, sizeof(user_data))) {
   return SAVE_DATA_DIALOG_ERROR_ARG_NULL;
  }
- if (dir_name != nullptr) {
+ if (SaveDataDirName* const target = dir_name; target != nullptr) {
   const std::size_t len = std::strlen(g_dir_name) + 1;
-  if (!GuestCopyOut_nid_no_patch(dir_name, g_dir_name, len)) {
+  if (!GuestCopyOut_nid_no_patch(target, g_dir_name, len)) {
    return SAVE_DATA_DIALOG_ERROR_ARG_NULL;
   }
  }
@@ -77,10 +77,11 @@ int APS5_VABI sceSaveDataDialogOpen(const void* param) {
  g_mode = p->mode;
  g_user_data = p->user_data;
  g_dir_name[0] = '\0';
- const auto* items = static_cast<const SaveDataDialogItems*>(p->items);
- if (items != nullptr && items->dir_names != nullptr) {
+ const SaveDataDialogItems* const items = p->items;
+ const SaveDataDirName* const names = items != nullptr ? static_cast<const SaveDataDirName*>(items->dir_names) : nullptr;
+ if (names != nullptr) {
   for (std::uint32_t i = 0; i < items->dir_names_num; i++) {
-   const char* name = items->dir_names[i].data;
+   const char* name = names[i].data;
    if (name[0] != '\0') {
     std::snprintf(g_dir_name, sizeof(g_dir_name), "%s", name);
     break;

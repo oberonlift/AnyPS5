@@ -1,6 +1,8 @@
 #ifndef CORE_LIBS_PRX_LIBSCESAVEDATADIALOGNATIVE_SAVEDATADIALOG_HPP
 #define CORE_LIBS_PRX_LIBSCESAVEDATADIALOGNATIVE_SAVEDATADIALOG_HPP
 
+#include "prx/libc/include/GuestArena.hpp"
+
 #include <cstdint>
 #include <cstddef>
 
@@ -29,8 +31,8 @@ struct SaveDataDirName {
 struct SaveDataDialogItems {
     std::int32_t user_id;
     std::int32_t pad0;
-    const void* title_id;
-    const SaveDataDirName* dir_names;
+    GuestArena::GuestPointer<const void> title_id;
+    GuestArena::GuestPointer<const SaveDataDirName> dir_names;
     std::uint32_t dir_names_num;
 };
 
@@ -41,7 +43,7 @@ struct SaveDataDialogParam {
     std::int32_t disp_type;
     std::uint32_t pad0;
     void* anim_param;
-    void* items;
+    GuestArena::GuestPointer<const SaveDataDialogItems> items;
     void* user_msg_param;
     void* sys_msg_param;
     void* error_code_param;
@@ -57,7 +59,7 @@ struct SaveDataDialogResult {
     std::int32_t result;
     std::int32_t button_id;
     std::uint32_t pad0;
-    void* dir_name;
+    GuestArena::GuestPointer<SaveDataDirName> dir_name;
     void* param;
     void* user_data;
     std::uint8_t reserved[32];
